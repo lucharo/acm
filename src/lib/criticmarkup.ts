@@ -1,0 +1,324 @@
+// ── CriticMarkup grammar + pure mutation logic ────────────────────────────────
+// The single source of truth for ACM's file format. Used by:
+//   • the editor (applySuggestion on ✓/✗ click)
+//   • the sidebar / nav (scanTokens for the comment & suggestion lists)
+//   • the Bun server (formatComment / insertComment for POST /api/comment)
+// Keeping every read/write of the format in one module guarantees the human UI
+// and the agent endpoint never diverge on grammar.
+//
+// IMPLEMENTATION OWNER: Piece 4. The signatures + JSDoc below are the contract
+// the other pieces are written against — keep them stable.
+
+import type { CritToken, CommentToken, CommentThread } from "./types";
+import type { SuggestionToken } from "./types";
+
+// Each construct is `{<open><inner><close>}`. We scan left-to-right, at every `{`
+// try to match a construct by its opening delimiter and the FIRST occurrence of
+// its matching closing delimiter after the inner text begins. Non-greedy by
+// construction (we take the earliest valid close), so delimiter chars inside the
+// body cannot over-match, and a dangling open with no close is simply skipped.
+
+interface Delim {
+  open: string; // text immediately after `{`
+  close: string; // text immediately before `}`
+}
+
+// Order matters only for disambiguating overlapping open prefixes; the five
+// CriticMarkup opens are mutually distinct, so any order works.
+const DELIMS = {
+  insert: { open: "++", close: "++" },
+  delete: { open: "--", close: "--" },
+  substitute: { open: "~~", close: "~~" },
+  highlight: { open: "==", close: "==" },
+  comment: { open: ">>", close: "<<" },
+} satisfies Record<string, Delim>;
+
+const SUBSTITUTE_ARROW = "~>";
+
+// A construct must stay within one block (CriticMarkup is single-block) and must
+// not contain another construct's opening delimiter. Both guards keep scanTokens
+// in agreement with the editor's block-bounded lezer parser and prevent a stray /
+// half-typed open from swallowing a later construct (and the prose between it).
+const BLANK_LINE = /\n[ \t]*\n/;
+const NESTED_OPEN = /\{(\+\+|--|~~|==|>>)/;
+
+/**
+ * Scan `text` and return every CriticMarkup token with absolute offsets, in
+ * document order. Must tolerate:
+ *   • all five constructs: {++ ++}, {-- --}, {~~ ~> ~~}, {== ==}, {>> <<}
+ *   • adjacent / stacked comments at the same or overlapping anchor (e.g.
+ *     `{==x==}{>>@a: ..<<}{>>@b: ..<<}`) — each is its own token; ids stay unique
+ *   • `@author:` prefixes inside comments (author + body split out)
+ *   • dangling / half-typed markup (`{++` with no close) → simply not matched
+ *   • delimiter chars appearing in body text (non-greedy, bounded matching)
+ * Tokens must NOT overlap each other in their [from,to) ranges (the markup
+ * constructs are themselves non-overlapping in the linear text).
+ */
+export function scanTokens(text: string): CritToken[] {
+  const tokens: CritToken[] = [];
+  let index = 0; // running id counter, document order
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] !== "{") {
+      i += 1;
+      continue;
+    }
+
+    const match = matchConstructAt(text, i);
+    if (!match) {
+      // Not the start of any complete construct (dangling open, or a lone `{`).
+      i += 1;
+      continue;
+    }
+
+    tokens.push(buildToken(String(index), match));
+    index += 1;
+    i = match.to; // continue strictly after this match — no overlap
+  }
+
+  return tokens;
+}
+
+type ConstructMatch = {
+  type: CritToken["type"];
+  from: number;
+  to: number;
+  raw: string;
+  inner: string;
+};
+
+/**
+ * Try to match a complete construct whose opening `{` is at `from`. Returns the
+ * earliest valid close for the matched open delimiter, or null if `from` is not
+ * the start of a complete construct.
+ */
+function matchConstructAt(text: string, from: number): ConstructMatch | null {
+  for (const type of Object.keys(DELIMS) as (keyof typeof DELIMS)[]) {
+    const { open, close } = DELIMS[type];
+    const openAt = from + 1; // just past `{`
+    if (!text.startsWith(open, openAt)) continue;
+
+    const innerStart = openAt + open.length;
+    const closeMarker = close + "}";
+    // Earliest close at/after innerStart → non-greedy, body delimiters safe.
+    const closeAt = text.indexOf(closeMarker, innerStart);
+    if (closeAt === -1) continue; // dangling open: skip
+
+    const inner = text.slice(innerStart, closeAt);
+
+    // No-swallow / single-block guards: a stray or half-typed open must not consume
+    // a later construct or cross a paragraph break. If the body crosses a blank line
+    // or contains another construct's opening delimiter, treat THIS open as
+    // unbalanced and bail — scanTokens then advances one char and matches the inner
+    // construct at its real position (rather than deleting prose on accept/resolve).
+    if (BLANK_LINE.test(inner)) continue;
+    if (NESTED_OPEN.test(inner)) continue;
+    // A substitution requires the ~> arrow (matches the editor's lezer parser, which
+    // rejects an arrowless {~~ ~~}). Keeps the two parsers in agreement.
+    if (type === "substitute" && !inner.includes(SUBSTITUTE_ARROW)) continue;
+
+    const to = closeAt + closeMarker.length;
+    return { type, from, to, raw: text.slice(from, to), inner };
+  }
+  return null;
+}
+
+function buildToken(id: string, m: ConstructMatch): CritToken {
+  const base = { id, from: m.from, to: m.to, raw: m.raw };
+  switch (m.type) {
+    case "insert":
+      return { ...base, type: "insert", inner: m.inner };
+    case "delete":
+      return { ...base, type: "delete", inner: m.inner };
+    case "highlight":
+      return { ...base, type: "highlight", inner: m.inner };
+    case "substitute": {
+      const arrowAt = m.inner.indexOf(SUBSTITUTE_ARROW);
+      // No arrow → treat the whole inner as a no-op substitution (old == new).
+      const oldText = arrowAt === -1 ? m.inner : m.inner.slice(0, arrowAt);
+      const newText = arrowAt === -1 ? m.inner : m.inner.slice(arrowAt + SUBSTITUTE_ARROW.length);
+      return { ...base, type: "substitute", oldText, newText };
+    }
+    case "comment": {
+      const { author, body } = parseCommentInner(m.inner);
+      return { ...base, type: "comment", author, body };
+    }
+  }
+}
+
+/**
+ * Split a comment's inner text into `{ author, body }`. A leading `@name:` prefix
+ * yields the trimmed name as author and the trimmed remainder as body; otherwise
+ * author is null and body is the whole inner trimmed.
+ *
+ * We deliberately use the FIRST colon as the separator (rather than a strict
+ * single-token handle) because real authors are multi-word names — the docx the
+ * app seeds from has authors like "Daniel Steinbrook". The known edge case is a
+ * comment that BEGINS with an @-mention sentence and later uses a colon as
+ * punctuation (e.g. "@can you verify: ...") — it mis-attributes the lead-in as the
+ * author. That input is rare and harmless (display-only); supporting multi-word
+ * authors for the common `@author: body` form is the more important behaviour.
+ */
+function parseCommentInner(inner: string): { author: string | null; body: string } {
+  const trimmed = inner.trimStart();
+  if (trimmed.startsWith("@")) {
+    const colonAt = trimmed.indexOf(":");
+    if (colonAt !== -1) {
+      const author = trimmed.slice(1, colonAt).trim();
+      const body = restoreCloseMarker(trimmed.slice(colonAt + 1).trim());
+      return { author, body };
+    }
+  }
+  return { author: null, body: restoreCloseMarker(inner.trim()) };
+}
+
+/** Undo neutralizeCloseMarker so the displayed/derived body is byte-faithful. */
+function restoreCloseMarker(text: string): string {
+  return text.replaceAll("<<​}", "<<}");
+}
+
+/**
+ * Format a comment into CriticMarkup. THE canonical grammar, shared by the
+ * server endpoint and the in-UI "add comment" action so both write identically.
+ *   formatComment("claude", "looks good") -> "{>>@claude: looks good<<}"
+ *   formatComment("",       "looks good") -> "{>>looks good<<}"
+ * Any `<<}` occurring inside `text` must be neutralised so it can't break the
+ * marker.
+ */
+export function formatComment(author: string, text: string): string {
+  const safe = neutralizeCloseMarker(text);
+  const trimmedAuthor = author.trim();
+  const body = trimmedAuthor ? `@${trimmedAuthor}: ${safe}` : safe;
+  return `{>>${body}<<}`;
+}
+
+/** Break any literal close-marker sequence so body text can't terminate early. */
+function neutralizeCloseMarker(text: string): string {
+  // Insert a zero-width space between the `<<` and `}` of any `<<}` so the
+  // closing-marker scan in scanTokens won't see it as a terminator. The visible
+  // text is preserved; only the exact `<<}` byte sequence is interrupted.
+  return text.replaceAll("<<}", "<<​}");
+}
+
+/**
+ * Insert a formatted comment into `content` at character offset `anchorOffset`,
+ * returning the new full content. Used by the server's POST /api/comment.
+ * Inserts a single leading space if the preceding char is non-space, so the
+ * marker doesn't fuse onto the anchored word.
+ */
+export function insertComment(
+  content: string,
+  anchorOffset: number,
+  text: string,
+  author: string,
+): string {
+  const at = Math.max(0, Math.min(anchorOffset, content.length));
+  const marker = formatComment(author, text);
+  const prevChar = at > 0 ? content[at - 1] : "";
+  const needsSpace = at > 0 && prevChar !== "" && !/\s/.test(prevChar);
+  const insertion = needsSpace ? ` ${marker}` : marker;
+  return content.slice(0, at) + insertion + content.slice(at);
+}
+
+/**
+ * Given the RAW markup of a single suggestion and a mode, return the text that
+ * should replace it (markup stripped). The caller dispatches a ranged edit over
+ * the token's [from,to) with this string.
+ *   applySuggestion("{++x++}",     "accept") -> "x"     // keep insertion
+ *   applySuggestion("{++x++}",     "reject") -> ""      // drop insertion
+ *   applySuggestion("{--x--}",     "accept") -> ""      // perform deletion
+ *   applySuggestion("{--x--}",     "reject") -> "x"     // keep text
+ *   applySuggestion("{~~a~>b~~}",  "accept") -> "b"     // take new
+ *   applySuggestion("{~~a~>b~~}",  "reject") -> "a"     // keep old
+ */
+export function applySuggestion(raw: string, mode: "accept" | "reject"): string {
+  const match = matchConstructAt(raw, 0);
+  if (!match || match.to !== raw.length) {
+    throw new Error(`applySuggestion: not a single complete construct: ${JSON.stringify(raw)}`);
+  }
+
+  switch (match.type) {
+    case "insert":
+      return mode === "accept" ? match.inner : "";
+    case "delete":
+      return mode === "accept" ? "" : match.inner;
+    case "substitute": {
+      const arrowAt = match.inner.indexOf(SUBSTITUTE_ARROW);
+      const oldText = arrowAt === -1 ? match.inner : match.inner.slice(0, arrowAt);
+      const newText =
+        arrowAt === -1 ? match.inner : match.inner.slice(arrowAt + SUBSTITUTE_ARROW.length);
+      return mode === "accept" ? newText : oldText;
+    }
+    default:
+      throw new Error(`applySuggestion: not a suggestion construct: ${match.type}`);
+  }
+}
+
+/**
+ * Convenience for callers that hold a {@link SuggestionToken}. Equivalent to
+ * `applySuggestion(token.raw, mode)`. Provided so the nav/editor needn't re-slice.
+ */
+export function applySuggestionToken(
+  token: SuggestionToken,
+  mode: "accept" | "reject",
+): string {
+  return applySuggestion(token.raw, mode);
+}
+
+// A thread-internal gap between two consecutive comments: only whitespace and
+// highlight delimiters (`{==` / `==}`). Comments on the SAME anchor span are
+// stacked as nested highlights (Google Docs' .docx export), so siblings are
+// separated by the orphaned highlight closes — e.g. `{>>c0<<}==}{>>c1<<}` (gap
+// `==}`) — or directly adjacent (`{>>a<<}{>>b<<}`, gap ``). Real prose between two
+// comments means different anchors → different threads.
+const THREAD_GAP = /^(?:\s*(?:\{==|==\})\s*)*$/;
+
+/**
+ * Group comments into threads by shared anchor span. Comments separated only by
+ * THREAD_GAP noise (nothing but whitespace + highlight delimiters) are stacked on
+ * the same/overlapping span and form one thread, parent first then replies — the
+ * way a Google Docs comment thread renders. `text` is the full document, used to
+ * test the inter-comment gap. Input order is document order.
+ */
+/**
+ * Approximate "accepted prose" word count of a CriticMarkup document, for a live
+ * header readout. Regex-based (nesting-safe, unlike the bailing token scanner):
+ * drop comments and deletions, take the NEW side of substitutions, keep inserted
+ * and highlighted text, then strip the common Markdown syntax markers so `#`, `**`
+ * etc. don't count as words. A rough count by design — not a billing figure.
+ */
+export function countWords(text: string): number {
+  let s = text;
+  // ── CriticMarkup → accepted prose ──
+  s = s.replace(/\{>>[\s\S]*?<<\}/g, " "); // comments: not prose
+  s = s.replace(/\{--[\s\S]*?--\}/g, " "); // deletions: removed
+  s = s.replace(/\{~~([\s\S]*?)~>([\s\S]*?)~~\}/g, "$2"); // substitution → new side
+  s = s.replace(/\{\+\+([\s\S]*?)\+\+\}/g, "$1"); // insertion → kept
+  s = s.replace(/\{==|==\}/g, ""); // highlight delimiters (handles nesting)
+  // ── Markdown markers (so they aren't counted as words) ──
+  s = s.replace(/`([^`]*)`/g, "$1"); // inline code → content
+  s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1"); // [text](url) → text
+  s = s.replace(/^\s{0,3}#{1,6}\s+/gm, ""); // heading markers
+  s = s.replace(/^\s*>\s?/gm, ""); // blockquote markers
+  s = s.replace(/^\s*[-*+]\s+/gm, ""); // list bullets
+  s = s.replace(/\*\*|\*|__|_/g, ""); // emphasis markers
+  const words = s.match(/\S+/g);
+  return words ? words.length : 0;
+}
+
+export function groupThreads(comments: CommentToken[], text: string): CommentThread[] {
+  const sorted = [...comments].sort((a, b) => a.from - b.from);
+  const threads: CommentThread[] = [];
+  for (const c of sorted) {
+    const last = threads[threads.length - 1];
+    const gap = last ? text.slice(last.to, c.from) : null;
+    if (last && THREAD_GAP.test(gap as string)) {
+      last.comments.push(c);
+      last.to = c.to;
+    } else {
+      threads.push({ id: c.id, from: c.from, to: c.to, comments: [c] });
+    }
+  }
+  return threads;
+}
