@@ -7,7 +7,10 @@ import {
   countWords,
   formatComment,
   groupThreads,
+  healNestedComments,
   insertComment,
+  nestedCommentIssues,
+  resolveAnchorEdit,
   scanTokens,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
@@ -496,6 +499,60 @@ describe("countWords", () => {
   test("markdown markers are not counted as words", () => {
     // → "Title bold and em and code here" = 7 words (markers #, **, _, ` stripped)
     expect(countWords("# Title\n\n**bold** and _em_ and `code` here")).toBe(7);
+  });
+});
+
+describe("resolveAnchorEdit — resolving strips the whole anchor, keeps the span", () => {
+  const apply = (text: string, from: number, to: number) => {
+    const e = resolveAnchorEdit(text, from, to);
+    return text.slice(0, e.from) + e.insert + text.slice(e.to);
+  };
+  test("simple anchored comment → span kept, highlight + comment gone", () => {
+    const text = "see {==this span==}{>>@a: note<<} ok";
+    const c = scanTokens(text).filter(isComment) as CommentToken[];
+    expect(apply(text, c[0].from, c[0].to)).toBe("see this span ok");
+  });
+  test("stacked thread → whole nest stripped, no orphaned {==", () => {
+    const text = "x {=={==the span==}{>>@a: one<<}==}{>>@b: two<<} y";
+    const c = scanTokens(text).filter(isComment) as CommentToken[];
+    const t = groupThreads(c, text)[0];
+    const out = apply(text, t.from, t.to);
+    expect(out).toBe("x the span y");
+    expect(out).not.toContain("{=="); // no leaked delimiter
+  });
+  test("point comment (no highlight anchor) → just removed", () => {
+    const text = "hello {>>@a: aside<<} world";
+    const c = scanTokens(text).filter(isComment) as CommentToken[];
+    expect(apply(text, c[0].from, c[0].to)).toBe("hello  world");
+  });
+});
+
+describe("nested-comment heal + insert clamp (the comment-in-comment bug)", () => {
+  test("clampAnchorOutsideComments pushes an inside-a-comment anchor to after it", () => {
+    const text = "word {>>@a: existing<<} tail";
+    const inside = text.indexOf("existing");
+    const out = insertComment(text, inside, "new", "b");
+    expect(/\{>>[^<]*\{>>/.test(out)).toBe(false); // no nesting created
+    expect(out).toContain("{>>@b: new<<}");
+    expect(scanTokens(out).filter(isComment)).toHaveLength(2);
+  });
+  test("healNestedComments flattens a nested comment + rejoins the split word", () => {
+    const text = "x {>>@a: keep the YouTube-co{>>@b: aside<<}nflict<<} y";
+    expect(healNestedComments(text)).toBe(
+      "x {>>@a: keep the YouTube-conflict<<}{>>@b: aside<<} y",
+    );
+    expect(nestedCommentIssues(healNestedComments(text))).toHaveLength(0);
+  });
+  test("healNestedComments recurses (doubly nested) and keeps every comment", () => {
+    const text = "{>>@a: A{>>@b: B{>>@c: C<<}D<<}E<<}";
+    const healed = healNestedComments(text);
+    expect(nestedCommentIssues(healed)).toHaveLength(0);
+    expect((healed.match(/\{>>/g) ?? []).length).toBe(3);
+  });
+  test("a clean document is left unchanged", () => {
+    const text = "a {>>@a: one<<}{>>@b: two<<} mid {==hl==}{>>@c: note<<} end";
+    expect(healNestedComments(text)).toBe(text);
+    expect(nestedCommentIssues(text)).toHaveLength(0);
   });
 });
 

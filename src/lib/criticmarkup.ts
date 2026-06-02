@@ -207,13 +207,26 @@ function neutralizeCloseMarker(text: string): string {
  * Inserts a single leading space if the preceding char is non-space, so the
  * marker doesn't fuse onto the anchored word.
  */
+/**
+ * Clamp an insert offset so it never lands INSIDE an existing comment's body —
+ * which would create malformed nested `{>>…{>>…<<}…<<}` that can't parse and
+ * renders raw (the comment-in-comment bug). If `at` is strictly inside a comment,
+ * push it to just after that comment. Shared by the UI and server insert paths.
+ */
+export function clampAnchorOutsideComments(content: string, at: number): number {
+  const enclosing = scanTokens(content).find(
+    (t) => t.type === "comment" && at > t.from && at < t.to,
+  );
+  return enclosing ? enclosing.to : at;
+}
+
 export function insertComment(
   content: string,
   anchorOffset: number,
   text: string,
   author: string,
 ): string {
-  const at = Math.max(0, Math.min(anchorOffset, content.length));
+  const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(anchorOffset, content.length)));
   const marker = formatComment(author, text);
   const prevChar = at > 0 ? content[at - 1] : "";
   const needsSpace = at > 0 && prevChar !== "" && !/\s/.test(prevChar);
@@ -305,6 +318,129 @@ export function countWords(text: string): number {
   s = s.replace(/\*\*|\*|__|_/g, ""); // emphasis markers
   const words = s.match(/\S+/g);
   return words ? words.length : 0;
+}
+
+/**
+ * The edit that RESOLVES an anchored comment run `[runFrom, runTo)`. If the comments
+ * are anchored to a highlight — `{==span==}{>>..<<}`, including the stacked nested
+ * form `{=={==span==}{>>c0<<}==}{>>c1<<}` — strip the WHOLE anchor (the outer `{==`
+ * opens, the highlight delimiters, and every comment marker), leaving just the span
+ * prose. Without this, resolving left an orphaned `{==…==}` highlight (and a leaked
+ * outer `{==`) behind. A point comment with no highlight just has its run removed.
+ */
+export function resolveAnchorEdit(
+  content: string,
+  runFrom: number,
+  runTo: number,
+): { from: number; to: number; insert: string } {
+  // The anchor highlight is the (innermost) highlight whose close abuts the run.
+  const hl = scanTokens(content).find((t) => t.type === "highlight" && t.to === runFrom);
+  if (!hl || hl.type !== "highlight") {
+    return { from: runFrom, to: runTo, insert: "" }; // point comment — just drop it
+  }
+  // Swallow any outer `{==` opens stacked immediately before the inner highlight.
+  let start = hl.from;
+  while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
+  return { from: start, to: runTo, insert: hl.inner };
+}
+
+// ── Auto-heal: flatten comments accidentally nested inside other comments ──────
+// A comment dropped INSIDE another comment's body — `{>>A{>>B<<}C<<}` — is malformed
+// (the outer can't parse, renders raw, and splits a word). Healing rebuilds it as
+// adjacent comments — `{>>AC<<}{>>B<<}` — rejoining the outer's split body and
+// pulling the inner out as its own (adjacent → it threads). Recurses for deeper nests.
+
+interface CommentScan {
+  end: number; // index just past the balanced closing `<<}`
+  nested: boolean; // an inner `{>>` appeared before the balanced close
+  outerBody: string; // the outer comment's own text (inner comments removed)
+  inner: string[]; // the nested comment substrings (still raw, possibly nested)
+}
+
+/** Scan a balanced comment starting at `{>>` index `i`. null if unbalanced. */
+function scanComment(content: string, i: number): CommentScan | null {
+  let depth = 1;
+  let j = i + 3;
+  let outerBody = "";
+  const inner: string[] = [];
+  let innerStart = -1;
+  let nested = false;
+  while (j < content.length) {
+    if (content.startsWith("{>>", j)) {
+      if (depth === 1) {
+        innerStart = j;
+        nested = true;
+      }
+      depth += 1;
+      j += 3;
+    } else if (content.startsWith("<<}", j)) {
+      depth -= 1;
+      if (depth === 1 && innerStart >= 0) {
+        inner.push(content.slice(innerStart, j + 3));
+        innerStart = -1;
+      }
+      if (depth === 0) return { end: j + 3, nested, outerBody, inner };
+      j += 3;
+    } else {
+      if (depth === 1) outerBody += content[j];
+      j += 1;
+    }
+  }
+  return null; // no balanced close — leave it alone
+}
+
+/** Document offset of the first malformed (nested) comment, for "jump to it". */
+export function firstNestedCommentStart(content: string): number | null {
+  for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    const s = scanComment(content, i);
+    if (s?.nested) return i;
+    if (s) i = s.end - 3; // skip past a clean comment
+  }
+  return null;
+}
+
+/** Whether the document has any comment nested inside another (auto-healable). */
+export function hasNestedComments(content: string): boolean {
+  return firstNestedCommentStart(content) !== null;
+}
+
+/** List each malformed (nested) comment: its offset + a short preview of the text
+ *  that wraps the nested one — for a "problems"-style list with jump + heal. */
+export function nestedCommentIssues(content: string): { from: number; preview: string }[] {
+  const out: { from: number; preview: string }[] = [];
+  for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    const s = scanComment(content, i);
+    if (s?.nested) {
+      const { author, body } = parseCommentInner(s.outerBody);
+      const text = (author ? `@${author}: ` : "") + body;
+      out.push({ from: i, preview: text.replace(/\s+/g, " ").trim().slice(0, 64) });
+    }
+    if (s) i = s.end - 3;
+  }
+  return out;
+}
+
+/** Flatten every nested comment into adjacent comments. Idempotent + recursive. */
+export function healNestedComments(content: string): string {
+  let out = content;
+  for (let guard = 0; guard < 5000; guard++) {
+    let changed = false;
+    for (let i = out.indexOf("{>>"); i >= 0; i = out.indexOf("{>>", i + 3)) {
+      const s = scanComment(out, i);
+      if (!s) {
+        continue;
+      }
+      if (s.nested) {
+        const healed = `{>>${s.outerBody}<<}` + s.inner.join("");
+        out = out.slice(0, i) + healed + out.slice(s.end);
+        changed = true;
+        break; // re-scan from scratch (offsets shifted; inner may still nest)
+      }
+      i = s.end - 3;
+    }
+    if (!changed) break;
+  }
+  return out;
 }
 
 export function groupThreads(comments: CommentToken[], text: string): CommentThread[] {

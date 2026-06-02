@@ -18,7 +18,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
-import type { CommentThread } from "../lib/types";
+import type { CommentThread, CommentToken } from "../lib/types";
 import { authorColor } from "./authorColor";
 
 interface CommentSidebarProps {
@@ -27,13 +27,17 @@ interface CommentSidebarProps {
   activeId: string | null;
   /** Thread ids whose every comment is marked "seen". */
   seenIds: Set<string>;
-  /** Hide seen threads entirely (declutter) vs. just dim them. */
-  hideSeen: boolean;
+  /** Reveal seen threads (dimmed). When false, seen threads are hidden entirely. */
+  showSeen: boolean;
+  /** Unseen threads remaining — drives the zero-inbox counter. */
+  unseenCount: number;
   onToggleSeen: (thread: CommentThread) => void;
   repositionKey: number;
   /** Nonce-tagged request (from a right-click "Reply") to open a thread's reply box. */
   replyTarget?: { id: string; n: number } | null;
   onResolveThread: (thread: CommentThread) => void;
+  /** Delete a single comment (vs. resolving the whole thread). */
+  onDeleteComment: (comment: CommentToken) => void;
   onReply: (thread: CommentThread, text: string) => void;
   onFocusThread: (thread: CommentThread) => void;
   onCardContextMenu?: (thread: CommentThread, e: ReactMouseEvent) => void;
@@ -67,20 +71,47 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     threads,
     activeId,
     seenIds,
-    hideSeen,
+    showSeen,
+    unseenCount,
     onToggleSeen,
     repositionKey,
     replyTarget,
     onResolveThread,
+    onDeleteComment,
     onReply,
     onFocusThread,
     onCardContextMenu,
     onContentExtent,
   } = props;
 
-  // Threads actually shown: drop seen ones when "hide seen" is on. Used for BOTH
-  // layout and render so hidden cards take no vertical space.
-  const visibleThreads = hideSeen ? threads.filter((t) => !seenIds.has(t.id)) : threads;
+  // Smooth the "mark seen" hide: keep a just-seen card mounted for a short fade
+  // (≈220ms) instead of yanking it from the DOM (which blinks). `exiting` holds the
+  // ids mid-animation; they render with opacity 0 + a slight scale, then unmount.
+  const [exiting, setExiting] = useState<Set<string>>(() => new Set());
+  const prevSeenRef = useRef(seenIds);
+  useEffect(() => {
+    if (!showSeen) {
+      const newly = [...seenIds].filter((id) => !prevSeenRef.current.has(id));
+      if (newly.length) {
+        setExiting((p) => new Set([...p, ...newly]));
+        setTimeout(() => {
+          setExiting((p) => {
+            const n = new Set(p);
+            for (const id of newly) n.delete(id);
+            return n;
+          });
+        }, 220);
+      }
+    }
+    prevSeenRef.current = seenIds;
+  }, [seenIds, showSeen]);
+
+  // Threads actually shown: seen ones are HIDDEN by default (zero-inbox), revealed
+  // (dimmed) only when "Show seen" is on. Cards mid-exit-animation stay rendered so
+  // they can fade. Used for BOTH layout and render so hidden cards take no space.
+  const visibleThreads = showSeen
+    ? threads
+    : threads.filter((t) => !seenIds.has(t.id) || exiting.has(t.id));
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cardsTrackRef = useRef<HTMLDivElement | null>(null);
@@ -139,43 +170,21 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         const next = new Map<string, CardLayout>();
         const h = (m: (typeof sorted)[number]) => m.height || 80;
 
-        // MAGNETIC focus: when a thread is active, pin its card AT its anchor line
-        // and stack the rest away from it (downward below, upward above), instead of
-        // pure greedy top-down stacking. Stacked comments otherwise push a card far
-        // from the text it references; this snaps the one you're reading back to it.
+        // MAGNETIC focus, non-destructive: the ACTIVE card floats AT its own anchor
+        // line (it's z-10, so it sits on top), while every other card keeps its
+        // normal greedy-downward position — computed as if nothing were active. So
+        // activating a card never shoves its neighbours. (The earlier up/down cascade
+        // could fling all cards off-screen, e.g. when jumping via the "N open" pill.)
         const activeThread = activeId
           ? visibleThreads.find((t) => t.comments.some((c) => c.id === activeId))
           : null;
-        const activeIdx = activeThread
-          ? sorted.findIndex((m) => m.id === activeThread.id)
-          : -1;
 
-        if (activeIdx >= 0) {
-          const a = sorted[activeIdx];
-          next.set(a.id, { anchorY: a.anchorY, cardY: a.anchorY });
-          // Below the active card: greedy downward from it.
-          let prevBottom = a.anchorY + h(a);
-          for (let i = activeIdx + 1; i < sorted.length; i++) {
-            const m = sorted[i];
-            const cardY = Math.max(m.anchorY, prevBottom + BUBBLE_GAP);
-            next.set(m.id, { anchorY: m.anchorY, cardY });
-            prevBottom = cardY + h(m);
-          }
-          // Above the active card: greedy upward from it (cards yield upward).
-          let nextTop = a.anchorY;
-          for (let i = activeIdx - 1; i >= 0; i--) {
-            const m = sorted[i];
-            const cardY = Math.min(m.anchorY, nextTop - BUBBLE_GAP - h(m));
-            next.set(m.id, { anchorY: m.anchorY, cardY });
-            nextTop = cardY;
-          }
-        } else {
-          let prevBottom = -Infinity;
-          for (const m of sorted) {
-            const cardY = Math.max(m.anchorY, prevBottom + BUBBLE_GAP);
-            next.set(m.id, { anchorY: m.anchorY, cardY });
-            prevBottom = cardY + h(m);
-          }
+        let prevBottom = -Infinity;
+        for (const m of sorted) {
+          const greedyY = Math.max(m.anchorY, prevBottom + BUBBLE_GAP);
+          prevBottom = greedyY + h(m);
+          const active = activeThread != null && m.id === activeThread.id;
+          next.set(m.id, { anchorY: m.anchorY, cardY: active ? m.anchorY : greedyY });
         }
 
         let maxBottom = 0;
@@ -207,7 +216,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   useLayoutEffect(() => {
     recompute();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, threads, repositionKey, replyingId, activeId, hideSeen, seenIds]);
+  }, [view, threads, repositionKey, replyingId, activeId, showSeen, seenIds]);
 
   // Wheel over the comment column scrolls the DOCUMENT. The column is a sibling
   // panel with no scrollable content of its own (cards are absolutely positioned
@@ -267,8 +276,34 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   return (
     <div ref={containerRef} className="relative h-full w-full">
+      {/* Zero-inbox counter: open (unseen) comments remaining (top-right, always shown).
+          Click it to jump to the first open comment. */}
+      <div className="absolute right-3 top-3 z-20 select-none">
+        {unseenCount > 0 ? (
+          <button
+            type="button"
+            onClick={() => {
+              const first = ordered.find((t) => !seenIds.has(t.id));
+              if (first) onFocusThread(first);
+            }}
+            className="flex h-6 items-center rounded-full bg-[var(--accent)] px-2.5 text-[11px] font-medium tabular-nums text-[var(--panel)] shadow-sm transition-transform hover:scale-105"
+            title={`${unseenCount} open comment${unseenCount === 1 ? "" : "s"} — jump to the first`}
+          >
+            {unseenCount} open
+          </button>
+        ) : (
+          <span
+            className="pointer-events-none flex h-6 items-center rounded-full bg-[var(--crit-ins)] px-2.5 text-[11px] font-medium text-[var(--panel)] shadow-sm"
+            title="No open comments — all caught up"
+          >
+            all caught up
+          </span>
+        )}
+      </div>
       {ordered.length === 0 ? (
-        <div className="px-3 pt-5 text-xs italic text-[var(--faint)]">No comments.</div>
+        <div className="px-3 pt-5 text-xs italic text-[var(--faint)]">
+          {showSeen ? "No comments." : "No unseen comments."}
+        </div>
       ) : (
         <>
           {/* Connector layer — overflow-visible so the active thread's line can run
@@ -311,6 +346,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                 const l = layout.get(thread.id);
                 const isActive = thread.comments.some((c) => c.id === activeId);
                 const isSeen = seenIds.has(thread.id);
+                const isExiting = exiting.has(thread.id);
                 return (
                   <div
                     key={thread.id}
@@ -330,8 +366,11 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       top: l ? l.cardY : 0,
                       left: CARD_LEFT,
                       right: 10,
-                      // Seen (but not currently focused) cards dim to declutter.
-                      opacity: l ? (isSeen && !isActive ? 0.45 : 1) : 0,
+                      // Mid-exit cards fade + shrink; otherwise seen-but-unfocused
+                      // cards dim to declutter. The transition smooths the hide.
+                      opacity: isExiting ? 0 : l ? (isSeen && !isActive ? 0.45 : 1) : 0,
+                      transform: isExiting ? "scale(0.96)" : undefined,
+                      transition: "opacity 200ms ease, transform 200ms ease",
                     }}
                   >
                     <button
@@ -370,12 +409,32 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                     </button>
 
                     {thread.comments.map((c, i) => (
-                      <div key={c.id} className={i > 0 ? "mt-2.5 border-t border-[var(--line)] pt-2.5" : ""}>
-                        <div className="mb-1 flex items-center gap-1.5 pr-6">
+                      <div
+                        key={c.id}
+                        className={`group/cmt ${i > 0 ? "mt-2.5 border-t border-[var(--line)] pt-2.5" : ""}`}
+                      >
+                        {/* First row reserves space (pr-14) for the card's seen/resolve
+                            buttons; replies need no such clearance. */}
+                        <div className={`mb-1 flex items-center gap-1.5 ${i === 0 ? "pr-14" : "pr-1"}`}>
                           <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: authorColor(c.author) }} />
                           <span className="truncate text-[12px] font-medium" style={{ color: authorColor(c.author) }}>
                             {c.author ?? "anonymous"}
                           </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteComment(c);
+                            }}
+                            title="Delete this comment"
+                            aria-label="Delete comment"
+                            className="ml-auto shrink-0 rounded p-0.5 text-[var(--faint)] opacity-0 transition-opacity hover:text-[var(--crit-del)] group-hover/cmt:opacity-100"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
+                          </button>
                         </div>
                         <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)]">{c.body}</p>
                       </div>

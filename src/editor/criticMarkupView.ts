@@ -29,8 +29,27 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { Facet, RangeSetBuilder } from "@codemirror/state";
+import { Facet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { Extension, Range, RangeSet } from "@codemirror/state";
+
+// ── Active / seen highlight state (App → editor bridge) ───────────────────────
+// App tells the editor which comment-anchor highlights are ACTIVE (selected) or
+// SEEN, keyed by the highlight's `from` offset, so the mark layer can style them.
+// Colourblind-safe styling lives in theme.ts (lightness + texture, not hue).
+export interface CritHighlightState {
+  active: number | null; // `from` of the active comment's anchor highlight
+  seen: Set<number>; // `from`s of seen comments' anchor highlights
+}
+export const setCritHighlights = StateEffect.define<{ active: number | null; seen: number[] }>();
+export const critHighlightField = StateField.define<CritHighlightState>({
+  create: () => ({ active: null, seen: new Set<number>() }),
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setCritHighlights)) return { active: e.value.active, seen: new Set(e.value.seen) };
+    }
+    return value;
+  },
+});
 
 // ── Callbacks contract (App supplies these) ───────────────────────────────────
 export interface CritCallbacks {
@@ -129,7 +148,7 @@ function buildMarks(view: EditorView): DecorationSet {
   const delMark = Decoration.mark({ class: "cm-crit-del" });
   const subOld = Decoration.mark({ class: "cm-crit-sub-old" });
   const subNew = Decoration.mark({ class: "cm-crit-sub-new" });
-  const hlMark = Decoration.mark({ class: "cm-crit-hl" });
+  const hlState = view.state.field(critHighlightField, false);
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
@@ -143,13 +162,22 @@ function buildMarks(view: EditorView): DecorationSet {
           case "CMDelete":
             ranges.push(delMark.range(node.from, node.to));
             return false;
-          case "CMHighlight":
+          case "CMHighlight": {
             // Mark the whole anchor yellow, then DESCEND (no `return false`): a
             // highlight may nest other highlights (stacked comment threads) or wrap
             // tracked changes (`{==text {++ins++}==}`), and those inner constructs
             // need their own marks. Overlapping marks nest fine in one RangeSet.
-            ranges.push(hlMark.range(node.from, node.to));
+            // The active comment's anchor + seen anchors get extra classes (styled,
+            // colourblind-safe, in theme.ts).
+            const cls =
+              hlState && node.from === hlState.active
+                ? "cm-crit-hl cm-crit-hl--active"
+                : hlState && hlState.seen.has(node.from)
+                  ? "cm-crit-hl cm-crit-hl--seen"
+                  : "cm-crit-hl";
+            ranges.push(Decoration.mark({ class: cls }).range(node.from, node.to));
             return;
+          }
           case "CMSubstitute": {
             // Split at the arrow: old half struck, new half green. The arrow
             // node sits between them; we colour [from,arrowStart) and
@@ -184,7 +212,11 @@ const markPlugin = ViewPlugin.fromClass(
       this.decorations = buildMarks(view);
     }
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged) {
+      if (
+        u.docChanged ||
+        u.viewportChanged ||
+        u.startState.field(critHighlightField, false) !== u.state.field(critHighlightField, false)
+      ) {
         this.decorations = buildMarks(u.view);
       }
     }
@@ -337,6 +369,7 @@ const criticAtomicRanges = EditorView.atomicRanges.of((view): RangeSet<Decoratio
  */
 export function criticMarkupExtension(): Extension {
   return [
+    critHighlightField,
     EditorView.outerDecorations.of((view) =>
       view.plugin(markPlugin)?.decorations ?? Decoration.none,
     ),

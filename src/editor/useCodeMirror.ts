@@ -21,7 +21,7 @@ import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
 import { CriticMarkup } from "./criticMarkupParser";
-import { criticMarkupExtension, critCallbacksFacet } from "./criticMarkupView";
+import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
 import { markdownPreview } from "./markdownPreview";
 import { bionicReading } from "./bionicView";
@@ -41,6 +41,8 @@ export interface UseCodeMirrorResult {
   containerRef: React.RefObject<HTMLDivElement | null>;
   viewRef: React.MutableRefObject<EditorView | null>;
   applyRemote: (content: string) => void;
+  /** Tell the editor which comment-anchor highlights are active / seen (by `from`). */
+  setHighlightState: (active: number | null, seen: number[]) => void;
 }
 
 /** Marks transactions that originate from a remote/agent edit, so the update
@@ -200,5 +202,12 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     });
   }, []);
 
-  return useMemo(() => ({ containerRef, viewRef, applyRemote }), [applyRemote]);
+  const setHighlightState = useCallback((active: number | null, seen: number[]) => {
+    viewRef.current?.dispatch({ effects: setCritHighlights.of({ active, seen }) });
+  }, []);
+
+  return useMemo(
+    () => ({ containerRef, viewRef, applyRemote, setHighlightState }),
+    [applyRemote, setHighlightState],
+  );
 }

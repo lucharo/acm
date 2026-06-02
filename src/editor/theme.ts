@@ -159,6 +159,19 @@ export const acmTheme: Extension = EditorView.theme(
       borderRadius: "3px",
       padding: "0.02em 0.06em",
     },
+    // Active comment's anchor — stands out with a ring, not a hue change.
+    ".cm-crit-hl--active": {
+      boxShadow: "inset 0 0 0 1.5px var(--crit-comment)",
+    },
+    // Seen comment's anchor — colourblind-safe: muted neutral fill + a dotted
+    // underline (lightness + texture, NOT hue), so reviewed spans read as "done".
+    ".cm-crit-hl--seen": {
+      backgroundColor: "var(--line)",
+      color: "var(--muted)",
+      textDecoration: "underline dotted",
+      textDecorationColor: "var(--faint)",
+      textUnderlineOffset: "2px",
+    },
 
     // ── Inline accept / reject pill buttons ─────────────────────────────────────
     ".cm-crit-controls": {
