@@ -216,6 +216,15 @@ function buildHide(view: EditorView): DecorationSet {
         if (name === "URL" && node.node.parent?.name !== "Link") return;
         // Reveal markers on the active line so they can be edited.
         if (selectionOnRange(view, node.from, node.to)) return;
+        if (name === "HeaderMark") {
+          // Also hide the single space after `#`/`##` so the heading text renders
+          // flush — otherwise the hidden marker leaves a leading space (looks like
+          // the line isn't really a heading).
+          const to =
+            view.state.doc.sliceString(node.to, node.to + 1) === " " ? node.to + 1 : node.to;
+          ranges.push(hiddenMark.range(node.from, to));
+          return;
+        }
         ranges.push(hiddenMark.range(node.from, node.to));
       },
     });

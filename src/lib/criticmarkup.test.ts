@@ -538,8 +538,10 @@ describe("nested-comment heal + insert clamp (the comment-in-comment bug)", () =
   });
   test("healNestedComments flattens a nested comment + rejoins the split word", () => {
     const text = "x {>>@a: keep the YouTube-co{>>@b: aside<<}nflict<<} y";
+    // The pulled-out comment is space-separated (standalone card), NOT adjacent
+    // (which would wrongly thread it with the host).
     expect(healNestedComments(text)).toBe(
-      "x {>>@a: keep the YouTube-conflict<<}{>>@b: aside<<} y",
+      "x {>>@a: keep the YouTube-conflict<<} {>>@b: aside<<} y",
     );
     expect(nestedCommentIssues(healNestedComments(text))).toHaveLength(0);
   });

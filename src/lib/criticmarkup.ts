@@ -431,7 +431,10 @@ export function healNestedComments(content: string): string {
         continue;
       }
       if (s.nested) {
-        const healed = `{>>${s.outerBody}<<}` + s.inner.join("");
+        // Pull each nested comment OUT as a space-separated standalone comment — NOT
+        // adjacent (which would thread it with the host). A comment-in-comment is a
+        // mistaken insertion, not a reply, so the recovered one becomes its own card.
+        const healed = `{>>${s.outerBody}<<}` + s.inner.map((c) => " " + c).join("");
         out = out.slice(0, i) + healed + out.slice(s.end);
         changed = true;
         break; // re-scan from scratch (offsets shifted; inner may still nest)
