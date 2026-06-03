@@ -159,9 +159,10 @@ export const acmTheme: Extension = EditorView.theme(
       borderRadius: "3px",
       padding: "0.02em 0.06em",
     },
-    // Active comment's anchor — stands out with a ring, not a hue change.
+    // Active comment's anchor — a subtle bottom accent (not a full ring, which read
+    // as too heavy), so the focused span stands out just a touch.
     ".cm-crit-hl--active": {
-      boxShadow: "inset 0 0 0 1.5px var(--crit-comment)",
+      boxShadow: "inset 0 -2px 0 var(--crit-comment)",
     },
     // Seen comment's anchor — colourblind-safe: muted neutral fill + a dotted
     // underline (lightness + texture, NOT hue), so reviewed spans read as "done".

@@ -404,6 +404,30 @@ export function hasNestedComments(content: string): boolean {
   return firstNestedCommentStart(content) !== null;
 }
 
+/**
+ * Count of malformed comment openers: every `{>>` that scanTokens did NOT resolve
+ * into a comment token — i.e. nested-in-another, broken/missing `<<}` close, or
+ * dangling. Drives the warning marker (broader than just nesting).
+ */
+export function unparsedCommentCount(content: string): number {
+  const raw = (content.match(/\{>>/g) ?? []).length;
+  const parsed = scanTokens(content).filter((t) => t.type === "comment").length;
+  return Math.max(0, raw - parsed);
+}
+
+/** Offset of the first `{>>` that didn't parse into a comment token (jump target). */
+export function firstUnparsedCommentStart(content: string): number | null {
+  const parsedStarts = new Set(
+    scanTokens(content)
+      .filter((t) => t.type === "comment")
+      .map((t) => t.from),
+  );
+  for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    if (!parsedStarts.has(i)) return i;
+  }
+  return null;
+}
+
 /** List each malformed (nested) comment: its offset + a short preview of the text
  *  that wraps the nested one — for a "problems"-style list with jump + heal. */
 export function nestedCommentIssues(content: string): { from: number; preview: string }[] {
