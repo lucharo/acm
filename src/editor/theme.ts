@@ -110,6 +110,12 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-md-list": {
       color: "var(--muted)",
     },
+    // Rendered list bullet (replaces a `-`/`*`/`+` marker). A touch of right space so
+    // "• item" reads as a list, slightly muted so the prose stays the focus.
+    ".cm-md-bullet": {
+      color: "var(--muted)",
+      paddingRight: "0.4em",
+    },
     ".cm-md-link": {
       color: "var(--author-0)",
       textDecoration: "underline",

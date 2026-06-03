@@ -52,13 +52,29 @@ class SubArrowWidget extends WidgetType {
 }
 const subArrowDeco = Decoration.replace({ widget: new SubArrowWidget() });
 
+/** Renders a real bullet in place of a `-`/`*`/`+` list marker (off the active line),
+ *  so unordered lists read as lists, not flat paragraphs. */
+class BulletWidget extends WidgetType {
+  eq() {
+    return true;
+  }
+  toDOM() {
+    const s = document.createElement("span");
+    s.className = "cm-md-bullet";
+    s.textContent = "•";
+    return s;
+  }
+}
+const bulletDeco = Decoration.replace({ widget: new BulletWidget() });
+
 // Marks that, when present as a node's child, denote raw markdown syntax we hide.
+// NB: ListMark is NOT here — it's special-cased in buildHide (rendered as a bullet
+// for unordered lists, left visible for ordered) rather than hidden outright.
 const HIDDEN_MARK_NODES = new Set<string>([
   "HeaderMark",
   "EmphasisMark",
   "CodeMark",
   "QuoteMark",
-  "ListMark",
   "LinkMark", // the [, ], (, ) brackets and url delimiters
   "URL", // bare url text inside ( ) — hide so only link text shows
   // NB: fenced-code nodes (CodeInfo/CodeText/CodeMark fences) are intentionally
@@ -100,8 +116,8 @@ function inlineMarkClass(name: string): string | null {
       return "cm-md-link";
     case "Blockquote":
       return "cm-md-quote";
-    case "ListItem":
-      return "cm-md-list";
+    // ListItem text stays normal colour — the bullet (rendered in buildHide) carries
+    // the "this is a list" signal, not a muted body.
     default:
       return null;
   }
@@ -207,6 +223,16 @@ function buildHide(view: EditorView): DecorationSet {
           return false;
         }
         if (name.startsWith("CM")) return; // container node — descend to its delimiters
+
+        // List markers: render a bullet for unordered (-, *, +); leave ordered (1.)
+        // visible. Revealed raw on the active line for editing. (Not in HIDDEN_MARK_NODES.)
+        if (name === "ListMark") {
+          if (node.from === node.to) return;
+          if (selectionOnRange(view, node.from, node.to)) return;
+          const mark = view.state.doc.sliceString(node.from, node.to);
+          if (/^[-*+]$/.test(mark)) ranges.push(bulletDeco.range(node.from, node.to));
+          return;
+        }
 
         if (!HIDDEN_MARK_NODES.has(name)) return;
         if (node.from === node.to) return;
