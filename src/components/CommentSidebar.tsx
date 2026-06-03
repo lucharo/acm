@@ -41,6 +41,8 @@ interface CommentSidebarProps {
   onReply: (thread: CommentThread, text: string) => void;
   /** Reply AND mark the whole thread seen (dismiss it + advance) — ⌘⇧↵. */
   onReplyAndSeen: (thread: CommentThread, text: string) => void;
+  /** One-click: post a "suggest edit" reply + mark the thread seen (agent hand-off). */
+  onSuggestEdit: (thread: CommentThread) => void;
   onFocusThread: (thread: CommentThread) => void;
   onCardContextMenu?: (thread: CommentThread, e: ReactMouseEvent) => void;
   /** Lowest card's bottom in editor-content space — App uses it as the editor's
@@ -110,6 +112,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onDeleteComment,
     onReply,
     onReplyAndSeen,
+    onSuggestEdit,
     onFocusThread,
     onCardContextMenu,
     onContentExtent,
@@ -525,18 +528,37 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                         </div>
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setReplyingId(thread.id);
-                          setReplyDraft("");
-                          onFocusThread(thread);
-                        }}
-                        className="mt-2 text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
-                      >
-                        Reply
-                      </button>
+                      <div className="mt-2 flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setReplyingId(thread.id);
+                            setReplyDraft("");
+                            onFocusThread(thread);
+                          }}
+                          className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
+                        >
+                          Reply
+                        </button>
+                        {/* One-click hand-off: posts a "suggest edit" reply + marks the
+                            thread seen, so it leaves your inbox and the agent picks it up. */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSuggestEdit(thread);
+                          }}
+                          title="Ask the agent for an edit here — posts “suggest edit” and marks the thread seen"
+                          className="flex items-center gap-1 text-[12px] text-[var(--crit-comment)] hover:opacity-80"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                          </svg>
+                          Suggest edit
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
