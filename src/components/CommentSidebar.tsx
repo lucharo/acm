@@ -113,6 +113,13 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     ? threads
     : threads.filter((t) => !seenIds.has(t.id) || exiting.has(t.id));
 
+  // Recompute the layout only when the STRUCTURE changes — the set of thread ids and
+  // their anchor offsets — NOT on every keystroke. `threads` is a fresh array each
+  // render (groupThreads rebuilds it), so depending on it re-measured constantly,
+  // often against not-yet-settled editor geometry → the "all cards lift up" glitch.
+  // `from` is included because typing ABOVE a comment legitimately shifts its anchor.
+  const structureKey = visibleThreads.map((t) => `${t.id}:${t.from}`).join("|");
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cardsTrackRef = useRef<HTMLDivElement | null>(null);
   const connTrackRef = useRef<SVGSVGElement | null>(null);
@@ -156,6 +163,10 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         // First-line origin in column coords, from the CONTENT element (+ scrollTop
         // to be scroll-stable) so any scroller/page padding is already accounted for.
         const contentRect = view0.contentDOM.getBoundingClientRect();
+        // If the editor/container geometry isn't settled (height 0 — mid-mount, page
+        // -view/font swap, hidden), a read now would collapse every anchorY toward
+        // the top. Bail; WRITE keeps the last-good layout and retries next frame.
+        if (contentRect.height === 0 || cRect.height === 0) return { valid: false as const };
         const padTop = view0.documentPadding.top;
         const docTop = contentRect.top + view0.scrollDOM.scrollTop - cRect.top + padTop;
         const measured = visibleThreads.map((t) => ({
@@ -163,9 +174,16 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           anchorY: docTop + view0.lineBlockAt(t.from).top,
           height: cardRefs.current.get(t.id)?.offsetHeight ?? 0,
         }));
-        return { measured, origin: contentRect.right - cRect.left, docTop, padTop };
+        return { valid: true as const, measured, origin: contentRect.right - cRect.left, docTop, padTop };
       },
-      write({ measured, origin, docTop, padTop }) {
+      write(data) {
+        if (!data.valid) {
+          // Geometry wasn't ready — retry after the browser settles, WITHOUT
+          // clobbering the last-good layout (so cards never jump to the top).
+          requestAnimationFrame(() => recomputeRef.current());
+          return;
+        }
+        const { measured, origin, docTop, padTop } = data;
         const sorted = [...measured].sort((a, b) => a.anchorY - b.anchorY);
         const next = new Map<string, CardLayout>();
         const h = (m: (typeof sorted)[number]) => m.height || 80;
@@ -216,7 +234,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   useLayoutEffect(() => {
     recompute();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, threads, repositionKey, replyingId, activeId, showSeen, seenIds]);
+  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds]);
 
   // Wheel over the comment column scrolls the DOCUMENT. The column is a sibling
   // panel with no scrollable content of its own (cards are absolutely positioned
@@ -366,11 +384,14 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       top: l ? l.cardY : 0,
                       left: CARD_LEFT,
                       right: 10,
-                      // Mid-exit cards fade + shrink; otherwise seen-but-unfocused
-                      // cards dim to declutter. The transition smooths the hide.
-                      opacity: isExiting ? 0 : l ? (isSeen && !isActive ? 0.45 : 1) : 0,
+                      // No layout entry yet → HIDDEN with no transition, so a card
+                      // never animates a "flight" up from top:0 (the visible amplifier
+                      // behind the lift). Once positioned: mid-exit fades + shrinks,
+                      // seen-but-unfocused dims, and the transition smooths it.
+                      visibility: l ? "visible" : "hidden",
+                      opacity: isExiting ? 0 : isSeen && !isActive ? 0.45 : 1,
                       transform: isExiting ? "scale(0.96)" : undefined,
-                      transition: "opacity 200ms ease, transform 200ms ease",
+                      transition: l ? "opacity 200ms ease, transform 200ms ease" : "none",
                     }}
                   >
                     <button
