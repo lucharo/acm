@@ -18,33 +18,37 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { EditorView } from "@codemirror/view";
-import type { CommentThread, CommentToken } from "../lib/types";
+import type { SidebarCard, CommentToken } from "../lib/types";
 import { authorColor } from "./authorColor";
 
 interface CommentSidebarProps {
   view: EditorView | null;
-  threads: CommentThread[];
+  /** Comment threads AND suggestions, as one ordered set (see groupCards). */
+  cards: SidebarCard[];
   activeId: string | null;
-  /** Thread ids whose every comment is marked "seen". */
+  /** Comment-card ids whose every comment is marked "seen" (suggestions never here). */
   seenIds: Set<string>;
   /** Reveal seen threads (dimmed). When false, seen threads are hidden entirely. */
   showSeen: boolean;
-  /** Unseen threads remaining — drives the zero-inbox counter. */
+  /** Unseen comment threads remaining — drives the zero-inbox counter. */
   unseenCount: number;
-  onToggleSeen: (thread: CommentThread) => void;
+  onToggleSeen: (card: SidebarCard) => void;
   repositionKey: number;
-  /** Nonce-tagged request (from a right-click "Reply") to open a thread's reply box. */
+  /** Nonce-tagged request (from a right-click "Reply") to open a card's reply box. */
   replyTarget?: { id: string; n: number } | null;
-  onResolveThread: (thread: CommentThread) => void;
+  onResolveThread: (card: SidebarCard) => void;
   /** Delete a single comment (vs. resolving the whole thread). */
   onDeleteComment: (comment: CommentToken) => void;
-  onReply: (thread: CommentThread, text: string) => void;
+  onReply: (card: SidebarCard, text: string) => void;
   /** Reply AND mark the whole thread seen (dismiss it + advance) — ⌘⇧↵. */
-  onReplyAndSeen: (thread: CommentThread, text: string) => void;
+  onReplyAndSeen: (card: SidebarCard, text: string) => void;
   /** One-click: post a "suggest edit" reply + mark the thread seen (agent hand-off). */
-  onSuggestEdit: (thread: CommentThread) => void;
-  onFocusThread: (thread: CommentThread) => void;
-  onCardContextMenu?: (thread: CommentThread, e: ReactMouseEvent) => void;
+  onSuggestEdit: (card: SidebarCard) => void;
+  /** Accept / reject a suggestion card's suggestion. */
+  onAcceptSuggestion: (card: SidebarCard) => void;
+  onRejectSuggestion: (card: SidebarCard) => void;
+  onFocusThread: (card: SidebarCard) => void;
+  onCardContextMenu?: (card: SidebarCard, e: ReactMouseEvent) => void;
   /** Lowest card's bottom in editor-content space — App uses it as the editor's
    *  min content height so cards stacked below the last line stay scroll-reachable. */
   onContentExtent?: (px: number) => void;
@@ -100,7 +104,7 @@ function layoutsEqual(a: Map<string, CardLayout>, b: Map<string, CardLayout>): b
 export default function CommentSidebar(props: CommentSidebarProps) {
   const {
     view,
-    threads,
+    cards,
     activeId,
     seenIds,
     showSeen,
@@ -113,6 +117,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReply,
     onReplyAndSeen,
     onSuggestEdit,
+    onAcceptSuggestion,
+    onRejectSuggestion,
     onFocusThread,
     onCardContextMenu,
     onContentExtent,
@@ -143,16 +149,16 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   // Threads actually shown: seen ones are HIDDEN by default (zero-inbox), revealed
   // (dimmed) only when "Show seen" is on. Cards mid-exit-animation stay rendered so
   // they can fade. Used for BOTH layout and render so hidden cards take no space.
-  const visibleThreads = showSeen
-    ? threads
-    : threads.filter((t) => !seenIds.has(t.id) || exiting.has(t.id));
+  const visibleCards = showSeen
+    ? cards
+    : cards.filter((t) => !seenIds.has(t.id) || exiting.has(t.id));
 
   // Recompute the layout only when the STRUCTURE changes — the set of thread ids and
   // their anchor offsets — NOT on every keystroke. `threads` is a fresh array each
   // render (groupThreads rebuilds it), so depending on it re-measured constantly,
   // often against not-yet-settled editor geometry → the "all cards lift up" glitch.
   // `from` is included because typing ABOVE a comment legitimately shifts its anchor.
-  const structureKey = visibleThreads.map((t) => `${t.id}:${t.from}`).join("|");
+  const structureKey = visibleCards.map((t) => `${t.id}:${t.from}`).join("|");
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cardsTrackRef = useRef<HTMLDivElement | null>(null);
@@ -203,7 +209,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         if (contentRect.height === 0 || cRect.height === 0) return { valid: false as const };
         const padTop = view0.documentPadding.top;
         const docTop = contentRect.top + view0.scrollDOM.scrollTop - cRect.top + padTop;
-        const measured = visibleThreads.map((t) => ({
+        const measured = visibleCards.map((t) => ({
           id: t.id,
           anchorY: docTop + view0.lineBlockAt(t.from).top,
           height: cardRefs.current.get(t.id)?.offsetHeight ?? 0,
@@ -228,7 +234,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         // activating a card never shoves its neighbours. (The earlier up/down cascade
         // could fling all cards off-screen, e.g. when jumping via the "N open" pill.)
         const activeThread = activeId
-          ? visibleThreads.find((t) => t.comments.some((c) => c.id === activeId))
+          ? visibleCards.find((t) => t.id === activeId || t.comments.some((c) => c.id === activeId))
           : null;
 
         let prevBottom = -Infinity;
@@ -318,13 +324,15 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
-  const ordered = [...visibleThreads].sort((a, b) => a.from - b.from);
-  const active = ordered.find((t) => t.comments.some((c) => c.id === activeId)) ?? null;
+  const ordered = [...visibleCards].sort((a, b) => a.from - b.from);
+  const isActiveCard = (c: SidebarCard) =>
+    c.id === activeId || c.comments.some((cc) => cc.id === activeId);
+  const active = ordered.find(isActiveCard) ?? null;
   const activeLayout = active ? layout.get(active.id) : null;
 
-  function submitReply(thread: CommentThread, markSeen: boolean) {
+  function submitReply(card: SidebarCard, markSeen: boolean) {
     const text = replyDraft.trim();
-    if (text) (markSeen ? onReplyAndSeen : onReply)(thread, text);
+    if (text) (markSeen ? onReplyAndSeen : onReply)(card, text);
     setReplyingId(null);
     setReplyDraft("");
   }
@@ -338,7 +346,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           <button
             type="button"
             onClick={() => {
-              const first = ordered.find((t) => !seenIds.has(t.id));
+              const first = ordered.find((t) => t.kind === "comment" && !seenIds.has(t.id));
               if (first) onFocusThread(first);
             }}
             className="flex h-6 items-center rounded-full bg-[var(--accent)] px-2.5 text-[11px] font-medium tabular-nums text-[var(--panel)] shadow-sm transition-transform hover:scale-105"
@@ -380,7 +388,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                   const endX = CARD_LEFT;
                   const endY = activeLayout.cardY + 18;
                   const midX = startX + (endX - startX) * 0.5;
-                  const stroke = authorColor(active.comments[0].author);
+                  const stroke = authorColor(active.comments[0]?.author ?? null);
                   return (
                     <g>
                       <circle cx={startX} cy={startY} r={2} fill={stroke} opacity={0.85} />
@@ -401,20 +409,20 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           {/* Cards — clipped so off-screen (translated) cards don't spill upward. */}
           <div className="absolute inset-0 overflow-hidden">
             <div ref={cardsTrackRef} className="absolute inset-x-0 top-0" style={{ willChange: "transform" }}>
-              {ordered.map((thread) => {
-                const l = layout.get(thread.id);
-                const isActive = thread.comments.some((c) => c.id === activeId);
-                const isSeen = seenIds.has(thread.id);
-                const isExiting = exiting.has(thread.id);
+              {ordered.map((card) => {
+                const l = layout.get(card.id);
+                const isActive = isActiveCard(card);
+                const isSeen = seenIds.has(card.id);
+                const isExiting = exiting.has(card.id);
                 return (
                   <div
-                    key={thread.id}
+                    key={card.id}
                     ref={(el) => {
-                      if (el) cardRefs.current.set(thread.id, el);
-                      else cardRefs.current.delete(thread.id);
+                      if (el) cardRefs.current.set(card.id, el);
+                      else cardRefs.current.delete(card.id);
                     }}
-                    onClick={() => onFocusThread(thread)}
-                    onContextMenu={(e) => onCardContextMenu?.(thread, e)}
+                    onClick={() => onFocusThread(card)}
+                    onContextMenu={card.kind === "comment" ? (e) => onCardContextMenu?.(card, e) : undefined}
                     className={[
                       "group absolute cursor-pointer rounded-xl bg-[var(--panel)] px-3.5 py-3 text-left transition-shadow",
                       isActive
@@ -435,49 +443,100 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       transition: l ? "opacity 200ms ease, transform 200ms ease" : "none",
                     }}
                   >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleSeen(thread);
-                      }}
-                      title={isSeen ? "Mark unseen" : "Mark seen"}
-                      aria-pressed={isSeen}
-                      className={`absolute right-9 top-2.5 rounded p-1 transition-opacity hover:bg-[var(--line)] ${
-                        isSeen
-                          ? "text-[var(--accent)] opacity-100"
-                          : "text-[var(--faint)] opacity-0 hover:text-[var(--ink)] group-hover:opacity-100"
-                      }`}
-                      aria-label={isSeen ? "Mark unseen" : "Mark seen"}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onResolveThread(thread);
-                      }}
-                      title="Resolve thread"
-                      className="absolute right-2 top-2.5 rounded p-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--line)] hover:text-[var(--ink)] group-hover:opacity-100"
-                      aria-label="Resolve thread"
-                    >
-                      <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                        <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
+                    {card.kind === "suggestion" ? (
+                      // ── Suggestion card: Accept/Reject + the change preview ──
+                      (() => {
+                        const s = card.suggestion;
+                        const badge = s.type === "substitute" ? "Replace" : s.type === "insert" ? "Add" : "Delete";
+                        const badgeColor =
+                          s.type === "delete" ? "var(--crit-del)" : s.type === "insert" ? "var(--crit-ins)" : "var(--crit-comment)";
+                        return (
+                          <>
+                            <div className="absolute right-2 top-2.5 flex gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onAcceptSuggestion(card); }}
+                                title="Accept suggestion"
+                                aria-label="Accept suggestion"
+                                className="flex h-6 w-6 items-center justify-center rounded-full border border-[var(--line-strong)] text-[var(--crit-ins)] hover:bg-[var(--crit-ins)] hover:text-[var(--panel)]"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onRejectSuggestion(card); }}
+                                title="Reject suggestion"
+                                aria-label="Reject suggestion"
+                                className="flex h-6 w-6 items-center justify-center rounded-full border border-[var(--line-strong)] text-[var(--crit-del)] hover:bg-[var(--crit-del)] hover:text-[var(--panel)]"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                              </button>
+                            </div>
+                            <div className="mb-1 pr-16">
+                              <span
+                                className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                                style={{ color: badgeColor, backgroundColor: "var(--bg)" }}
+                              >
+                                {badge}
+                              </span>
+                            </div>
+                            <p className="mb-0.5 whitespace-pre-wrap text-[13px] leading-relaxed">
+                              {s.type === "substitute" ? (
+                                <>
+                                  <span className="text-[var(--crit-del)] line-through">{s.oldText}</span>
+                                  <span className="px-1 text-[var(--faint)]">→</span>
+                                  <span className="text-[var(--crit-ins)]">{s.newText}</span>
+                                </>
+                              ) : s.type === "insert" ? (
+                                <span className="text-[var(--crit-ins)]">{s.inner}</span>
+                              ) : (
+                                <span className="text-[var(--crit-del)] line-through">{s.inner}</span>
+                              )}
+                            </p>
+                          </>
+                        );
+                      })()
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); onToggleSeen(card); }}
+                          title={isSeen ? "Mark unseen" : "Mark seen"}
+                          aria-pressed={isSeen}
+                          className={`absolute right-9 top-2.5 rounded p-1 transition-opacity hover:bg-[var(--line)] ${
+                            isSeen
+                              ? "text-[var(--accent)] opacity-100"
+                              : "text-[var(--faint)] opacity-0 hover:text-[var(--ink)] group-hover:opacity-100"
+                          }`}
+                          aria-label={isSeen ? "Mark unseen" : "Mark seen"}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); onResolveThread(card); }}
+                          title="Resolve thread"
+                          className="absolute right-2 top-2.5 rounded p-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--line)] hover:text-[var(--ink)] group-hover:opacity-100"
+                          aria-label="Resolve thread"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                            <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      </>
+                    )}
 
-                    {thread.comments.map((c, i) => (
+                    {card.comments.map((c, i) => (
                       <div
                         key={c.id}
-                        className={`group/cmt ${i > 0 ? "mt-2.5 border-t border-[var(--line)] pt-2.5" : ""}`}
+                        className={`group/cmt ${i > 0 || card.kind === "suggestion" ? "mt-2.5 border-t border-[var(--line)] pt-2.5" : ""}`}
                       >
-                        {/* First row reserves space (pr-14) for the card's seen/resolve
-                            buttons; replies need no such clearance. */}
-                        <div className={`mb-1 flex items-center gap-1.5 ${i === 0 ? "pr-14" : "pr-1"}`}>
+                        {/* A comment card's first row reserves space (pr-14) for the
+                            seen/resolve buttons; replies + suggestion-card rows don't. */}
+                        <div className={`mb-1 flex items-center gap-1.5 ${card.kind === "comment" && i === 0 ? "pr-14" : "pr-1"}`}>
                           <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: authorColor(c.author) }} />
                           <span className="truncate text-[12px] font-medium" style={{ color: authorColor(c.author) }}>
                             {c.author ?? "anonymous"}
@@ -502,33 +561,35 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       </div>
                     ))}
 
-                    {replyingId === thread.id ? (
+                    {replyingId === card.id ? (
                       <div className="mt-2.5" onClick={(e) => e.stopPropagation()}>
                         <textarea
                           autoFocus
                           rows={1}
                           value={replyDraft}
                           onChange={(e) => setReplyDraft(e.target.value)}
-                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(thread, false), () => submitReply(thread, true), () => { setReplyingId(null); setReplyDraft(""); })}
+                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, true), () => { setReplyingId(null); setReplyDraft(""); })}
                           placeholder="Reply…  (⇧↵ for a new line)"
                           className="block max-h-40 w-full resize-none overflow-y-auto rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1.5 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
                         />
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => submitReply(thread, false)}
+                            onClick={() => submitReply(card, false)}
                             className="flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--panel)]"
                           >
                             Reply <span className="text-[10px] font-normal opacity-70">{MOD}↵</span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => submitReply(thread, true)}
-                            title="Reply and mark this thread seen"
-                            className="flex items-center gap-1.5 rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--line)]"
-                          >
-                            Reply &amp; seen <span className="text-[10px] font-normal text-[var(--faint)]">{MOD}⇧↵</span>
-                          </button>
+                          {card.kind === "comment" ? (
+                            <button
+                              type="button"
+                              onClick={() => submitReply(card, true)}
+                              title="Reply and mark this thread seen"
+                              className="flex items-center gap-1.5 rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--line)]"
+                            >
+                              Reply &amp; seen <span className="text-[10px] font-normal text-[var(--faint)]">{MOD}⇧↵</span>
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     ) : (
@@ -537,31 +598,34 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setReplyingId(thread.id);
+                            setReplyingId(card.id);
                             setReplyDraft("");
-                            onFocusThread(thread);
+                            onFocusThread(card);
                           }}
                           className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
                         >
                           Reply
                         </button>
                         {/* One-click hand-off: posts a "suggest edit" reply + marks the
-                            thread seen, so it leaves your inbox and the agent picks it up. */}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onSuggestEdit(thread);
-                          }}
-                          title="Ask the agent for an edit here — posts “suggest edit” and marks the thread seen"
-                          className="flex items-center gap-1 text-[12px] text-[var(--crit-comment)] hover:opacity-80"
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M12 20h9" />
-                            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                          </svg>
-                          Suggest edit
-                        </button>
+                            thread seen, so it leaves your inbox and the agent picks it up.
+                            (Comment cards only — a suggestion already IS an edit.) */}
+                        {card.kind === "comment" ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSuggestEdit(card);
+                            }}
+                            title="Ask the agent for an edit here — posts “suggest edit” and marks the thread seen"
+                            className="flex items-center gap-1 text-[12px] text-[var(--crit-comment)] hover:opacity-80"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 20h9" />
+                              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                            </svg>
+                            Suggest edit
+                          </button>
+                        ) : null}
                       </div>
                     )}
                   </div>
