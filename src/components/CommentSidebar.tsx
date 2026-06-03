@@ -348,9 +348,13 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           </button>
         ) : (
           <span
-            className="pointer-events-none flex h-6 items-center rounded-full bg-[var(--crit-ins)] px-2.5 text-[11px] font-medium text-[var(--panel)] shadow-sm"
+            className="pointer-events-none flex h-6 items-center gap-1 rounded-full bg-[var(--crit-ins)] px-2.5 text-[11px] font-medium text-[var(--panel)] shadow-sm"
             title="No open comments — all caught up"
           >
+            {/* ✓ glyph so the "done" state reads without relying on green (colourblind-safe). */}
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
             all caught up
           </span>
         )}
