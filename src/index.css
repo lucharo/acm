@@ -23,6 +23,9 @@
   --crit-hl-bg: #fff3b0;
   --crit-hl-ink: #6b5200;
   --crit-comment: #8250df;
+  /* Warning (recoverable issues — heal banner): amber, NOT the destructive red. */
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
 
   /* editor text selection */
   --cm-selection: rgba(31, 31, 29, 0.1);
@@ -63,6 +66,8 @@
   --crit-hl-bg: rgba(214, 162, 51, 0.24);
   --crit-hl-ink: #e8c168;
   --crit-comment: #a371f7;
+  --warn: #f59e0b;
+  --warn-bg: rgba(245, 158, 11, 0.16);
 
   --cm-selection: rgba(255, 255, 255, 0.16);
 

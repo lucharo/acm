@@ -470,6 +470,55 @@ export function healNestedComments(content: string): string {
   return out;
 }
 
+/**
+ * Heal just ONE nested comment — the one whose `{>>` starts at `from`. Returns the
+ * new full content, or null if there's nothing nested to heal there. Pulls each
+ * directly-nested comment out as a space-separated standalone comment (same rule as
+ * healNestedComments) but touches ONLY this one — so the per-issue review can step
+ * through and apply fixes individually. A still-nested inner surfaces as its own
+ * issue on the next pass.
+ */
+export function healOneNestedComment(content: string, from: number): string | null {
+  if (!content.startsWith("{>>", from)) return null;
+  const s = scanComment(content, from);
+  if (!s || !s.nested) return null;
+  const healed = `{>>${s.outerBody}<<}` + s.inner.map((c) => " " + c).join("");
+  return content.slice(0, from) + healed + content.slice(s.end);
+}
+
+export interface NestedCommentDetail {
+  outerAuthor: string | null;
+  outerPreview: string; // the host comment's own (rejoined) text
+  inners: { author: string | null; preview: string }[]; // comments to pull out
+  splitWord: { before: string; after: string } | null; // word the inner splits, e.g. differen|t
+}
+
+/** Everything the per-issue heal review needs to show what a heal WILL do at `from`:
+ *  the host comment, the comment(s) wrongly pasted inside it, and the word that the
+ *  first inner splits (so we can render "differen|t → different"). null if nothing
+ *  nested is there. Pure — the UI stays presentational. */
+export function nestedCommentDetail(content: string, from: number): NestedCommentDetail | null {
+  if (!content.startsWith("{>>", from)) return null;
+  const s = scanComment(content, from);
+  if (!s || !s.nested) return null;
+  const clean = (t: string) => t.replace(/\s+/g, " ").trim();
+  const outer = parseCommentInner(s.outerBody);
+  const inners = s.inner.map((raw) => {
+    const sc = scanComment(raw, 0);
+    const p = parseCommentInner(sc ? sc.outerBody : raw.replace(/^\{>>|<<\}$/g, ""));
+    return { author: p.author, preview: clean(p.body).slice(0, 90) };
+  });
+  let splitWord: { before: string; after: string } | null = null;
+  const raw = content.slice(from, s.end);
+  const innerIdx = s.inner[0] ? raw.indexOf(s.inner[0]) : -1;
+  if (innerIdx >= 0) {
+    const before = raw.slice(0, innerIdx).match(/(\S*)$/)?.[1] ?? "";
+    const after = raw.slice(innerIdx + s.inner[0].length).match(/^(\S*)/)?.[1] ?? "";
+    if (before || after) splitWord = { before, after };
+  }
+  return { outerAuthor: outer.author, outerPreview: clean(outer.body).slice(0, 130), inners, splitWord };
+}
+
 export function groupThreads(comments: CommentToken[], text: string): CommentThread[] {
   const sorted = [...comments].sort((a, b) => a.from - b.from);
   const threads: CommentThread[] = [];

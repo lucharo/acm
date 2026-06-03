@@ -8,6 +8,7 @@ import {
   formatComment,
   groupThreads,
   healNestedComments,
+  healOneNestedComment,
   insertComment,
   nestedCommentIssues,
   resolveAnchorEdit,
@@ -555,6 +556,20 @@ describe("nested-comment heal + insert clamp (the comment-in-comment bug)", () =
     const text = "a {>>@a: one<<}{>>@b: two<<} mid {==hl==}{>>@c: note<<} end";
     expect(healNestedComments(text)).toBe(text);
     expect(nestedCommentIssues(text)).toHaveLength(0);
+  });
+  test("healOneNestedComment heals only the issue at the given offset", () => {
+    // Two independent nested comments; healing the FIRST leaves the second intact.
+    const a = "{>>@a: keep YouTube-co{>>@b: aside<<}nflict<<} mid {>>@c: psych{>>@d: ref<<}iatric<<}";
+    const firstFrom = a.indexOf("{>>@a");
+    const healed = healOneNestedComment(a, firstFrom)!;
+    expect(healed).toBe("{>>@a: keep YouTube-conflict<<} {>>@b: aside<<} mid {>>@c: psych{>>@d: ref<<}iatric<<}");
+    // The second issue is untouched (still 1 nested issue remaining).
+    expect(nestedCommentIssues(healed)).toHaveLength(1);
+  });
+  test("healOneNestedComment returns null when there's nothing nested at the offset", () => {
+    const text = "{>>@a: clean comment<<} tail";
+    expect(healOneNestedComment(text, 0)).toBeNull();
+    expect(healOneNestedComment(text, 5)).toBeNull(); // not a {>> start
   });
 });
 
