@@ -14,6 +14,8 @@ import {
   nestedCommentIssues,
   resolveAnchorEdit,
   scanTokens,
+  suggestionReplacement,
+  applySuggestionEdit,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -598,6 +600,37 @@ describe("groupCards — suggestions + comment threads as one ordered set", () =
     expect(cards).toHaveLength(1);
     expect(cards[0].kind).toBe("suggestion");
     expect(cards[0].comments).toHaveLength(0);
+  });
+});
+
+describe("structured suggestions (SUGGEST: …)", () => {
+  test("suggestionReplacement parses the body, ignores plain comments", () => {
+    expect(suggestionReplacement("SUGGEST: the new wording")).toBe("the new wording");
+    expect(suggestionReplacement("SUGGEST:no space")).toBe("no space");
+    expect(suggestionReplacement("SUGGEST: ")).toBe(""); // suggest deleting the span
+    expect(suggestionReplacement("just a normal comment")).toBeNull();
+    expect(suggestionReplacement("please suggest an edit")).toBeNull(); // not a directive
+  });
+  test("applySuggestionEdit replaces the anchored span + the comment with the replacement", () => {
+    const text = 'Pay {==implies a sacrifice, a cost you cannot get back==}{>>@claude: SUGGEST: implies a cost you don’t get back<<} here.';
+    const sug = scanTokens(text).find((t) => t.type === "comment") as CommentToken;
+    const edit = applySuggestionEdit(text, sug)!;
+    const out = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
+    expect(out).toBe("Pay implies a cost you don’t get back here.");
+  });
+  test("applySuggestionEdit handles a stacked/nested anchor ({=={==span==}…==})", () => {
+    const text = "x {=={==old span==}{>>@a: SUGGEST: new span<<}==}{>>@b: SUGGEST: ignored<<} y";
+    const first = scanTokens(text).filter((t) => t.type === "comment")[0] as CommentToken;
+    const edit = applySuggestionEdit(text, first)!;
+    expect(edit.insert).toBe("new span");
+    // swallows the outer {== open too, so no orphan is left
+    expect(text.slice(edit.from, edit.from + 4)).toBe("{=={");
+  });
+  test("applySuggestionEdit returns null for a non-suggestion or unanchored comment", () => {
+    const plain = scanTokens("{==span==}{>>@a: just a note<<}").find((t) => t.type === "comment") as CommentToken;
+    expect(applySuggestionEdit("{==span==}{>>@a: just a note<<}", plain)).toBeNull();
+    const pt = scanTokens("text {>>@a: SUGGEST: x<<}").find((t) => t.type === "comment") as CommentToken;
+    expect(applySuggestionEdit("text {>>@a: SUGGEST: x<<}", pt)).toBeNull(); // no highlight anchor
   });
 });
 

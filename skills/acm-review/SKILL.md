@@ -27,6 +27,28 @@ format beyond CriticMarkup.
 Always sign with an **`@author:` mention** — e.g. `{>>@claude: tighten this<<}`. The
 author shows in the margin and colors the thread, so the human can tell voices apart.
 
+## Suggesting an edit — and the ONE hard rule
+
+Inline suggestions (`{++…++}` / `{--…--}` / `{~~old~>new~~}`) are for **free prose
+only**. **Never** place one INSIDE a comment-anchored `{==span==}` — the highlight
+stops parsing and the braces leak as raw text (it corrupts the anchor). Most of a
+reviewed doc is comment-anchored, so this matters.
+
+To suggest replacing text that sits inside a comment anchor, use a **structured
+`SUGGEST:` comment** instead — anchor it to the exact span and put the new wording
+after `SUGGEST:`:
+
+```
+{==pay implies a sacrifice, a cost you cannot get back==}{>>@claude: SUGGEST: pay implies a cost you don’t get back<<}
+```
+
+ACM shows this as a real "Suggested edit" card with the proposed wording and an
+**Apply** button that swaps the highlighted span for your wording — no nesting, no
+corruption. To suggest **deleting** a span, leave it empty: `SUGGEST:`. (For
+references/footnotes, which live in free prose, just write the markdown link inline.)
+
+Decision: **free prose → inline `{~~~>~~}`. Commented/anchored text → `SUGGEST:`.**
+
 ## Replying to a comment (threading)
 
 ACM threads comments by **adjacency**: a comment is a reply to the one before it when
@@ -59,8 +81,9 @@ it threads cleanly. This is the reliable way to locate anchors and avoid mis-edi
 
 1. Read the doc; build the thread/anchor map with `scanTokens`/`groupThreads`.
 2. Address only **new, non-yours** comments (skip ones already authored by you).
-3. For each: insert a threaded reply after its `thread.to`, or propose an edit with
-   `{++…++}` / `{--…--}` / `{~~old~>new~~}` on the relevant span.
+3. For each: insert a threaded reply after its `thread.to`; propose an edit to FREE
+   prose with `{++…++}` / `{--…--}` / `{~~old~>new~~}`; or, to edit COMMENT-ANCHORED
+   text, attach a `SUGGEST:` comment (see "the ONE hard rule" above).
 4. Write the file back (or POST to the server API). Keep edits minimal and signed.
 
 ## HTTP API (when a server is running)

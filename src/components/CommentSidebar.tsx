@@ -19,6 +19,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { SidebarCard, CommentToken } from "../lib/types";
+import { suggestionReplacement } from "../lib/criticmarkup";
 import { authorColor } from "./authorColor";
 
 interface CommentSidebarProps {
@@ -44,6 +45,9 @@ interface CommentSidebarProps {
   onReplyAndSeen: (card: SidebarCard, text: string) => void;
   /** One-click: post a "suggest edit" reply + mark the thread seen (agent hand-off). */
   onSuggestEdit: (card: SidebarCard) => void;
+  /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
+   *  proposed wording. */
+  onApplySuggestion: (comment: CommentToken) => void;
   /** Accept / reject a suggestion card's suggestion. */
   onAcceptSuggestion: (card: SidebarCard) => void;
   onRejectSuggestion: (card: SidebarCard) => void;
@@ -117,6 +121,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReply,
     onReplyAndSeen,
     onSuggestEdit,
+    onApplySuggestion,
     onAcceptSuggestion,
     onRejectSuggestion,
     onFocusThread,
@@ -557,7 +562,36 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                             </svg>
                           </button>
                         </div>
-                        <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)]">{c.body}</p>
+                        {(() => {
+                          const repl = suggestionReplacement(c.body);
+                          if (repl === null) {
+                            return <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)]">{c.body}</p>;
+                          }
+                          // A structured SUGGEST: comment — show the proposed wording as a
+                          // real suggested edit + an Apply (replaces the anchored span).
+                          return (
+                            <div>
+                              <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--crit-comment)]">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                </svg>
+                                Suggested edit
+                              </div>
+                              <p className="whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed text-[var(--crit-ins)]">
+                                {repl.trim() ? repl : "(delete this span)"}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onApplySuggestion(c); }}
+                                title="Apply this edit — replace the highlighted span with the proposed wording"
+                                className="mt-1.5 flex items-center gap-1 rounded-md bg-[var(--crit-ins)] px-2 py-0.5 text-[11px] font-medium text-[var(--panel)]"
+                              >
+                                <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                Apply
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </div>
                     ))}
 

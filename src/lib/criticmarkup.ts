@@ -575,3 +575,45 @@ export function groupCards(tokens: CritToken[], text: string): SidebarCard[] {
   cards.sort((a, b) => a.from - b.from);
   return cards;
 }
+
+// ── Structured suggestions (tool-safe, forward-compatible) ─────────────────────
+// An agent can't safely nest an inline {~~old~>new~~} inside a comment-anchored
+// {==span==} — the highlight stops parsing and the braces leak. So a suggestion to
+// REPLACE an anchored span is written as a structured comment instead:
+//
+//     {==the exact span==}{>>@claude: SUGGEST: the proposed new wording<<}
+//
+// It never nests, never corrupts. ACM recognises the `SUGGEST:` body, shows the
+// proposed wording as a real suggested edit, and can apply it by replacing the
+// anchored span (anchor-targeted — no brace-grammar fight). The pair {anchor span,
+// replacement} is all a future inline accept/reject needs, so existing suggestions
+// auto-upgrade.
+
+const SUGGESTION_PREFIX = /^\s*SUGGEST:\s?([\s\S]*)$/;
+
+/** If `body` is a structured suggestion, the proposed replacement text (may be ""
+ *  → suggest deleting the span); otherwise null. */
+export function suggestionReplacement(body: string): string | null {
+  const m = body.match(SUGGESTION_PREFIX);
+  return m ? m[1] : null;
+}
+
+/**
+ * The edit that APPLIES a structured-suggestion comment: replace its anchored span
+ * (the highlight whose close abuts the comment, plus any outer `{==` opens) AND the
+ * comment itself with the proposed replacement text. Clean prose, no nesting. Returns
+ * null if the body isn't a suggestion or the comment has no highlight anchor directly
+ * before it (e.g. it's a reply, not anchored to a span).
+ */
+export function applySuggestionEdit(
+  content: string,
+  comment: CommentToken,
+): { from: number; to: number; insert: string } | null {
+  const repl = suggestionReplacement(comment.body);
+  if (repl === null) return null;
+  const hl = scanTokens(content).find((t) => t.type === "highlight" && t.to === comment.from);
+  if (!hl) return null;
+  let start = hl.from;
+  while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
+  return { from: start, to: comment.to, insert: repl };
+}
