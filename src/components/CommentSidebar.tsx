@@ -16,7 +16,7 @@
 // Threads: comments sharing an anchor render as one card (root + replies).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { CommentThread, CommentToken } from "../lib/types";
 import { authorColor } from "./authorColor";
@@ -39,6 +39,8 @@ interface CommentSidebarProps {
   /** Delete a single comment (vs. resolving the whole thread). */
   onDeleteComment: (comment: CommentToken) => void;
   onReply: (thread: CommentThread, text: string) => void;
+  /** Reply AND mark the whole thread seen (dismiss it + advance) — ⌘⇧↵. */
+  onReplyAndSeen: (thread: CommentThread, text: string) => void;
   onFocusThread: (thread: CommentThread) => void;
   onCardContextMenu?: (thread: CommentThread, e: ReactMouseEvent) => void;
   /** Lowest card's bottom in editor-content space — App uses it as the editor's
@@ -48,6 +50,34 @@ interface CommentSidebarProps {
 
 const BUBBLE_GAP = 16;
 const CARD_LEFT = 18; // px from the column's left edge to the card
+
+// Platform-appropriate modifier glyph for keyboard hints (⌘ on mac, Ctrl elsewhere).
+export const MOD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+
+// Keyboard model shared by the reply box AND the header composer, so both behave
+// identically. Bound to a multi-line <textarea>:
+//   ↵ / ⌘↵         → submit
+//   ⌘⇧↵ / Ctrl+⇧↵  → submit + mark seen
+//   ⇧↵             → new line (NOT intercepted — the textarea inserts it)
+//   Esc            → cancel
+export function handleCommentKey(
+  e: ReactKeyboardEvent,
+  onSubmit: () => void,
+  onSubmitSeen: () => void,
+  onCancel: () => void,
+) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    onCancel();
+    return;
+  }
+  if (e.key !== "Enter") return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (e.shiftKey && !mod) return; // ⇧↵ → new line (let the textarea handle it)
+  e.preventDefault();
+  (e.shiftKey && mod ? onSubmitSeen : onSubmit)();
+}
 
 interface CardLayout {
   anchorY: number; // document-space Y of the anchored line
@@ -79,6 +109,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onResolveThread,
     onDeleteComment,
     onReply,
+    onReplyAndSeen,
     onFocusThread,
     onCardContextMenu,
     onContentExtent,
@@ -285,9 +316,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   const active = ordered.find((t) => t.comments.some((c) => c.id === activeId)) ?? null;
   const activeLayout = active ? layout.get(active.id) : null;
 
-  function submitReply(thread: CommentThread) {
+  function submitReply(thread: CommentThread, markSeen: boolean) {
     const text = replyDraft.trim();
-    if (text) onReply(thread, text);
+    if (text) (markSeen ? onReplyAndSeen : onReply)(thread, text);
     setReplyingId(null);
     setReplyDraft("");
   }
@@ -463,22 +494,32 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
                     {replyingId === thread.id ? (
                       <div className="mt-2.5" onClick={(e) => e.stopPropagation()}>
-                        <input
+                        <textarea
                           autoFocus
+                          rows={1}
                           value={replyDraft}
                           onChange={(e) => setReplyDraft(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              submitReply(thread);
-                            } else if (e.key === "Escape") {
-                              setReplyingId(null);
-                              setReplyDraft("");
-                            }
-                          }}
-                          placeholder="Reply…"
-                          className="w-full rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1 text-[13px] text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(thread, false), () => submitReply(thread, true), () => { setReplyingId(null); setReplyDraft(""); })}
+                          placeholder="Reply…  (⇧↵ for a new line)"
+                          className="block max-h-40 w-full resize-none overflow-y-auto rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1.5 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
                         />
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => submitReply(thread, false)}
+                            className="flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--panel)]"
+                          >
+                            Reply <span className="text-[10px] font-normal opacity-70">{MOD}↵</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => submitReply(thread, true)}
+                            title="Reply and mark this thread seen"
+                            className="flex items-center gap-1.5 rounded-md border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--line)]"
+                          >
+                            Reply &amp; seen <span className="text-[10px] font-normal text-[var(--faint)]">{MOD}⇧↵</span>
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <button
