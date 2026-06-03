@@ -248,8 +248,11 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         setOriginX((prev) => (Math.abs(prev - origin) > 0.5 ? origin : prev));
         // The lowest card bottom in editor-content space (line 0 at content padTop),
         // so the editor can grow tall enough to scroll it into view.
-        if (onContentExtent && sorted.length > 0) {
-          onContentExtent(Math.ceil(padTop + (maxBottom - docTop) + 64));
+        // Reserve extra scroll height for cards stacked below the last line — but
+        // RESET to 0 when there are no visible cards (e.g. everything marked seen),
+        // otherwise the old reserved height lingers as a huge blank gap in the page.
+        if (onContentExtent) {
+          onContentExtent(sorted.length > 0 ? Math.ceil(padTop + (maxBottom - docTop) + 64) : 0);
         }
         syncTransform();
       },
