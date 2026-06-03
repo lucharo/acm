@@ -27,8 +27,9 @@
   --warn: #b45309;
   --warn-bg: #fef3c7;
 
-  /* editor text selection */
-  --cm-selection: rgba(31, 31, 29, 0.1);
+  /* editor text selection — native (browser) selection, so it must read clearly
+     OVER the yellow {==..==} highlights too; a soft blue is distinct from them. */
+  --cm-selection: rgba(70, 130, 230, 0.32);
 
   /* editor prose font — swapped by the settings font picker */
   --editor-font: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
@@ -69,7 +70,7 @@
   --warn: #f59e0b;
   --warn-bg: rgba(245, 158, 11, 0.16);
 
-  --cm-selection: rgba(255, 255, 255, 0.16);
+  --cm-selection: rgba(120, 165, 255, 0.34);
 
   --author-0: #5b9bff;
   --author-1: #f472b6;

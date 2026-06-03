@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { EditorView } from "@codemirror/view";
-import { drawSelection, lineNumbers } from "@codemirror/view";
+import { lineNumbers } from "@codemirror/view";
 import { Annotation, Compartment, EditorState } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
 import { history } from "@codemirror/commands";
@@ -111,7 +111,12 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
-        drawSelection(),
+        // NB: we deliberately do NOT use drawSelection(). It paints the selection on a
+        // layer BEHIND the text, which the doc's pervasive yellow {==..==} highlight
+        // backgrounds then hide — so selecting highlighted text looked like nothing
+        // happened ("can't highlight at all"). Native browser selection composites
+        // ON TOP of text + its background, so it's visible everywhere (styled via the
+        // ::selection rule in theme.ts). We don't need multi-range/rectangular select.
         markdown({ base: markdownLanguage, extensions: [CriticMarkup] }),
         markdownPreview,
         criticMarkupExtension(),
