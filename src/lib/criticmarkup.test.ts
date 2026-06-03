@@ -6,6 +6,7 @@ import {
   applySuggestionToken,
   countWords,
   formatComment,
+  groupCards,
   groupThreads,
   healNestedComments,
   healOneNestedComment,
@@ -570,6 +571,33 @@ describe("nested-comment heal + insert clamp (the comment-in-comment bug)", () =
     const text = "{>>@a: clean comment<<} tail";
     expect(healOneNestedComment(text, 0)).toBeNull();
     expect(healOneNestedComment(text, 5)).toBeNull(); // not a {>> start
+  });
+});
+
+describe("groupCards — suggestions + comment threads as one ordered set", () => {
+  test("a suggestion claims an adjacent comment as a reply", () => {
+    const text = "Body {~~old~>new~~}{>>@a: why?<<} more {==hl==}{>>@b: note<<} end";
+    const cards = groupCards(scanTokens(text), text);
+    expect(cards).toHaveLength(2);
+    // ordered by `from`: the substitution card first, then the highlight-anchored comment.
+    expect(cards[0].kind).toBe("suggestion");
+    expect(cards[0].comments.map((c) => c.body)).toEqual(["why?"]);
+    expect(cards[1].kind).toBe("comment");
+    expect(cards[1].comments.map((c) => c.body)).toEqual(["note"]);
+  });
+  test("a suggestion does NOT claim a comment separated by a real highlight", () => {
+    const text = "x {++ins++}{==hl==}{>>@a: about hl<<} y";
+    const cards = groupCards(scanTokens(text), text);
+    const sug = cards.find((c) => c.kind === "suggestion")!;
+    expect(sug.comments).toHaveLength(0); // the comment belongs to the highlight, not the insert
+    const com = cards.find((c) => c.kind === "comment")!;
+    expect(com.comments.map((c) => c.body)).toEqual(["about hl"]);
+  });
+  test("a bare suggestion with no comment is still a card", () => {
+    const cards = groupCards(scanTokens("a {--gone--} b"), "a {--gone--} b");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].kind).toBe("suggestion");
+    expect(cards[0].comments).toHaveLength(0);
   });
 });
 

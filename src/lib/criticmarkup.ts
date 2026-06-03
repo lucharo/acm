@@ -9,7 +9,7 @@
 // IMPLEMENTATION OWNER: Piece 4. The signatures + JSDoc below are the contract
 // the other pieces are written against — keep them stable.
 
-import type { CritToken, CommentToken, CommentThread } from "./types";
+import type { CritToken, CommentToken, CommentThread, SidebarCard } from "./types";
 import type { SuggestionToken } from "./types";
 
 // Each construct is `{<open><inner><close>}`. We scan left-to-right, at every `{`
@@ -533,4 +533,45 @@ export function groupThreads(comments: CommentToken[], text: string): CommentThr
     }
   }
   return threads;
+}
+
+/**
+ * Build the right-margin cards: a SUGGESTION card per `{++/--/~~}` (claiming any
+ * comments directly adjacent after it as replies — so a suggestion can spawn a
+ * conversation), plus COMMENT-thread cards for every comment NOT claimed by a
+ * suggestion (the existing highlight-anchored / standalone threads). Sorted by
+ * document offset so the sidebar lays them out top-to-bottom.
+ *
+ * Adjacency uses the same THREAD_GAP as comment threads: only whitespace / orphaned
+ * highlight-close markers may sit between a suggestion and its reply, so a comment
+ * anchored to a following `{==highlight==}` is NOT mis-claimed.
+ */
+export function groupCards(tokens: CritToken[], text: string): SidebarCard[] {
+  const inOrder = [...tokens].sort((a, b) => a.from - b.from);
+  const claimed = new Set<string>();
+  const cards: SidebarCard[] = [];
+
+  for (let i = 0; i < inOrder.length; i++) {
+    const t = inOrder[i];
+    if (t.type !== "insert" && t.type !== "delete" && t.type !== "substitute") continue;
+    const replies: CommentToken[] = [];
+    let cursorTo = t.to;
+    for (let j = i + 1; j < inOrder.length; j++) {
+      const n = inOrder[j];
+      if (n.type !== "comment") break; // only adjacent comments thread onto a suggestion
+      if (!THREAD_GAP.test(text.slice(cursorTo, n.from))) break;
+      replies.push(n);
+      claimed.add(n.id);
+      cursorTo = n.to;
+    }
+    cards.push({ kind: "suggestion", id: t.id, from: t.from, to: cursorTo, suggestion: t as SuggestionToken, comments: replies });
+  }
+
+  const freeComments = inOrder.filter((t): t is CommentToken => t.type === "comment" && !claimed.has(t.id));
+  for (const th of groupThreads(freeComments, text)) {
+    cards.push({ kind: "comment", id: th.id, from: th.from, to: th.to, comments: th.comments });
+  }
+
+  cards.sort((a, b) => a.from - b.from);
+  return cards;
 }

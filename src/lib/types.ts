@@ -93,6 +93,23 @@ export interface CommentThread {
   comments: CommentToken[];
 }
 
+/**
+ * A card in the right margin — either a comment thread OR a suggestion (with any
+ * comments adjacent to it as its replies, so suggestions can spawn conversations).
+ * Both carry `id`/`from`/`to`/`comments` so the sidebar's positioning is agnostic to
+ * kind; only the card's inner rendering differs.
+ */
+export type SidebarCard =
+  | { kind: "comment"; id: string; from: number; to: number; comments: CommentToken[] }
+  | {
+      kind: "suggestion";
+      id: string;
+      from: number;
+      to: number;
+      suggestion: SuggestionToken;
+      comments: CommentToken[]; // replies adjacent to the suggestion (may be empty)
+    };
+
 /** The document as held on disk + a monotonic version stamped by the server. */
 export interface DocState {
   content: string;
