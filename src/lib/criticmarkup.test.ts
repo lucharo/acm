@@ -16,6 +16,7 @@ import {
   scanTokens,
   suggestionReplacement,
   applySuggestionEdit,
+  applicableSuggestionIds,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -631,6 +632,29 @@ describe("structured suggestions (SUGGEST: …)", () => {
     expect(applySuggestionEdit("{==span==}{>>@a: just a note<<}", plain)).toBeNull();
     const pt = scanTokens("text {>>@a: SUGGEST: x<<}").find((t) => t.type === "comment") as CommentToken;
     expect(applySuggestionEdit("text {>>@a: SUGGEST: x<<}", pt)).toBeNull(); // no highlight anchor
+  });
+  test("applySuggestionEdit tolerates THREAD_GAP between highlight and comment (a stray space)", () => {
+    // The emitter writes them zero-gap, but a stray space must NOT silently dead-click:
+    // the anchor lookup uses the same adjacency rule as threading.
+    const text = "Pay {==old span==} {>>@a: SUGGEST: new span<<} here.";
+    const sug = scanTokens(text).find((t) => t.type === "comment") as CommentToken;
+    const edit = applySuggestionEdit(text, sug)!;
+    const out = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
+    expect(out).toBe("Pay new span here."); // gap is consumed into the replacement
+  });
+  test("applicableSuggestionIds = exactly the SUGGEST: comments whose Apply is real", () => {
+    // anchored (real) + zero-gap, anchored with a stray space (real), an unanchored
+    // point SUGGEST: (no anchor → excluded), and a plain comment (not a suggestion).
+    const text =
+      "A {==s1==}{>>@a: SUGGEST: r1<<} B {==s2==} {>>@b: SUGGEST: r2<<} C {>>@c: SUGGEST: r3<<} D {==s4==}{>>@d: plain<<}";
+    const ids = applicableSuggestionIds(text);
+    const comments = scanTokens(text).filter((t): t is CommentToken => t.type === "comment");
+    const byBody = (needle: string) => comments.find((c) => c.body.includes(needle))!;
+    expect(ids.has(byBody("r1").id)).toBe(true); // anchored, zero-gap
+    expect(ids.has(byBody("r2").id)).toBe(true); // anchored across a space
+    expect(ids.has(byBody("r3").id)).toBe(false); // SUGGEST: but no highlight anchor
+    expect(ids.has(byBody("plain").id)).toBe(false); // anchored but not a SUGGEST:
+    expect(ids.size).toBe(2);
   });
 });
 

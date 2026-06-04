@@ -599,11 +599,46 @@ export function suggestionReplacement(body: string): string | null {
 }
 
 /**
+ * The highlight that ANCHORS a comment: the closest highlight whose close is
+ * separated from the comment's open by only THREAD_GAP noise (whitespace +
+ * orphaned `{==` / `==}` delimiters) — the SAME adjacency rule groupCards uses to
+ * thread. Using the identical rule everywhere means "this comment is anchored to a
+ * span" can't disagree between the sidebar (which shows the Suggested-edit card)
+ * and applySuggestionEdit (which performs it). Returns the innermost/closest such
+ * highlight, or null (e.g. a point comment or a reply — not anchored to a span).
+ *
+ * Tokens may be passed in to avoid re-scanning when the caller already has them.
+ */
+function anchorHighlightFor(
+  content: string,
+  comment: { from: number },
+  tokens?: CritToken[],
+): CritToken | null {
+  const toks = tokens ?? scanTokens(content);
+  let best: CritToken | null = null;
+  for (const t of toks) {
+    if (t.type !== "highlight" || t.to > comment.from) continue;
+    if (!ANCHOR_GAP.test(content.slice(t.to, comment.from))) continue;
+    if (!best || t.to > best.to) best = t; // closest highlight before the comment
+  }
+  return best;
+}
+
+// The gap a comment may sit behind its anchoring highlight: only whitespace and
+// orphaned highlight delimiters (`{==` / `==}`), in any mix, including none. A
+// SUPERSET of THREAD_GAP — THREAD_GAP only allows whitespace ALONGSIDE a delimiter,
+// whereas an anchor must also tolerate a bare stray space (`{==span==} {>>…<<}`)
+// so an incidental space never silently turns a suggestion un-applyable. Any prose
+// in the gap still disqualifies the highlight, so this can't bind the wrong span.
+const ANCHOR_GAP = /^(?:\s|\{==|==\})*$/;
+
+/**
  * The edit that APPLIES a structured-suggestion comment: replace its anchored span
- * (the highlight whose close abuts the comment, plus any outer `{==` opens) AND the
- * comment itself with the proposed replacement text. Clean prose, no nesting. Returns
- * null if the body isn't a suggestion or the comment has no highlight anchor directly
- * before it (e.g. it's a reply, not anchored to a span).
+ * (the highlight that anchors the comment, plus any outer `{==` opens) AND the
+ * comment itself — and any THREAD_GAP noise between them — with the proposed
+ * replacement text. Clean prose, no nesting. Returns null if the body isn't a
+ * suggestion or the comment has no highlight anchor (e.g. it's a reply / point
+ * comment, not anchored to a span) — the caller must NOT offer Apply in that case.
  */
 export function applySuggestionEdit(
   content: string,
@@ -611,9 +646,27 @@ export function applySuggestionEdit(
 ): { from: number; to: number; insert: string } | null {
   const repl = suggestionReplacement(comment.body);
   if (repl === null) return null;
-  const hl = scanTokens(content).find((t) => t.type === "highlight" && t.to === comment.from);
+  const hl = anchorHighlightFor(content, comment);
   if (!hl) return null;
   let start = hl.from;
   while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
   return { from: start, to: comment.to, insert: repl };
+}
+
+/**
+ * Ids of every `SUGGEST:` comment that has a resolvable highlight anchor — i.e.
+ * every comment whose Apply is REAL, not a dead click. Single scan, so the sidebar
+ * can gate the Apply button without re-running applySuggestionEdit per comment.
+ * A `SUGGEST:` comment with no anchor (a malformed point/reply suggestion) is left
+ * out: the proposal can still be shown, but no Apply button.
+ */
+export function applicableSuggestionIds(content: string): Set<string> {
+  const tokens = scanTokens(content);
+  const out = new Set<string>();
+  for (const t of tokens) {
+    if (t.type !== "comment") continue;
+    if (suggestionReplacement(t.body) === null) continue;
+    if (anchorHighlightFor(content, t, tokens)) out.add(t.id);
+  }
+  return out;
 }
