@@ -621,13 +621,15 @@ describe("structured suggestions (SUGGEST: …)", () => {
     const out = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
     expect(out).toBe("Pay implies a cost you don’t get back here.");
   });
-  test("applySuggestionEdit handles a stacked/nested anchor ({=={==span==}…==})", () => {
-    const text = "x {=={==old span==}{>>@a: SUGGEST: new span<<}==}{>>@b: SUGGEST: ignored<<} y";
-    const first = scanTokens(text).filter((t) => t.type === "comment")[0] as CommentToken;
-    const edit = applySuggestionEdit(text, first)!;
-    expect(edit.insert).toBe("new span");
-    // swallows the outer {== open too, so no orphan is left
-    expect(text.slice(edit.from, edit.from + 4)).toBe("{=={");
+  test("suggestionThreadEdit flattens a stacked anchor and keeps sibling discussion", () => {
+    const text = "x {=={==old span==}{>>@a: SUGGEST: new span<<}==}{>>@b: keep talking<<} y";
+    const a = scanTokens(text)
+      .filter((t): t is CommentToken => t.type === "comment")
+      .find((c) => c.body.includes("new span"))!;
+    const acc = applySuggestionEdit(text, a)!;
+    const out = text.slice(0, acc.from) + acc.insert + text.slice(acc.to);
+    // span edited, stacked wrapper flattened, @b discussion preserved on the new span.
+    expect(out).toBe("x {==new span==}{>>@b: keep talking<<} y");
   });
   test("applySuggestionEdit returns null for a non-suggestion or unanchored comment", () => {
     const plain = scanTokens("{==span==}{>>@a: just a note<<}").find((t) => t.type === "comment") as CommentToken;
@@ -643,6 +645,31 @@ describe("structured suggestions (SUGGEST: …)", () => {
     const edit = applySuggestionEdit(text, sug)!;
     const out = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
     expect(out).toBe("Pay new span here."); // gap is consumed into the replacement
+  });
+  test("a SUGGEST reply mid-thread inherits the thread's anchor span (accept edits span, keeps the conversation)", () => {
+    const text = "Pay {==the old span==}{>>@a: what about rewording?<<}{>>@b: SUGGEST: the new span<<} here.";
+    const reply = scanTokens(text)
+      .filter((t): t is CommentToken => t.type === "comment")
+      .find((c) => c.body.includes("the new span"))!;
+    // a reply deep in the thread is still recognised + applyable (inherits the root's anchor)
+    expect(applicableSuggestionIds(text).has(reply.id)).toBe(true);
+    expect(inlineSuggestions(text).some((s) => s.commentFrom === reply.from && s.hasReplies)).toBe(true);
+    const acc = applySuggestionEdit(text, reply)!;
+    expect(text.slice(0, acc.from) + acc.insert + text.slice(acc.to)).toBe(
+      "Pay {==the new span==}{>>@a: what about rewording?<<} here.",
+    );
+    const rej = rejectSuggestionEdit(text, reply)!;
+    expect(text.slice(0, rej.from) + rej.insert + text.slice(rej.to)).toBe(
+      "Pay {==the old span==}{>>@a: what about rewording?<<} here.",
+    );
+  });
+  test("delete (empty replacement) with remaining discussion → point comments, no empty {====}", () => {
+    const text = "Cut {==this span==}{>>@a: SUGGEST:<<}{>>@b: agreed<<} now.";
+    const sug = scanTokens(text)
+      .filter((t): t is CommentToken => t.type === "comment")
+      .find((c) => suggestionReplacement(c.body) !== null)!;
+    const acc = applySuggestionEdit(text, sug)!;
+    expect(text.slice(0, acc.from) + acc.insert + text.slice(acc.to)).toBe("Cut {>>@b: agreed<<} now.");
   });
   test("rejectSuggestionEdit keeps the original span, drops the markup (mirror of accept=new/reject=old)", () => {
     const text = "Pay {==implies a sacrifice==}{>>@claude: SUGGEST: implies a cost<<} here.";
