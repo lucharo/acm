@@ -632,13 +632,22 @@ function anchorHighlightFor(
 // in the gap still disqualifies the highlight, so this can't bind the wrong span.
 const ANCHOR_GAP = /^(?:\s|\{==|==\})*$/;
 
+/** The replace range [start, comment.to) for an anchored suggestion: from the
+ *  outermost stacked `{==` open through the comment's close. Shared by accept
+ *  (insert replacement) and reject (insert the original span). */
+function suggestionAnchorStart(content: string, hl: CritToken): number {
+  let start = hl.from;
+  while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
+  return start;
+}
+
 /**
- * The edit that APPLIES a structured-suggestion comment: replace its anchored span
- * (the highlight that anchors the comment, plus any outer `{==` opens) AND the
- * comment itself — and any THREAD_GAP noise between them — with the proposed
- * replacement text. Clean prose, no nesting. Returns null if the body isn't a
- * suggestion or the comment has no highlight anchor (e.g. it's a reply / point
- * comment, not anchored to a span) — the caller must NOT offer Apply in that case.
+ * The edit that APPLIES (accepts) a structured-suggestion comment: replace its
+ * anchored span (the highlight that anchors the comment, plus any outer `{==`
+ * opens) AND the comment itself — and any ANCHOR_GAP noise between them — with the
+ * proposed replacement text. Clean prose, no nesting. Returns null if the body
+ * isn't a suggestion or the comment has no highlight anchor (e.g. it's a reply /
+ * point comment) — the caller must NOT offer Apply in that case.
  */
 export function applySuggestionEdit(
   content: string,
@@ -648,9 +657,70 @@ export function applySuggestionEdit(
   if (repl === null) return null;
   const hl = anchorHighlightFor(content, comment);
   if (!hl) return null;
-  let start = hl.from;
-  while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
-  return { from: start, to: comment.to, insert: repl };
+  return { from: suggestionAnchorStart(content, hl), to: comment.to, insert: repl };
+}
+
+/**
+ * The edit that REJECTS a structured-suggestion comment: drop the SUGGEST comment
+ * and its highlight anchor, KEEPING the original span prose untouched. Symmetric
+ * with accept (which keeps the replacement) — mirrors a native substitution's
+ * accept=new / reject=old. Returns null when it isn't an anchored suggestion.
+ * NOTE: like accept, this consumes the comment through `comment.to`; trailing
+ * reply comments (a discussion thread) are left in place and become unanchored —
+ * the caller surfaces "has discussion" so the user isn't surprised.
+ */
+export function rejectSuggestionEdit(
+  content: string,
+  comment: CommentToken,
+): { from: number; to: number; insert: string } | null {
+  if (suggestionReplacement(comment.body) === null) return null;
+  const hl = anchorHighlightFor(content, comment);
+  if (!hl || hl.type !== "highlight") return null;
+  return { from: suggestionAnchorStart(content, hl), to: comment.to, insert: hl.inner };
+}
+
+/** A SUGGEST: pair surfaced for INLINE substitution-style rendering: the anchor
+ *  highlight to strike, the comment to replace with the proposed wording + ✓/✗,
+ *  the replacement text, and whether a real discussion thread hangs off it (so the
+ *  unified render doesn't hide that replies exist). */
+export interface InlineSuggestion {
+  hlFrom: number; // anchor highlight node start (render its span struck)
+  hlTo: number;
+  commentFrom: number; // the SUGGEST: comment (replaced by the inline widget)
+  commentTo: number;
+  replacement: string;
+  hasReplies: boolean; // the comment is a thread root with ≥1 reply
+}
+
+/**
+ * Every anchored SUGGEST: pair in the document, for the editor's inline accept/
+ * reject layer. Encapsulates the adjacency contract (anchorHighlightFor) so the
+ * view stays presentational: it places decorations on real lezer nodes and only
+ * consults this list to classify which highlight/comment is a suggestion.
+ */
+export function inlineSuggestions(content: string): InlineSuggestion[] {
+  const tokens = scanTokens(content);
+  const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
+  const threads = groupThreads(comments, content);
+  const out: InlineSuggestion[] = [];
+  for (const t of comments) {
+    const repl = suggestionReplacement(t.body);
+    if (repl === null) continue;
+    const hl = anchorHighlightFor(content, t, tokens);
+    if (!hl || hl.type !== "highlight") continue;
+    // Anchored → this comment is a thread ROOT; replies (if any) follow it.
+    const thread = threads.find((th) => th.comments[0]?.from === t.from);
+    const hasReplies = !!thread && thread.comments.length > 1;
+    out.push({
+      hlFrom: hl.from,
+      hlTo: hl.to,
+      commentFrom: t.from,
+      commentTo: t.to,
+      replacement: repl,
+      hasReplies,
+    });
+  }
+  return out;
 }
 
 /**

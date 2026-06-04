@@ -16,6 +16,8 @@ import {
   scanTokens,
   suggestionReplacement,
   applySuggestionEdit,
+  rejectSuggestionEdit,
+  inlineSuggestions,
   applicableSuggestionIds,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
@@ -641,6 +643,38 @@ describe("structured suggestions (SUGGEST: …)", () => {
     const edit = applySuggestionEdit(text, sug)!;
     const out = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
     expect(out).toBe("Pay new span here."); // gap is consumed into the replacement
+  });
+  test("rejectSuggestionEdit keeps the original span, drops the markup (mirror of accept=new/reject=old)", () => {
+    const text = "Pay {==implies a sacrifice==}{>>@claude: SUGGEST: implies a cost<<} here.";
+    const sug = scanTokens(text).find((t) => t.type === "comment") as CommentToken;
+    const rej = rejectSuggestionEdit(text, sug)!;
+    const out = text.slice(0, rej.from) + rej.insert + text.slice(rej.to);
+    expect(out).toBe("Pay implies a sacrifice here."); // original span kept, suggestion gone
+    // accept and reject hit the SAME range — only the inserted text differs.
+    const acc = applySuggestionEdit(text, sug)!;
+    expect({ from: rej.from, to: rej.to }).toEqual({ from: acc.from, to: acc.to });
+    expect(rej.insert).toBe("implies a sacrifice");
+    expect(acc.insert).toBe("implies a cost");
+  });
+  test("rejectSuggestionEdit returns null for a non-suggestion / unanchored comment", () => {
+    const plain = scanTokens("{==s==}{>>@a: note<<}").find((t) => t.type === "comment") as CommentToken;
+    expect(rejectSuggestionEdit("{==s==}{>>@a: note<<}", plain)).toBeNull();
+    const pt = scanTokens("x {>>@a: SUGGEST: y<<}").find((t) => t.type === "comment") as CommentToken;
+    expect(rejectSuggestionEdit("x {>>@a: SUGGEST: y<<}", pt)).toBeNull();
+  });
+  test("inlineSuggestions surfaces each anchored SUGGEST with its span, replacement, and hasReplies", () => {
+    // one bare suggestion + one with a reply thread + a plain anchored comment (ignored).
+    const text =
+      "A {==s1==}{>>@a: SUGGEST: r1<<} B {==s2==}{>>@b: SUGGEST: r2<<}{>>@c: good idea<<} C {==s3==}{>>@d: note<<}";
+    const list = inlineSuggestions(text);
+    expect(list.length).toBe(2);
+    const [a, b] = list;
+    expect(a.replacement).toBe("r1");
+    expect(a.hasReplies).toBe(false);
+    expect(text.slice(a.hlFrom, a.hlTo)).toBe("{==s1==}");
+    expect(text.slice(a.commentFrom, a.commentTo)).toBe("{>>@a: SUGGEST: r1<<}");
+    expect(b.replacement).toBe("r2");
+    expect(b.hasReplies).toBe(true); // @c reply hangs off it — don't hide the thread
   });
   test("applicableSuggestionIds = exactly the SUGGEST: comments whose Apply is real", () => {
     // anchored (real) + zero-gap, anchored with a stray space (real), an unanchored

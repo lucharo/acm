@@ -245,6 +245,26 @@ export const acmTheme: Extension = EditorView.theme(
       opacity: "1",
       transform: "scale(1.25)",
     },
+
+    // ── Inline SUGGEST: pair (renders like a native substitution) ───────────────
+    // The struck "old" half reuses .cm-crit-sub-old (on the anchor highlight); this
+    // widget supplies the green "new" half (.cm-crit-sub-new) + ✓/✗ + an optional
+    // discussion dot. Keep it baseline-aligned so it sits in the text flow.
+    ".cm-crit-suggest": {
+      display: "inline",
+    },
+    // Empty-replacement suggestion = "delete this span" — a muted marker, not green.
+    ".cm-crit-suggest-del": {
+      color: "var(--muted)",
+      fontStyle: "italic",
+      fontSize: "0.85em",
+      padding: "0.02em 0.06em",
+    },
+    // The "has discussion" dot — slightly offset from the controls so it reads as a
+    // separate affordance (a real thread hangs underneath; don't hide it).
+    ".cm-crit-suggest-thread": {
+      marginLeft: "4px",
+    },
   },
   { dark: false },
 );
