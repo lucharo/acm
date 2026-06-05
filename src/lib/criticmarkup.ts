@@ -12,6 +12,10 @@
 import type { CritToken, CommentToken, CommentThread, SidebarCard } from "./types";
 import type { SuggestionToken } from "./types";
 
+// Re-export the public token types so agents/scripts can get everything from this
+// one module (the documented entry point in skills/acm-review/SKILL.md), not types.
+export type { CritToken, CommentToken, CommentThread, SuggestionToken, SidebarCard } from "./types";
+
 // Each construct is `{<open><inner><close>}`. We scan left-to-right, at every `{`
 // try to match a construct by its opening delimiter and the FIRST occurrence of
 // its matching closing delimiter after the inner text begins. Non-greedy by
