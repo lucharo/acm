@@ -20,6 +20,9 @@ import { readFileSync } from "node:fs";
 import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
+import { readConfig, writeConfig } from "./src/server/config";
+
+const SETTINGS_FILE = "settings.json";
 
 const DOC_TOPIC = "doc";
 
@@ -125,6 +128,26 @@ export function startServer(opts: StartServerOptions): AcmServer {
           version++;
           pushUpdate(next);
           return Response.json({ version });
+        });
+      }
+
+      // GET /api/settings → persisted view settings + "seen" state (or {} on a
+      // fresh install). The browser keeps localStorage as an instant cache; this
+      // file is the source of truth across instances/restarts.
+      if (pathname === "/api/settings" && req.method === "GET") {
+        return Response.json(await readConfig<Record<string, unknown>>(SETTINGS_FILE, {}));
+      }
+
+      // PUT /api/settings → MERGE a partial patch ({settings} or {seen}) into the
+      // stored config. Merge (not replace) so the two independent client writers —
+      // settings (App) and seen (Workspace) — never clobber each other's key.
+      // Serialized via withLock so concurrent patches can't lose a read-modify-write.
+      if (pathname === "/api/settings" && req.method === "PUT") {
+        const patch = (await req.json()) as Record<string, unknown>;
+        return withLock(async () => {
+          const current = await readConfig<Record<string, unknown>>(SETTINGS_FILE, {});
+          await writeConfig(SETTINGS_FILE, { ...current, ...patch });
+          return Response.json({ ok: true });
         });
       }
 
