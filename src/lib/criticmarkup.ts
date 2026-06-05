@@ -735,6 +735,7 @@ export interface InlineSuggestion {
   commentTo: number;
   replacement: string;
   hasReplies: boolean; // the comment's thread carries ≥1 other message
+  threadCount: number; // total messages in the thread (for the inline "N" badge)
 }
 
 /**
@@ -758,7 +759,7 @@ export function inlineSuggestions(content: string, tokens?: CritToken[]): Inline
     // hasReplies = a real conversation surrounds this suggestion (so the unified
     // render shows a "has discussion" cue and never hides the thread).
     const thread = threads.find((th) => th.comments.some((c) => c.from === t.from));
-    const hasReplies = !!thread && thread.comments.length > 1;
+    const threadCount = thread ? thread.comments.length : 1;
     out.push({
       hlFrom: hl.from,
       hlTo: hl.to,
@@ -766,7 +767,8 @@ export function inlineSuggestions(content: string, tokens?: CritToken[]): Inline
       commentFrom: t.from,
       commentTo: t.to,
       replacement: repl,
-      hasReplies,
+      hasReplies: threadCount > 1,
+      threadCount,
     });
   }
   return out;

@@ -698,10 +698,12 @@ describe("structured suggestions (SUGGEST: …)", () => {
     const [a, b] = list;
     expect(a.replacement).toBe("r1");
     expect(a.hasReplies).toBe(false);
+    expect(a.threadCount).toBe(1); // lone suggestion → no badge
     expect(text.slice(a.hlFrom, a.hlTo)).toBe("{==s1==}");
     expect(text.slice(a.commentFrom, a.commentTo)).toBe("{>>@a: SUGGEST: r1<<}");
     expect(b.replacement).toBe("r2");
     expect(b.hasReplies).toBe(true); // @c reply hangs off it — don't hide the thread
+    expect(b.threadCount).toBe(2); // SUGGEST + @c reply → "💬 2" badge
   });
   test("applicableSuggestionIds = exactly the SUGGEST: comments whose Apply is real", () => {
     // anchored (real) + zero-gap, anchored with a stray space (real), an unanchored

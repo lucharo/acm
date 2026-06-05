@@ -267,10 +267,22 @@ export const acmTheme: Extension = EditorView.theme(
       fontSize: "0.85em",
       padding: "0.02em 0.06em",
     },
-    // The "has discussion" dot — slightly offset from the controls so it reads as a
-    // separate affordance (a real thread hangs underneath; don't hide it).
+    // The "has discussion" badge — a 💬 + message count, so accepting inline never
+    // silently bypasses an unread parent/sibling comment. Overrides the dot visuals
+    // of .cm-crit-comment-anchor (kept only for click routing) into a small text pill.
     ".cm-crit-suggest-thread": {
-      marginLeft: "4px",
+      width: "auto",
+      height: "auto",
+      marginLeft: "5px",
+      padding: "0 0.35em",
+      borderRadius: "999px",
+      backgroundColor: "transparent",
+      color: "var(--crit-comment)",
+      opacity: "0.75",
+      fontSize: "0.72em",
+      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      verticalAlign: "baseline",
+      transform: "none",
     },
   },
   { dark: false },

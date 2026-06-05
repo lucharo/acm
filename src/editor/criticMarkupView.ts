@@ -186,7 +186,7 @@ class SuggestionInlineWidget extends WidgetType {
     readonly from: number,
     readonly to: number,
     readonly replacement: string,
-    readonly hasReplies: boolean,
+    readonly threadCount: number,
   ) {
     super();
   }
@@ -195,7 +195,7 @@ class SuggestionInlineWidget extends WidgetType {
       other.from === this.from &&
       other.to === this.to &&
       other.replacement === this.replacement &&
-      other.hasReplies === this.hasReplies
+      other.threadCount === this.threadCount
     );
   }
   toDOM() {
@@ -231,13 +231,17 @@ class SuggestionInlineWidget extends WidgetType {
     controls.appendChild(reject);
     wrap.appendChild(controls);
 
-    if (this.hasReplies) {
-      const dot = document.createElement("span");
-      dot.className = "cm-crit-comment-anchor cm-crit-suggest-thread";
-      dot.title = "Has discussion — view thread";
-      dot.setAttribute("data-from", String(this.from));
-      dot.setAttribute("data-to", String(this.to));
-      wrap.appendChild(dot);
+    if (this.threadCount > 1) {
+      // A discussion hangs off this suggestion — show the message COUNT so accepting
+      // inline doesn't silently bypass an unread parent/sibling comment. Clickable →
+      // opens the thread. Carries the comment-click classes so the handler routes it.
+      const badge = document.createElement("span");
+      badge.className = "cm-crit-comment-anchor cm-crit-suggest-thread";
+      badge.textContent = `💬 ${this.threadCount}`;
+      badge.title = `${this.threadCount} messages in this thread — view discussion`;
+      badge.setAttribute("data-from", String(this.from));
+      badge.setAttribute("data-to", String(this.to));
+      wrap.appendChild(badge);
     }
     return wrap;
   }
@@ -379,7 +383,7 @@ function buildWidgets(view: EditorView): DecorationSet {
             ranges.push(
               Decoration.replace({
                 widget: sug
-                  ? new SuggestionInlineWidget(node.from, node.to, sug.replacement, sug.hasReplies)
+                  ? new SuggestionInlineWidget(node.from, node.to, sug.replacement, sug.threadCount)
                   : new CommentAnchorWidget(node.from, node.to),
               }).range(node.from, node.to),
             );
