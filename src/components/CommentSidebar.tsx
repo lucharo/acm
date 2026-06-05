@@ -48,6 +48,8 @@ interface CommentSidebarProps {
   /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
    *  proposed wording. */
   onApplySuggestion: (comment: CommentToken) => void;
+  /** Reject a structured `SUGGEST:` comment — keep the original span (mirror of Apply). */
+  onRejectSuggestionEdit: (comment: CommentToken) => void;
   /** Ids of SUGGEST: comments with a resolvable anchor → their Apply is real.
    *  A SUGGEST: not in this set shows the proposal but no (dead) Apply button. */
   applicableSuggestionIds: Set<string>;
@@ -125,6 +127,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReplyAndSeen,
     onSuggestEdit,
     onApplySuggestion,
+    onRejectSuggestionEdit,
     applicableSuggestionIds,
     onAcceptSuggestion,
     onRejectSuggestion,
@@ -585,15 +588,29 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 {repl.trim() ? repl : "(delete this span)"}
                               </p>
                               {applicableSuggestionIds.has(c.id) ? (
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); onApplySuggestion(c); }}
-                                  title="Apply this edit — replace the highlighted span with the proposed wording"
-                                  className="mt-1.5 flex items-center gap-1 rounded-md bg-[var(--crit-ins)] px-2 py-0.5 text-[11px] font-medium text-[var(--panel)]"
-                                >
-                                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                  Apply
-                                </button>
+                                // Symmetric with the inline ✓/✗: Apply takes the proposed
+                                // wording, Reject keeps the original span (both keep any
+                                // surrounding discussion).
+                                <div className="mt-1.5 flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); onApplySuggestion(c); }}
+                                    title="Apply this edit — replace the highlighted span with the proposed wording"
+                                    className="flex items-center gap-1 rounded-md bg-[var(--crit-ins)] px-2 py-0.5 text-[11px] font-medium text-[var(--panel)]"
+                                  >
+                                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                    Apply
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); onRejectSuggestionEdit(c); }}
+                                    title="Reject this edit — keep the original span"
+                                    className="flex items-center gap-1 rounded-md border border-[var(--line-strong)] px-2 py-0.5 text-[11px] font-medium text-[var(--crit-del)]"
+                                  >
+                                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+                                    Reject
+                                  </button>
+                                </div>
                               ) : (
                                 // SUGGEST: with no resolvable anchor span — show the proposal
                                 // but no dead Apply. (Per the skill, SUGGEST: must anchor to a
