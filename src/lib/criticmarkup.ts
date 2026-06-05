@@ -339,9 +339,7 @@ export function resolveAnchorEdit(
     return { from: runFrom, to: runTo, insert: "" }; // point comment — just drop it
   }
   // Swallow any outer `{==` opens stacked immediately before the inner highlight.
-  let start = hl.from;
-  while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
-  return { from: start, to: runTo, insert: hl.inner };
+  return { from: suggestionAnchorStart(content, hl), to: runTo, insert: hl.inner };
 }
 
 // ── Auto-heal: flatten comments accidentally nested inside other comments ──────
@@ -651,15 +649,16 @@ function threadAnchorHighlightFor(
   content: string,
   comment: CommentToken,
   tokens?: CritToken[],
+  threads?: CommentThread[],
 ): CritToken | null {
   const toks = tokens ?? scanTokens(content);
   const direct = anchorHighlightFor(content, comment, toks);
   if (direct) return direct;
-  const comments = toks.filter((t): t is CommentToken => t.type === "comment");
-  const thread = groupThreads(comments, content).find((th) =>
-    th.comments.some((c) => c.from === comment.from),
-  );
-  const root = thread?.comments[0];
+  // Reply: inherit the thread root's anchor. Reuse a prebuilt thread list when the
+  // caller has one (callers in a per-comment loop must, else this is O(comments²)).
+  const ths =
+    threads ?? groupThreads(toks.filter((t): t is CommentToken => t.type === "comment"), content);
+  const root = ths.find((th) => th.comments.some((c) => c.from === comment.from))?.comments[0];
   if (!root || root.from === comment.from) return null; // root itself had no anchor
   return anchorHighlightFor(content, root, toks);
 }
@@ -685,12 +684,13 @@ export function suggestionThreadEdit(
   const repl = suggestionReplacement(comment.body);
   if (repl === null) return null;
   const tokens = scanTokens(content);
-  const hl = threadAnchorHighlightFor(content, comment, tokens);
-  if (!hl || hl.type !== "highlight") return null;
-  const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
-  const thread = groupThreads(comments, content).find((th) =>
-    th.comments.some((c) => c.from === comment.from),
+  const threads = groupThreads(
+    tokens.filter((t): t is CommentToken => t.type === "comment"),
+    content,
   );
+  const hl = threadAnchorHighlightFor(content, comment, tokens, threads);
+  if (!hl || hl.type !== "highlight") return null;
+  const thread = threads.find((th) => th.comments.some((c) => c.from === comment.from));
   if (!thread) return null;
 
   const newSpan = mode === "accept" ? repl : hl.inner;
@@ -730,10 +730,11 @@ export function rejectSuggestionEdit(
 export interface InlineSuggestion {
   hlFrom: number; // anchor highlight node start (render its span struck)
   hlTo: number;
+  commentId: string; // the SUGGEST: comment's token id (so callers can key on it)
   commentFrom: number; // the SUGGEST: comment (replaced by the inline widget)
   commentTo: number;
   replacement: string;
-  hasReplies: boolean; // the comment is a thread root with ≥1 reply
+  hasReplies: boolean; // the comment's thread carries ≥1 other message
 }
 
 /**
@@ -742,16 +743,17 @@ export interface InlineSuggestion {
  * view stays presentational: it places decorations on real lezer nodes and only
  * consults this list to classify which highlight/comment is a suggestion.
  */
-export function inlineSuggestions(content: string): InlineSuggestion[] {
-  const tokens = scanTokens(content);
-  const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
+export function inlineSuggestions(content: string, tokens?: CritToken[]): InlineSuggestion[] {
+  const toks = tokens ?? scanTokens(content);
+  const comments = toks.filter((t): t is CommentToken => t.type === "comment");
   const threads = groupThreads(comments, content);
   const out: InlineSuggestion[] = [];
   for (const t of comments) {
     const repl = suggestionReplacement(t.body);
     if (repl === null) continue;
     // Resolve the span even for a reply deeper in the thread (inherits the root's).
-    const hl = threadAnchorHighlightFor(content, t, tokens);
+    // Pass the prebuilt threads so the reply path stays O(comments), not O(comments²).
+    const hl = threadAnchorHighlightFor(content, t, toks, threads);
     if (!hl || hl.type !== "highlight") continue;
     // hasReplies = a real conversation surrounds this suggestion (so the unified
     // render shows a "has discussion" cue and never hides the thread).
@@ -760,6 +762,7 @@ export function inlineSuggestions(content: string): InlineSuggestion[] {
     out.push({
       hlFrom: hl.from,
       hlTo: hl.to,
+      commentId: t.id,
       commentFrom: t.from,
       commentTo: t.to,
       replacement: repl,
@@ -770,19 +773,11 @@ export function inlineSuggestions(content: string): InlineSuggestion[] {
 }
 
 /**
- * Ids of every `SUGGEST:` comment that has a resolvable highlight anchor — i.e.
- * every comment whose Apply is REAL, not a dead click. Single scan, so the sidebar
- * can gate the Apply button without re-running applySuggestionEdit per comment.
- * A `SUGGEST:` comment with no anchor (a malformed point/reply suggestion) is left
- * out: the proposal can still be shown, but no Apply button.
+ * Ids of every `SUGGEST:` comment whose Apply is REAL (has a resolvable anchor),
+ * for gating the sidebar Apply button. Exactly the comments {@link inlineSuggestions}
+ * surfaces — derived from that one pass rather than a second scan + anchor-resolve,
+ * so the sidebar gate and the inline layer can never disagree on what's applyable.
  */
-export function applicableSuggestionIds(content: string): Set<string> {
-  const tokens = scanTokens(content);
-  const out = new Set<string>();
-  for (const t of tokens) {
-    if (t.type !== "comment") continue;
-    if (suggestionReplacement(t.body) === null) continue;
-    if (threadAnchorHighlightFor(content, t, tokens)) out.add(t.id);
-  }
-  return out;
+export function applicableSuggestionIds(content: string, tokens?: CritToken[]): Set<string> {
+  return new Set(inlineSuggestions(content, tokens).map((s) => s.commentId));
 }
