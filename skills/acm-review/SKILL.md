@@ -62,6 +62,17 @@ no special syntax:
 
 That renders as a 2-message thread (parent → your reply), parent first.
 
+**A reply can itself be a `SUGGEST:`.** Drop a `SUGGEST:` comment as a reply (right
+after another comment in the thread) and it targets the **thread's** anchored span —
+so you can propose a concrete edit in the middle of a discussion, not just at the root:
+
+```
+{==currency we spend==}{>>@luis: right metaphor?<<}{>>@claude: SUGGEST: a resource we allocate<<}
+```
+
+Here `@claude`'s suggestion replaces `currency we spend` (the span the thread is about),
+and `@luis`'s question stays attached to the edited span when it's accepted.
+
 ## Find comments precisely (reuse ACM's own parser)
 
 Don't hand-roll regex. ACM ships a parser you can import:
