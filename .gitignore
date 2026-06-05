@@ -6,3 +6,7 @@ dist
 src/server/embedded.generated.ts
 # roborev snapshots
 /.roborev/
+
+# ACM doc snapshots (agent verbs / heal) — never commit or sync (bulk churn)
+.acm/
+.acm-backups/

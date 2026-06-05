@@ -12,6 +12,7 @@ import { existsSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { startServer } from "./server";
+import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
 // @ts-ignore — Bun inlines this file's text (and embeds it in the standalone binary).
 import SKILL_TEXT from "./skills/acm-review/SKILL.md" with { type: "text" };
 
@@ -44,6 +45,16 @@ Usage:
   acm [file.md]      Open (creating if missing) a CriticMarkup document
   acm                Open a new untitled document
   acm skill          Install the agent-review skill (~/.claude + ~/.agents)
+
+Agent verbs (operate on --doc <file.md> or $ACM_DOC; snapshot before every write):
+  acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]
+  acm comment "<phrase>" "<text>"   Reply to the thread matching <phrase>
+  acm suggest "<span>" "<new>"      Anchor a SUGGEST: on the unique prose <span>
+  acm accept "<phrase>"             Accept the suggestion matching <phrase>
+  acm reject "<phrase>"             Reject it (keep the original span)
+  acm resolve "<phrase>"            Strip the thread matching <phrase>
+  acm apply <edits.json>            Batch reply-append (idempotent); [{id,match,insert}]
+    (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
 
 Options:
   --port <n>         Port to serve on (default 12000; auto-increments if busy)
@@ -103,6 +114,11 @@ function uniqueUntitled(): string {
 // Subcommands.
 if (process.argv[2] === "skill") {
   installSkill();
+  process.exit(0);
+}
+// Agent edit/read verbs (threads/comment/suggest/accept/reject/resolve/apply).
+if (isAgentVerb(process.argv[2])) {
+  await runAgentVerb(process.argv[2], process.argv.slice(3));
   process.exit(0);
 }
 

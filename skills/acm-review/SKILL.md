@@ -97,14 +97,34 @@ it threads cleanly. This is the reliable way to locate anchors and avoid mis-edi
    text, attach a `SUGGEST:` comment (see "the ONE hard rule" above).
 4. Write the file back (or POST to the server API). Keep edits minimal and signed.
 
-## HTTP API (when a server is running)
+## The `acm` verbs (the blessed surface — prefer these)
 
-- `GET  /api/doc` → `{ content, version }`
-- `POST /api/comment` `{ anchor, text, author }` → inserts a point comment at `anchor`
-- `PUT  /api/doc` `{ content, baseVersion }` → version-checked full write (409 on conflict)
+For the common review ops, use the CLI verbs instead of hand-editing. They anchor by
+**unique text match** (fail safe on ambiguity — nothing applies unless exactly one
+target matches), **snapshot the doc before every write** (`<docDir>/.acm/snapshots/`),
+and **re-parse + report** after. Pass `--doc <file.md>` (or set `ACM_DOC`); writes go
+to the file, so a running editor reflects them within ~1s.
 
-Direct file read/write is always available and simplest; use the API when you want the
-server to own the insertion (it broadcasts to the UI immediately).
+```
+acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST]
+acm comment "<phrase>" "<text>"   # reply to the thread whose comment matches <phrase>
+acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique prose <span>
+acm accept "<phrase>"             # accept the suggestion matching <phrase> (keep new)
+acm reject "<phrase>"             # reject it (keep the original span)
+acm resolve "<phrase>"            # strip the thread matching <phrase>
+acm apply <edits.json>            # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
+```
+
+Typical loop: `acm threads --json` to see open threads → `acm comment` / `acm suggest`
+per thread (or one `acm apply edits.json` for a batch) → `acm accept`/`reject` to act on
+suggestions. `--author <name>` stamps the voice (default `claude`).
+
+## HTTP API / direct file (fallbacks)
+
+When a server is running: `GET /api/doc` → `{content, version}`; `POST /api/comment`
+`{anchor,text,author}`; `PUT /api/doc` `{content, baseVersion}` (409 on conflict).
+Direct file read/write is always available and simplest for one-offs. Prefer the `acm`
+verbs for review work — they snapshot and validate; raw edits don't.
 
 ## Voice
 
