@@ -21,6 +21,7 @@
   --crit-del: #cf222e;
   --crit-del-bg: #ffebe9;
   --crit-hl-bg: #fff3b0;
+  --crit-hl-bg-strong: #ffe066; /* denser highlight: multi-comment span (one step down) */
   --crit-hl-ink: #6b5200;
   --crit-comment: #8250df;
   /* Warning (recoverable issues — heal banner): amber, NOT the destructive red. */
@@ -65,6 +66,7 @@
   --crit-del: #f8716a;
   --crit-del-bg: rgba(248, 113, 106, 0.16);
   --crit-hl-bg: rgba(214, 162, 51, 0.24);
+  --crit-hl-bg-strong: rgba(214, 162, 51, 0.42); /* denser: multi-comment span */
   --crit-hl-ink: #e8c168;
   --crit-comment: #a371f7;
   --warn: #f59e0b;

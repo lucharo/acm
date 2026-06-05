@@ -42,8 +42,8 @@ export interface UseCodeMirrorResult {
   containerRef: React.RefObject<HTMLDivElement | null>;
   viewRef: React.MutableRefObject<EditorView | null>;
   applyRemote: (content: string) => void;
-  /** Tell the editor which comment-anchor highlights are active / seen (by `from`). */
-  setHighlightState: (active: number | null, seen: number[]) => void;
+  /** Tell the editor which comment-anchor highlights are active / seen / busy (by `from`). */
+  setHighlightState: (active: number | null, seen: number[], busy: number[]) => void;
   /** Push the anchored SUGGEST: pairs for the inline accept/reject layer. */
   pushInlineSuggestions: (suggestions: InlineSuggestion[]) => void;
 }
@@ -210,9 +210,12 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     });
   }, []);
 
-  const setHighlightState = useCallback((active: number | null, seen: number[]) => {
-    viewRef.current?.dispatch({ effects: setCritHighlights.of({ active, seen }) });
-  }, []);
+  const setHighlightState = useCallback(
+    (active: number | null, seen: number[], busy: number[]) => {
+      viewRef.current?.dispatch({ effects: setCritHighlights.of({ active, seen, busy }) });
+    },
+    [],
+  );
 
   const pushInlineSuggestions = useCallback((suggestions: InlineSuggestion[]) => {
     viewRef.current?.dispatch({ effects: setInlineSuggestions.of(suggestions) });

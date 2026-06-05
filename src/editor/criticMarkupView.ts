@@ -40,13 +40,19 @@ import type { InlineSuggestion } from "../lib/criticmarkup";
 export interface CritHighlightState {
   active: number | null; // `from` of the active comment's anchor highlight
   seen: Set<number>; // `from`s of seen comments' anchor highlights
+  busy: Set<number>; // `from`s of anchors carrying a multi-comment thread (density)
 }
-export const setCritHighlights = StateEffect.define<{ active: number | null; seen: number[] }>();
+export const setCritHighlights = StateEffect.define<{
+  active: number | null;
+  seen: number[];
+  busy: number[];
+}>();
 export const critHighlightField = StateField.define<CritHighlightState>({
-  create: () => ({ active: null, seen: new Set<number>() }),
+  create: () => ({ active: null, seen: new Set<number>(), busy: new Set<number>() }),
   update(value, tr) {
     for (const e of tr.effects) {
-      if (e.is(setCritHighlights)) return { active: e.value.active, seen: new Set(e.value.seen) };
+      if (e.is(setCritHighlights))
+        return { active: e.value.active, seen: new Set(e.value.seen), busy: new Set(e.value.busy) };
     }
     return value;
   },
@@ -282,13 +288,13 @@ function buildMarks(view: EditorView): DecorationSet {
             // need their own marks. Overlapping marks nest fine in one RangeSet.
             // The active comment's anchor + seen anchors get extra classes (styled,
             // colourblind-safe, in theme.ts).
-            const cls =
-              hlState && node.from === hlState.active
-                ? "cm-crit-hl cm-crit-hl--active"
-                : hlState && hlState.seen.has(node.from)
-                  ? "cm-crit-hl cm-crit-hl--seen"
-                  : "cm-crit-hl";
-            ranges.push(Decoration.mark({ class: cls }).range(node.from, node.to));
+            const classes = ["cm-crit-hl"];
+            if (hlState && node.from === hlState.active) classes.push("cm-crit-hl--active");
+            else if (hlState && hlState.seen.has(node.from)) classes.push("cm-crit-hl--seen");
+            // Density: a span carrying a multi-comment thread reads a shade heavier
+            // (lightness, colourblind-safe) — GDocs shades busier regions darker.
+            if (hlState && hlState.busy.has(node.from)) classes.push("cm-crit-hl--busy");
+            ranges.push(Decoration.mark({ class: classes.join(" ") }).range(node.from, node.to));
             return;
           }
           case "CMSubstitute": {

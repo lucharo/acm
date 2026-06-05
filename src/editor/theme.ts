@@ -170,6 +170,13 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-crit-hl--active": {
       boxShadow: "inset 0 -2px 0 var(--crit-comment)",
     },
+    // Busier span — carries a multi-comment thread. A lightness step down on the
+    // same hue (colourblind-safe density cue), like GDocs darkening regions with
+    // more comments. Sits under --active/--seen, which override the feel as needed.
+    ".cm-crit-hl--busy": {
+      backgroundColor: "var(--crit-hl-bg-strong)",
+      boxShadow: "inset 0 0 0 1px var(--crit-hl-ink)",
+    },
     // Seen comment's anchor — colourblind-safe: muted neutral fill + a dotted
     // underline (lightness + texture, NOT hue), so reviewed spans read as "done".
     ".cm-crit-hl--seen": {
