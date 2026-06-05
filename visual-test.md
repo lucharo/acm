@@ -15,7 +15,9 @@ Root suggestion (replace): Pay {==implies a sacrifice, a cost you cannot get bac
 
 Root suggestion (delete the span): cut this {==redundant trailing clause==}{>>@claude: SUGGEST:<<} entirely — the inline card shows "(delete)".
 
-Reply suggestion (mid-thread): attention is a kind of {==currency we spend==}{>>@luis: is "currency" the right metaphor?<<}{>>@claude: SUGGEST: resource we allocate<<} every waking moment — the suggestion is a reply, yet targets the thread's span; @luis's question survives an accept.
+Reply suggestion (mid-thread): attention is a kind of {==currency we spend==}{>>@luis: is "currency" the right metaphor?<<}{>>@claude: SUGGEST: resource we allocate<<} every waking moment — the suggestion is a reply, yet targets the thread's span; @luis's question survives an accept. (The "💬 2" badge flags the discussion before you accept inline.)
+
+Stray-space tolerance (ANCHOR_GAP): a space between span and comment still resolves — the argument is {==systematic in its build==} {>>@claude: SUGGEST: methodical in its build<<} here.
 
 Un-anchored suggestion (misuse): a point note {>>@claude: SUGGEST: orphan with no span<<} shows the proposal but NO Apply button ("no anchored span to apply to").
 
