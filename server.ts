@@ -203,6 +203,6 @@ function safeReadText(path: string): string {
 if (import.meta.main) {
   startServer({
     docPath: process.env.ACM_DOC ?? "seed/sample-essay.md",
-    port: Number(process.env.ACM_PORT ?? 12001),
+    port: Number(process.env.ACM_PORT ?? 12000),
   });
 }

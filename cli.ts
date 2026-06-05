@@ -46,7 +46,7 @@ Usage:
   acm skill          Install the agent-review skill (~/.claude + ~/.agents)
 
 Options:
-  --port <n>         Port to serve on (default 12001; auto-increments if busy)
+  --port <n>         Port to serve on (default 12000; auto-increments if busy)
   --no-open          Don't auto-open the browser
   -h, --help         Show this help`);
 }
@@ -127,7 +127,7 @@ const staticDir = resolve(import.meta.dir, "dist");
 
 // Find a free port, starting at the requested/default and incrementing if busy.
 let acm: ReturnType<typeof startServer> | undefined;
-let port = args.port ?? 12001;
+let port = args.port ?? 12000;
 for (let attempt = 0; attempt < 20; attempt++) {
   try {
     acm = startServer({ docPath, port, staticDir, staticAssets });
