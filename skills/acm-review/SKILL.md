@@ -49,6 +49,13 @@ references/footnotes, which live in free prose, just write the markdown link inl
 
 Decision: **free prose → inline `{~~~>~~}`. Commented/anchored text → `SUGGEST:`.**
 
+One thing that IS allowed (don't avoid it): an anchor may **wrap existing tracked
+changes** — `{==a span with {++pending++} edits==}{>>@you: SUGGEST: …<<}` parses and
+renders fine (the grammar is nesting-aware for highlights). So you can suggest over a
+sentence that already carries `{++…++}`/`{--…--}` edits; accepting your suggestion
+replaces the whole span, pending edits included, and rejecting keeps them untouched.
+The rule above is only about the REVERSE nesting (an inline suggestion inside a span).
+
 ## Replying to a comment (threading)
 
 ACM threads comments by **adjacency**: a comment is a reply to the one before it when
@@ -108,7 +115,7 @@ to the file, so a running editor reflects them within ~1s.
 ```
 acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST]
 acm comment "<phrase>" "<text>"   # reply to the thread whose comment matches <phrase>
-acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique prose <span>
+acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
 acm accept "<phrase>"             # accept the suggestion matching <phrase> (keep new)
 acm reject "<phrase>"             # reject it (keep the original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>

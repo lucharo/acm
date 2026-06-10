@@ -21,6 +21,10 @@ Stray-space tolerance (ANCHOR_GAP): a space between span and comment still resol
 
 Un-anchored suggestion (misuse): a point note {>>@claude: SUGGEST: orphan with no span<<} shows the proposal but NO Apply button ("no anchored span to apply to").
 
+Anchor WRAPPING tracked changes (nesting-aware grammar): the {==span keeps {++pending++} and {--dropped--} edits==}{>>@claude: SUGGEST: span keeps its pending edits<<} — whole span struck, nested edits keep their own ✓/✗, suggestion is live in both the inline layer and the sidebar.
+
+Competing suggestions on ONE span ("or" separator): this {==phrasing needs work==}{>>@claude: SUGGEST: phrasing reads rough<<}{>>@maya: SUGGEST: wording needs a pass<<} — the second proposal is prefixed with a muted "or" so the two never read as one run.
+
 ## Comment threads & density
 
 Single comment: this span has just {==one note==}{>>@luis: minor<<} on it.
