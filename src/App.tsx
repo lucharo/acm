@@ -439,6 +439,27 @@ function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // On load, land where the conversation is (#20): scroll to the LAST open
+  // (unseen) thread's anchor — or the last thread overall when everything's
+  // seen — instead of the top. One-shot on mount: threads/seen are both derived
+  // synchronously from the initial doc + localStorage, so the first run sees the
+  // real targets; the guard trips regardless so a thread added later by an agent
+  // never yanks the reader's scroll. rAF lets CM finish its first measure.
+  const didInitialScroll = useRef(false);
+  useEffect(() => {
+    if (didInitialScroll.current) return;
+    didInitialScroll.current = true;
+    const v = editor.viewRef.current;
+    if (!v || threads.length === 0) return;
+    const ordered = [...threads].sort((a, b) => a.from - b.from);
+    const unseen = ordered.filter((t) => !t.comments.every((c) => seen.has(commentKey(c))));
+    const target = (unseen.length ? unseen : ordered).at(-1)!;
+    requestAnimationFrame(() => {
+      v.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Register the remote-update handler: rebase the editor (scroll-preserving) and
   // mirror into `doc`. applyRemote tags the transaction so it won't echo-save.
   // Clearing activeId is essential: token ids are positional, so a background
