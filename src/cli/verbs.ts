@@ -18,9 +18,9 @@ import {
   resolveThread,
   threadsSummary,
 } from "../lib/agentEdits";
-import { scanTokens, applicableSuggestionIds, hardWrap } from "../lib/criticmarkup";
+import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup } from "../lib/criticmarkup";
 
-const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap"]);
+const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -55,8 +55,15 @@ function docPathFrom(f: Flags): string {
 
 export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   const f = parseFlags(argv);
-  const docPath = docPathFrom(f);
   const author = f.author ?? process.env.ACM_AUTHOR ?? "claude";
+
+  // ── Import: docx → CriticMarkup .md — the ONE verb that needs no ACM_DOC ────
+  if (cmd === "import") {
+    await runImport(f);
+    return;
+  }
+
+  const docPath = docPathFrom(f);
 
   // ── Read-only verb ──────────────────────────────────────────────────────────
   if (cmd === "threads") {
@@ -173,4 +180,34 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   console.log(`acm ${cmd}: ${note}`);
   if (snap) console.log(`  backup → ${snap}`);
   console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(after, toks).size}`);
+}
+
+// ── acm import <file.docx> [out.md] — docx → CriticMarkup via the converter ───
+// The validated converter (uv single-file script, stdlib only) lives outside this
+// repo alongside its adversarial validation harness; point ACM_CONVERTER at a
+// different copy if yours is elsewhere.
+async function runImport(f: Flags): Promise<void> {
+  const [src, outArg] = f.positional;
+  if (!src || !/\.docx$/i.test(src)) {
+    console.error("usage: acm import <file.docx> [out.md]");
+    process.exit(1);
+  }
+  const out = resolve(outArg ?? src.replace(/\.docx$/i, ".md"));
+  const converter =
+    process.env.ACM_CONVERTER ?? `${process.env.HOME}/Projects/acm-seed/convert.py`;
+  if (!(await Bun.file(converter).exists())) {
+    console.error(`acm import: converter not found at ${converter} — set ACM_CONVERTER`);
+    process.exit(1);
+  }
+  const proc = Bun.spawn(["uv", "run", converter, resolve(src), out], {
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  if ((await proc.exited) !== 0) process.exit(1);
+  const content = await Bun.file(out).text();
+  const diags = validateMarkup(content);
+  console.log(`acm import: ${out}`);
+  console.log(
+    `  markup diagnostics: ${diags.length === 0 ? "0 (clean)" : `${diags.length} — open in ACM and click Review`}`,
+  );
 }

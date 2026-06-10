@@ -134,6 +134,7 @@ acm reject --group <id>           # reject the whole group (keep every original 
 acm resolve "<phrase>"            # strip the thread matching <phrase>
 acm apply <edits.json>            # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
+acm import <file.docx> [out.md]   # Word → CriticMarkup .md (tracked changes + comments); validates the result
 ```
 
 Typical loop: `acm threads --json` to see open threads → `acm comment` / `acm suggest`
