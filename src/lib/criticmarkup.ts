@@ -836,6 +836,7 @@ export interface InlineSuggestion {
   replacement: string;
   hasReplies: boolean; // the comment's thread carries ≥1 other message
   threadCount: number; // total messages in the thread (for the inline "N" badge)
+  alternativeIndex: number; // nth suggestion on this anchor (0 = first; >0 → competing)
 }
 
 /**
@@ -849,6 +850,7 @@ export function inlineSuggestions(content: string, tokens?: CritToken[]): Inline
   const comments = toks.filter((t): t is CommentToken => t.type === "comment");
   const threads = groupThreads(comments, content);
   const out: InlineSuggestion[] = [];
+  const perAnchor = new Map<number, number>(); // hlFrom → suggestions seen so far
   for (const t of comments) {
     const repl = suggestionReplacement(t.body);
     if (repl === null) continue;
@@ -860,6 +862,10 @@ export function inlineSuggestions(content: string, tokens?: CritToken[]): Inline
     // render shows a "has discussion" cue and never hides the thread).
     const thread = threads.find((th) => th.comments.some((c) => c.from === t.from));
     const threadCount = thread ? thread.comments.length : 1;
+    // Competing suggestions on one span: the 2nd+ get an index so the inline
+    // render can separate them ("or …") instead of reading as one concatenated run.
+    const alternativeIndex = perAnchor.get(hl.from) ?? 0;
+    perAnchor.set(hl.from, alternativeIndex + 1);
     out.push({
       hlFrom: hl.from,
       hlTo: hl.to,
@@ -869,6 +875,7 @@ export function inlineSuggestions(content: string, tokens?: CritToken[]): Inline
       replacement: repl,
       hasReplies: threadCount > 1,
       threadCount,
+      alternativeIndex,
     });
   }
   return out;

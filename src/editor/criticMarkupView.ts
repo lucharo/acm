@@ -198,6 +198,7 @@ class SuggestionInlineWidget extends WidgetType {
     readonly to: number,
     readonly replacement: string,
     readonly threadCount: number,
+    readonly alternativeIndex: number,
   ) {
     super();
   }
@@ -206,13 +207,23 @@ class SuggestionInlineWidget extends WidgetType {
       other.from === this.from &&
       other.to === this.to &&
       other.replacement === this.replacement &&
-      other.threadCount === this.threadCount
+      other.threadCount === this.threadCount &&
+      other.alternativeIndex === this.alternativeIndex
     );
   }
   toDOM() {
     const wrap = document.createElement("span");
     wrap.className = "cm-crit-suggest";
     wrap.setAttribute("contenteditable", "false");
+
+    if (this.alternativeIndex > 0) {
+      // A COMPETING suggestion on the same span — separate it from the previous
+      // one so two proposals never read as one concatenated wording.
+      const or = document.createElement("span");
+      or.className = "cm-crit-suggest-or";
+      or.textContent = "or";
+      wrap.appendChild(or);
+    }
 
     const neu = document.createElement("span");
     if (this.replacement.trim()) {
@@ -394,7 +405,13 @@ function buildWidgets(view: EditorView): DecorationSet {
             ranges.push(
               Decoration.replace({
                 widget: sug
-                  ? new SuggestionInlineWidget(node.from, node.to, sug.replacement, sug.threadCount)
+                  ? new SuggestionInlineWidget(
+                      node.from,
+                      node.to,
+                      sug.replacement,
+                      sug.threadCount,
+                      sug.alternativeIndex,
+                    )
                   : new CommentAnchorWidget(node.from, node.to),
               }).range(node.from, node.to),
             );

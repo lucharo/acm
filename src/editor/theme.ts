@@ -260,6 +260,15 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-crit-suggest": {
       display: "inline",
     },
+    // "or" separator before a COMPETING suggestion on the same span, so two
+    // proposals never read as one concatenated wording.
+    ".cm-crit-suggest-or": {
+      color: "var(--muted)",
+      fontStyle: "italic",
+      fontSize: "0.8em",
+      margin: "0 0.35em 0 0.15em",
+      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+    },
     // Empty-replacement suggestion = "delete this span" — a muted marker, not green.
     ".cm-crit-suggest-del": {
       color: "var(--muted)",
