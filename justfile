@@ -10,7 +10,9 @@ default:
     @just --list
 
 # Live dev server (Vite + HMR) on a random port in 12001–12499; opens the browser.
-dev doc="seed/sample-essay.md":
+# No doc → a gitignored working copy of the seed (.acm-data/), so dev never
+# dirties the committed fixture. Pass a path to serve a specific doc.
+dev doc="":
     ACM_DOC="{{doc}}" bun run scripts/dev.ts
 
 # Production: FRESH build, served on :12000 (never the stale prebuilt dist). The real editor.

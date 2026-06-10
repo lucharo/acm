@@ -88,11 +88,18 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     // DATA-INTEGRITY RULE: never rebase over UNSAVED local edits. If the buffer has
     // pending changes the user hasn't seen persisted, adopting remote content here
     // would silently discard their work (the old behaviour — a real source of lost
-    // edits). Instead, KEEP the local buffer, flag a conflict, and let the pending
-    // save flush; the user keeps their text and gets a visible signal. We only adopt
-    // remote content when there's nothing unsaved to lose.
+    // edits). Instead, KEEP the local buffer, flag a conflict, and FLUSH NOW (#19)
+    // rather than waiting out the debounce — the PUT 409s, adopts the new version,
+    // and re-persists the user's text immediately, shrinking the window in which a
+    // second remote write could interleave. User wins either way; the 'conflict'
+    // status is the visible signal.
     if (pendingContent.current !== null) {
       setSaveState("conflict");
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      void flushRef.current();
       return;
     }
     currentVersion.current = version;

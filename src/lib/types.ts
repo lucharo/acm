@@ -8,9 +8,12 @@ export type CritType = "insert" | "delete" | "substitute" | "highlight" | "comme
 
 export interface CritTokenBase {
   /**
-   * Stable unique id within a single `scanTokens` pass (assigned in document
-   * order). Safe to use as a React key even when two tokens share an offset
-   * (overlapping/stacked anchors — the real doc has 32 such spots).
+   * Unique id within a single `scanTokens` pass, CONTENT-DERIVED (hash of the
+   * raw markup + an occurrence index for duplicates) — so a token's id survives
+   * unrelated edits elsewhere in the document. Editing the construct itself
+   * changes its id (its card legitimately changes identity). Safe to use as a
+   * React key even when two tokens share an offset (overlapping/stacked anchors
+   * — the real doc has 32 such spots). Opaque: never parse or order by it.
    */
   id: string;
   type: CritType;

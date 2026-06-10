@@ -10,3 +10,5 @@ src/server/embedded.generated.ts
 # ACM doc snapshots (agent verbs / heal) — never commit or sync (bulk churn)
 .acm/
 .acm-backups/
+# dev working copy of the seed doc (`just dev` with no arg)
+.acm-data/

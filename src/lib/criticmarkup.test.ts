@@ -346,8 +346,8 @@ describe("invariant — raw matches the sliced span", () => {
     for (const t of tokens) {
       expect(text.slice(t.from, t.to)).toBe(t.raw);
     }
-    // ids unique & in document order.
-    expect(tokens.map((t) => t.id)).toEqual(tokens.map((_, i) => String(i)));
+    // ids unique.
+    expect(new Set(tokens.map((t) => t.id)).size).toBe(tokens.length);
     // non-overlapping, sorted by from.
     for (let i = 1; i < tokens.length; i++) {
       expect(tokens[i].from).toBeGreaterThanOrEqual(tokens[i - 1].to);
@@ -384,6 +384,20 @@ describe("invariant — raw matches the sliced span", () => {
       expect(typeof applySuggestionToken(t, "accept")).toBe("string");
       expect(typeof applySuggestionToken(t, "reject")).toBe("string");
     }
+  });
+
+  test("token ids are content-derived — stable across unrelated edits (#19)", () => {
+    const before = "a {==x==}{>>@l: one<<} b {++mid++} c {>>@m: two<<} d";
+    // Remove the FIRST construct pair; every other token's id must survive.
+    const after = "a x b {++mid++} c {>>@m: two<<} d";
+    const idsBefore = new Map(scanTokens(before).map((t) => [t.raw, t.id]));
+    for (const t of scanTokens(after)) {
+      expect(t.id).toBe(idsBefore.get(t.raw)!);
+    }
+    // Byte-identical duplicates still get distinct ids.
+    const dup = scanTokens("x {++same++} y {++same++} z");
+    expect(dup).toHaveLength(2);
+    expect(dup[0].id).not.toBe(dup[1].id);
   });
 });
 

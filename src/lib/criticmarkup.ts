@@ -65,7 +65,11 @@ const NESTED_OPEN = /\{(\+\+|--|~~|==|>>)/;
  */
 export function scanTokens(text: string): CritToken[] {
   const tokens: CritToken[] = [];
-  let index = 0; // running id counter, document order
+  // CONTENT-DERIVED ids (#19): hash of the raw markup, plus an occurrence index
+  // for byte-identical duplicates. Positional ids made every card below an
+  // added/removed construct remount (id reindex); content ids survive unrelated
+  // edits, so card identity — and the active selection — stays put.
+  const occurrences = new Map<string, number>();
   let i = 0;
 
   while (i < text.length) {
@@ -81,8 +85,9 @@ export function scanTokens(text: string): CritToken[] {
       continue;
     }
 
-    tokens.push(buildToken(String(index), match));
-    index += 1;
+    const n = occurrences.get(match.raw) ?? 0;
+    occurrences.set(match.raw, n + 1);
+    tokens.push(buildToken(n === 0 ? hashId(match.raw) : `${hashId(match.raw)}.${n}`, match));
     // A highlight wrapping tracked changes: re-enter its inner so the nested
     // {++/--/~~} constructs get their own (contained) tokens too. Everything
     // else continues strictly after the match — no overlap.
@@ -90,6 +95,15 @@ export function scanTokens(text: string): CritToken[] {
   }
 
   return tokens;
+}
+
+/** djb2 over the raw construct text, base36 — short, stable, non-cryptographic
+ *  (collisions are disambiguated by the occurrence index only for IDENTICAL raws;
+ *  cross-raw hash collisions are vanishingly unlikely at document scale). */
+function hashId(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
 }
 
 type ConstructMatch = {

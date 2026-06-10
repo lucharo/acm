@@ -7,6 +7,8 @@
 // and proxies /api + /ws to the Bun server. (Edits still reach the browser over the
 // Bun WebSocket, not Vite HMR — see vite.config.ts.)
 
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+
 /** True if `port` is bindable right now (probe by briefly listening). */
 function isFree(port: number): boolean {
   try {
@@ -27,9 +29,28 @@ function pickDevPort(): number {
   throw new Error("dev: could not find a free port in 12001–12499");
 }
 
+/**
+ * Default dev doc: a gitignored WORKING COPY of the seed (#19) — so dev editing
+ * and accept/reject testing never dirty the committed fixture. Seeded once;
+ * subsequent runs keep your working copy. An explicit ACM_DOC always wins.
+ */
+function defaultDevDoc(): string {
+  const seed = "seed/sample-essay.md";
+  const work = ".acm-data/sample-essay.md";
+  mkdirSync(".acm-data", { recursive: true });
+  if (!existsSync(work)) copyFileSync(seed, work);
+  return work;
+}
+
 const devPort = pickDevPort();
 const apiPort = devPort + 500; // [12501, 12999] — clear of the dev range and prod 12000
-const env = { ...process.env, ACM_PORT: String(apiPort), ACM_DEV_PORT: String(devPort) };
+const doc = process.env.ACM_DOC || defaultDevDoc();
+const env = {
+  ...process.env,
+  ACM_PORT: String(apiPort),
+  ACM_DEV_PORT: String(devPort),
+  ACM_DOC: doc,
+};
 
 const procs = [
   Bun.spawn(["bun", "--watch", "server.ts"], { stdout: "inherit", stderr: "inherit", env }),
@@ -37,7 +58,7 @@ const procs = [
 ];
 
 const url = `http://localhost:${devPort}`;
-console.log(`\n  ACM dev → ${url}   (API :${apiPort}; prod stays on :12000)\n`);
+console.log(`\n  ACM dev → ${url}   (API :${apiPort}; prod stays on :12000)\n  doc: ${doc}\n`);
 // Give Vite a moment to bind, then open the browser to the random dev URL.
 setTimeout(() => Bun.spawn(["open", url]), 1500);
 
