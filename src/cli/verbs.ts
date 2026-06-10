@@ -17,9 +17,9 @@ import {
   resolveThread,
   threadsSummary,
 } from "../lib/agentEdits";
-import { scanTokens, applicableSuggestionIds } from "../lib/criticmarkup";
+import { scanTokens, applicableSuggestionIds, hardWrap } from "../lib/criticmarkup";
 
-const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads"]);
+const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -132,6 +132,15 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         if (!phrase) throw new Error('usage: acm resolve "<phrase>" [--doc]');
         after = resolveThread(before, phrase);
         note = `resolved the thread matching "${phrase.slice(0, 40)}"`;
+        break;
+      }
+      case "wrap": {
+        // Markup-safe prose reflow (vim textwidth analog). Constructs are atomic,
+        // so token ids / seen-state survive; structure lines stay verbatim.
+        const width = f.positional[0] ? Number(f.positional[0]) : 88;
+        if (!Number.isFinite(width) || width < 20) throw new Error("usage: acm wrap [width≥20] [--doc]");
+        after = hardWrap(before, width);
+        note = `hard-wrapped prose to ${width} columns`;
         break;
       }
       default:

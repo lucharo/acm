@@ -299,6 +299,83 @@ export function clampAnchorOutsideComments(content: string, at: number): number 
   return enclosing ? enclosing.to : at;
 }
 
+// ── Hard-wrap (#10): reflow prose to a max width, markup-safe ──────────────────
+// Like vim's textwidth: plain paragraphs are unwrapped then greedily refilled at
+// `width` columns. Everything that isn't a plain paragraph is left verbatim —
+// headings, blockquotes, lists, tables, fenced/indented code, HTML blocks — and
+// CriticMarkup constructs are ATOMIC: a break never lands inside one, so every
+// token's raw stays byte-identical (content-derived ids and persisted seen-keys
+// survive a wrap). Only whitespace OUTSIDE constructs changes. A construct longer
+// than the width overflows its line rather than being split. Idempotent.
+
+const NON_PARAGRAPH_LINE =
+  /^(\s{4,}|\t|#{1,6}\s|>|\s*([-*+]|\d{1,3}[.)])\s|\||```|~~~|<\/?[a-zA-Z])/;
+
+/** Greedy refill of one paragraph block. Break points are whitespace runs OUTSIDE
+ *  any CriticMarkup construct; whitespace inside a construct (incl. newlines in a
+ *  comment body) is preserved verbatim as part of its atom. */
+function wrapParagraph(para: string, width: number): string {
+  const tokens = scanTokens(para);
+  let t = 0; // tokens are sorted by from; advance a cursor instead of re-scanning
+  const atoms: string[] = [];
+  let cur = "";
+  for (let i = 0; i < para.length; i++) {
+    while (t < tokens.length && tokens[t].to <= i) t++;
+    const insideToken = t < tokens.length && i >= tokens[t].from && i < tokens[t].to;
+    if (!insideToken && /\s/.test(para[i])) {
+      if (cur) {
+        atoms.push(cur);
+        cur = "";
+      }
+    } else {
+      cur += para[i];
+    }
+  }
+  if (cur) atoms.push(cur);
+
+  const lines: string[] = [];
+  let line = "";
+  for (const a of atoms) {
+    if (!line) line = a;
+    else if (line.length + 1 + a.length <= width) line += ` ${a}`;
+    else {
+      lines.push(line);
+      line = a;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.join("\n");
+}
+
+export function hardWrap(text: string, width = 88): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let para: string[] = [];
+  let inFence = false;
+  const flush = () => {
+    if (para.length) {
+      out.push(wrapParagraph(para.join("\n"), width));
+      para = [];
+    }
+  };
+  for (const line of lines) {
+    if (/^(```|~~~)/.test(line.trim())) {
+      flush();
+      inFence = !inFence;
+      out.push(line);
+      continue;
+    }
+    if (inFence || line.trim() === "" || NON_PARAGRAPH_LINE.test(line)) {
+      flush();
+      out.push(line);
+      continue;
+    }
+    para.push(line);
+  }
+  flush();
+  return out.join("\n");
+}
+
 // ── Markup validator (#18): positioned diagnostics for everything that leaks ──
 // A single left-to-right pass with a highlight-delimiter stack, mirroring how the
 // EDITOR actually resolves markup — so a stacked thread (`{=={==x==}{>>a<<}==}…`)

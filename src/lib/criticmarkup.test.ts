@@ -20,6 +20,7 @@ import {
   inlineSuggestions,
   applicableSuggestionIds,
   validateMarkup,
+  hardWrap,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -528,6 +529,65 @@ describe("scanTokens — highlight wrapping tracked changes", () => {
     const tokens = scanTokens("{==spans a {++x++} break\n\nand on==} y");
     // The highlight is unparsed (single-block); only the inner insert tokenizes.
     expect(tokens.map((t) => t.type)).toEqual(["insert"]);
+  });
+});
+
+// ── hardWrap (#10) — markup-safe prose reflow ──────────────────────────────────
+
+describe("hardWrap", () => {
+  test("a long paragraph refills to the width; structure lines stay verbatim", () => {
+    const text = [
+      "# Heading stays",
+      "",
+      "word ".repeat(40).trim(), // 199 chars of prose
+      "",
+      "> a blockquote line that is quite long and must not be touched by the wrapper at all",
+      "- a list item that is also long enough to exceed the width but must stay verbatim too",
+      "```",
+      "code line that is long                                              and spacing-sensitive",
+      "```",
+    ].join("\n");
+    const wrapped = hardWrap(text, 40);
+    const lines = wrapped.split("\n");
+    expect(lines[0]).toBe("# Heading stays");
+    // The prose paragraph wrapped to ≤40 cols…
+    const prose = lines.filter((l) => l.startsWith("word"));
+    expect(prose.length).toBeGreaterThan(1);
+    for (const l of prose) expect(l.length).toBeLessThanOrEqual(40);
+    // …while quote/list/code survive byte-identical.
+    expect(wrapped).toContain("> a blockquote line that is quite long and must not be touched by the wrapper at all");
+    expect(wrapped).toContain("- a list item that is also long enough to exceed the width but must stay verbatim too");
+    expect(wrapped).toContain("code line that is long                                              and spacing-sensitive");
+  });
+
+  test("CriticMarkup constructs are atomic: raws byte-identical, ids stable, adjacency kept", () => {
+    const text =
+      "Lead-in prose that runs long enough to need wrapping at a narrow width, then " +
+      "{==an anchored span==}{>>@l: with a fairly long comment body attached to it<<} and " +
+      "a {++tracked insertion++} plus more trailing prose to push past the limit again.";
+    const wrapped = hardWrap(text, 48);
+    const before = scanTokens(text);
+    const after = scanTokens(wrapped);
+    expect(after.map((t) => t.raw)).toEqual(before.map((t) => t.raw));
+    expect(after.map((t) => t.id)).toEqual(before.map((t) => t.id));
+    // The anchor and its comment stay ADJACENT (no space injected between atoms).
+    expect(wrapped).toContain("{==an anchored span==}{>>@l:");
+  });
+
+  test("idempotent, and word count is invariant", () => {
+    const text = "Some prose with {==a span==}{>>@a: note<<} and {++an insert++} that wraps around the chosen width.";
+    const once = hardWrap(text, 30);
+    expect(hardWrap(once, 30)).toBe(once);
+    expect(countWords(once)).toBe(countWords(text));
+  });
+
+  test("the seed doc round-trips: same tokens, same word count, idempotent", () => {
+    const path = join(import.meta.dir, "..", "..", "seed", "sample-essay.md");
+    const content = readFileSync(path, "utf8");
+    const wrapped = hardWrap(content, 88);
+    expect(scanTokens(wrapped).map((t) => t.raw)).toEqual(scanTokens(content).map((t) => t.raw));
+    expect(countWords(wrapped)).toBe(countWords(content));
+    expect(hardWrap(wrapped, 88)).toBe(wrapped);
   });
 });
 

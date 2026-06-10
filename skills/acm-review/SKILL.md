@@ -120,6 +120,7 @@ acm accept "<phrase>"             # accept the suggestion matching <phrase> (kee
 acm reject "<phrase>"             # reject it (keep the original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>
 acm apply <edits.json>            # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
+acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
 ```
 
 Typical loop: `acm threads --json` to see open threads → `acm comment` / `acm suggest`

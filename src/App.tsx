@@ -21,6 +21,8 @@ import CommentSidebar, { MOD, handleCommentKey } from "./components/CommentSideb
 import HealReview from "./components/HealReview";
 import Toc from "./components/Toc";
 import NavPanel from "./components/NavPanel";
+import CommandPalette from "./components/CommandPalette";
+import type { PaletteAction } from "./components/CommandPalette";
 import {
   scanTokens,
   applySuggestion,
@@ -37,6 +39,7 @@ import {
   suggestionThreadEdit,
   inlineSuggestions,
   wrappableSpan,
+  hardWrap,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
 import type {
@@ -619,6 +622,29 @@ function Workspace({
     if (first) v.dispatch({ effects: EditorView.scrollIntoView(first.from, { y: "center" }) });
   }, [editor.viewRef]);
 
+  // Hard-wrap the prose to 88 columns (#10) — markup-safe (constructs are atomic,
+  // so token ids and seen-state survive). A normal editor edit: saves + undoable.
+  const wrapDoc = useCallback(() => {
+    const v = editor.viewRef.current;
+    if (!v) return;
+    const cur = v.state.doc.toString();
+    const wrapped = hardWrap(cur, 88);
+    if (wrapped !== cur) v.dispatch({ changes: dispatchableDiff(cur, wrapped) });
+  }, [editor.viewRef]);
+
+  // ── Command palette (⌘K) ──────────────────────────────────────────────────────
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Auto-heal: flatten every nested comment into adjacent comments (rejoining the
   // split word). A normal editor edit, so it saves cleanly and is undoable (Cmd+Z).
   const healAll = useCallback(() => {
@@ -848,6 +874,28 @@ function Workspace({
     if (fresh) setSeen((p) => new Set(p).add(commentKey(fresh)));
   }, [editor.viewRef, settings.author]);
 
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const goToLastThread = () => {
+      const v = editor.viewRef.current;
+      const last = [...threads].sort((a, b) => a.from - b.from).at(-1);
+      if (v && last) v.dispatch({ effects: EditorView.scrollIntoView(last.from, { y: "center" }) });
+    };
+    return [
+      { id: "wrap", label: "Hard-wrap prose to 88 columns", hint: "acm wrap", run: wrapDoc },
+      { id: "comment", label: "Comment on selection", hint: `${MOD}↵ to post`, disabled: !hasSelection, run: openComposer },
+      { id: "last-thread", label: "Go to the last comment", disabled: threads.length === 0, run: goToLastThread },
+      { id: "first-issue", label: "Jump to first markup issue", hint: diagnostics.length ? String(diagnostics.length) : undefined, disabled: diagnostics.length === 0, run: goToFirstIssue },
+      { id: "theme", label: settings.theme === "dark" ? "Switch to light theme" : "Switch to dark theme", run: () => onChangeSettings({ theme: settings.theme === "dark" ? "light" : "dark" }) },
+      { id: "page", label: settings.page ? "Disable page view" : "Enable page view", run: () => onChangeSettings({ page: !settings.page }) },
+      { id: "lines", label: settings.lineNumbers ? "Hide line numbers" : "Show line numbers", run: () => onChangeSettings({ lineNumbers: !settings.lineNumbers }) },
+      { id: "bionic", label: settings.bionic ? "Disable bionic reading" : "Enable bionic reading", run: () => onChangeSettings({ bionic: !settings.bionic }) },
+      { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },
+      { id: "nav", label: navOpen ? "Hide overview panel" : "Show overview panel", run: () => setNavOpen((o) => !o) },
+      { id: "toc", label: tocOpen ? "Hide outline" : "Show outline", run: () => setTocOpen((o) => !o) },
+    ];
+  }, [editor.viewRef, threads, wrapDoc, hasSelection, openComposer, diagnostics.length, goToFirstIssue, settings, onChangeSettings, navOpen, tocOpen]);
+
+
   // ── Right-click context menu ──────────────────────────────────────────────────
   const [menu, setMenu] = useState<MenuState | null>(null);
   const replyNonce = useRef(0);
@@ -1028,6 +1076,7 @@ function Workspace({
         canComment={hasSelection}
         composing={composing}
         composerAnchored={composerAnchored}
+        onWrap={wrapDoc}
         draft={draft}
         onDraftChange={setDraft}
         onOpenComposer={openComposer}
@@ -1160,6 +1209,8 @@ function Workspace({
         </button>
       ) : null}
 
+      {paletteOpen ? <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} /> : null}
+
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
   );
@@ -1173,6 +1224,7 @@ interface HeaderProps {
   canComment: boolean;
   composing: boolean;
   composerAnchored: boolean;
+  onWrap: () => void;
   draft: string;
   onDraftChange: (v: string) => void;
   onOpenComposer: () => void;
@@ -1202,6 +1254,7 @@ function Header(props: HeaderProps) {
     canComment,
     composing,
     composerAnchored,
+    onWrap,
     draft,
     onDraftChange,
     onOpenComposer,
@@ -1405,6 +1458,18 @@ function Header(props: HeaderProps) {
                 onToggle={() => onChangeSettings({ showSeen: !settings.showSeen })}
               />
               <SettingRow label="Overview panel" checked={navOpen} onToggle={onToggleNav} />
+              <div className="my-1 border-t border-[var(--line)]" />
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsOpen(false);
+                  onWrap();
+                }}
+                title="Reflow prose to 88 columns. Markup-safe (never splits a comment or suggestion) and undoable. Also in the ⌘K palette, or `acm wrap` from the shell."
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-[var(--ink)] hover:bg-[var(--line)]"
+              >
+                Hard-wrap prose <span className="text-[11px] text-[var(--faint)]">88 cols · ⌘K</span>
+              </button>
               <div className="my-1 border-t border-[var(--line)]" />
               <div className="px-2 py-1.5">
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
