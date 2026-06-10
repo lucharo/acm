@@ -285,6 +285,38 @@ export function clampAnchorOutsideComments(content: string, at: number): number 
   return enclosing ? enclosing.to : at;
 }
 
+/**
+ * Whether `[from,to)` can be wrapped as a `{==span==}` anchor without corrupting
+ * markup. THE shared gate for every span-wrapping writer (the UI's add-comment
+ * composer and the `acm suggest` verb), so human and agent agree on what anchors.
+ * Allowed: clean prose, and complete tracked changes ({++/--/~~}) wholly inside
+ * the selection — the nesting-aware grammar (lib + lezer) parses
+ * `{==a {++b++} c==}`. Refused: an empty/blank span, a span crossing a paragraph
+ * break (single-block), a selection that CUTS a construct, contained
+ * comments/highlights (they'd fight the stacked-thread model), and half-typed
+ * delimiters outside a complete construct.
+ */
+export function wrappableSpan(content: string, from: number, to: number): boolean {
+  if (to <= from) return false;
+  const span = content.slice(from, to);
+  if (!span.trim()) return false;
+  if (BLANK_LINE.test(span)) return false; // crosses a paragraph break → would leak
+  let residue = "";
+  let cursor = from;
+  for (const t of scanTokens(content)) {
+    if (t.to <= from || t.from >= to) continue; // clear of the selection
+    if (t.from < from || t.to > to) return false; // selection cuts through markup
+    if (t.type === "comment" || t.type === "highlight") return false;
+    residue += content.slice(cursor, t.from); // contained tracked change: skip its raw
+    cursor = Math.max(cursor, t.to);
+  }
+  residue += content.slice(cursor, to);
+  // Delimiters in the prose between/around complete constructs would mis-bound the wrap.
+  return (
+    !/\{(\+\+|--|~~|==|>>)/.test(residue) && !residue.includes("==}") && !residue.includes("<<}")
+  );
+}
+
 export function insertComment(
   content: string,
   anchorOffset: number,

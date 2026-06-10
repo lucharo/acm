@@ -14,6 +14,7 @@ import {
   suggestionReplacement,
   applicableSuggestionIds,
   anchorHighlightFor,
+  wrappableSpan,
 } from "./criticmarkup";
 import type { CommentToken, CommentThread } from "./criticmarkup";
 
@@ -50,17 +51,17 @@ function findSuggestionComment(content: string, phrase: string): CommentToken {
   return hits[0];
 }
 
-/** Index of the sole occurrence of prose `span`, verified to sit OUTSIDE any
- *  existing CriticMarkup construct (so wrapping it can't corrupt markup). Throws
- *  unless exactly one clean occurrence exists. */
+/** Index of the sole occurrence of `span` that can be wrapped as a `{==…==}`
+ *  anchor without corrupting markup (same wrappableSpan gate as the UI composer:
+ *  clean prose OR complete tracked changes wholly inside the span). Throws unless
+ *  exactly one wrappable occurrence exists. */
 function uniqueProseIndex(content: string, span: string): number {
   const idxs: number[] = [];
   for (let i = content.indexOf(span); i >= 0; i = content.indexOf(span, i + 1)) idxs.push(i);
-  const tokens = scanTokens(content);
-  const clean = idxs.filter((i) => !tokens.some((t) => i < t.to && i + span.length > t.from));
+  const clean = idxs.filter((i) => wrappableSpan(content, i, i + span.length));
   if (clean.length !== 1) {
     throw new AmbiguityError(
-      `"${span.slice(0, 48)}" occurs ${clean.length} times in free prose (need exactly 1)`,
+      `"${span.slice(0, 48)}" occurs ${clean.length} times as a wrappable span (need exactly 1)`,
     );
   }
   return clean[0];

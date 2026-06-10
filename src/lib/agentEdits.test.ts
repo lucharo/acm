@@ -64,6 +64,18 @@ describe("addComment / addSuggestion", () => {
     expect(() => addSuggestion(DOC, "The ", "claude", "x")).toThrow(AmbiguityError); // appears twice
     expect(() => addSuggestion(DOC, "quick brown fox", "claude", "x")).toThrow(AmbiguityError); // inside a highlight
   });
+  test("addSuggestion wraps a span CONTAINING a complete tracked change", () => {
+    const doc = "Intro. Writing it was {++genuinely++} hard and rewarding. End.";
+    const out = addSuggestion(doc, "was {++genuinely++} hard", "claude", "was hard");
+    expect(out).toContain("{==was {++genuinely++} hard==}{>>@claude: SUGGEST: was hard<<}");
+    // …and the result is a live, applyable suggestion.
+    const [t] = threadsSummary(out);
+    expect(t.applicable).toBe(true);
+  });
+  test("addSuggestion still refuses a span that CUTS a tracked change", () => {
+    const doc = "Writing it was {++genuinely++} hard.";
+    expect(() => addSuggestion(doc, "was {++genuinely", "claude", "x")).toThrow(AmbiguityError);
+  });
 });
 
 describe("resolveSuggestion accept/reject", () => {

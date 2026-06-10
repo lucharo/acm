@@ -37,6 +37,7 @@ import {
   clampAnchorOutsideComments,
   suggestionThreadEdit,
   inlineSuggestions,
+  wrappableSpan,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
 import type {
@@ -119,32 +120,8 @@ function commentKey(c: { author: string | null; body: string }): string {
   // (localStorage + ~/.config/acm) stay valid.
   return `${c.author ?? ""}\u0000${c.body}`;
 }
-// A selection can become a `{==span==}` anchored comment if wrapping it can't corrupt
-// markup: non-empty, within one block (no blank line), and no construct CUT by the
-// selection edge. Complete tracked changes ({++/--/~~}) wholly inside the selection
-// are fine — the nesting-aware grammar (lib + lezer) parses `{==a {++b++} c==}` — so
-// commenting on a sentence with pending edits anchors instead of silently falling
-// back to a point comment. Contained comments/highlights still fall back (they'd
-// fight the stacked-thread model), as does any half-typed delimiter outside a
-// complete construct.
-function wrappableSpan(content: string, from: number, to: number): boolean {
-  if (to <= from) return false;
-  const span = content.slice(from, to);
-  if (!span.trim()) return false;
-  if (/\n[ \t]*\n/.test(span)) return false; // crosses a paragraph break → would leak
-  let residue = "";
-  let cursor = from;
-  for (const t of scanTokens(content)) {
-    if (t.to <= from || t.from >= to) continue; // clear of the selection
-    if (t.from < from || t.to > to) return false; // selection cuts through markup
-    if (t.type === "comment" || t.type === "highlight") return false;
-    residue += content.slice(cursor, t.from); // contained tracked change: skip its raw
-    cursor = t.to;
-  }
-  residue += content.slice(cursor, to);
-  // Delimiters in the prose between/around complete constructs would mis-bound the wrap.
-  return !/\{(\+\+|--|~~|==|>>)/.test(residue) && !residue.includes("==}") && !residue.includes("<<}");
-}
+// (wrappableSpan — whether a selection can become a `{==span==}` anchor — lives in
+// lib/criticmarkup so the composer and the `acm suggest` verb share one gate.)
 function loadSeen(): Set<string> {
   try {
     return new Set<string>(JSON.parse(localStorage.getItem("acm-seen") ?? "[]"));
