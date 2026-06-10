@@ -18,9 +18,9 @@ import {
   resolveThread,
   threadsSummary,
 } from "../lib/agentEdits";
-import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup } from "../lib/criticmarkup";
+import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup, healDocument } from "../lib/criticmarkup";
 
-const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import"]);
+const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -149,6 +149,14 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         if (!phrase) throw new Error('usage: acm resolve "<phrase>" [--doc]');
         after = resolveThread(before, phrase);
         note = `resolved the thread matching "${phrase.slice(0, 40)}"`;
+        break;
+      }
+      case "heal": {
+        // Mechanical repair of markup that renders raw: nested comments, comments
+        // trapped in tracked changes, multi-block anchors. Snapshot-first (below).
+        const beforeCount = validateMarkup(before).length;
+        after = healDocument(before);
+        note = `healed ${beforeCount - validateMarkup(after).length} of ${beforeCount} markup issues (${validateMarkup(after).length} remain)`;
         break;
       }
       case "wrap": {

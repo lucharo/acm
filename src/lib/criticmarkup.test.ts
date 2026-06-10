@@ -21,6 +21,7 @@ import {
   applicableSuggestionIds,
   validateMarkup,
   hardWrap,
+  healDocument,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -529,6 +530,58 @@ describe("scanTokens — highlight wrapping tracked changes", () => {
     const tokens = scanTokens("{==spans a {++x++} break\n\nand on==} y");
     // The highlight is unparsed (single-block); only the inner insert tokenizes.
     expect(tokens.map((t) => t.type)).toEqual(["insert"]);
+  });
+});
+
+// ── healDocument — in-place repair of converter-era leaks ─────────────────────
+
+describe("healDocument", () => {
+  test("a multi-block anchor re-anchors on its final block; earlier paragraphs stay prose", () => {
+    const doc = "{==First para of the span.\n\nSecond para. ==}{>>@l: note<<} tail";
+    const healed = healDocument(doc);
+    expect(healed).toBe("First para of the span.\n\n{==Second para. ==}{>>@l: note<<} tail");
+    expect(validateMarkup(healed)).toEqual([]);
+  });
+
+  test("the stacked multi-block form converges to a canonical stacked thread", () => {
+    // The exact shape from the live doc: {=={==A…\\n\\n> B ==}{>>a<<}==}{>>b<<}
+    const doc = "x {=={==A one.\n\n> B two. ==}{>>@l: a<<}==}{>>@l: b<<} y";
+    const healed = healDocument(doc);
+    expect(healed).toBe("x A one.\n\n> {=={==B two. ==}{>>@l: a<<}==}{>>@l: b<<} y");
+    expect(validateMarkup(healed)).toEqual([]);
+    // …and it threads as ONE two-message conversation on the final block.
+    const comments = scanTokens(healed).filter(isComment);
+    expect(groupThreads(comments, healed)).toHaveLength(1);
+  });
+
+  test("the relocated open lands AFTER a list/heading line prefix", () => {
+    const doc = "{==spans into\n\n- a list item ==}{>>@l: n<<} end";
+    const healed = healDocument(doc);
+    expect(healed).toBe("spans into\n\n- {==a list item ==}{>>@l: n<<} end");
+  });
+
+  test("comments trapped inside a tracked change move out (and thread onto it)", () => {
+    const doc = "{++{>>@l: c1<<}{>>@l: c2<<}Jane ++}Doe talks";
+    const healed = healDocument(doc);
+    expect(healed).toBe("{++Jane ++}{>>@l: c1<<}{>>@l: c2<<}Doe talks");
+    expect(validateMarkup(healed)).toEqual([]);
+  });
+
+  test("cross-construct interleaves are left alone (healing would corrupt)", () => {
+    // Healing the insert here would let it swallow the highlight's close.
+    const doc = "{==a {++==}{>>@l: c<<}b++} tail";
+    expect(healDocument(doc)).toBe(doc);
+  });
+
+  test("the seed doc: 22 diagnostics → 4 (only interleaves remain), nothing lost", () => {
+    const path = join(import.meta.dir, "..", "..", "seed", "sample-essay.md");
+    const content = readFileSync(path, "utf8");
+    const healed = healDocument(content);
+    expect(validateMarkup(content)).toHaveLength(22);
+    expect(validateMarkup(healed)).toHaveLength(4);
+    expect(scanTokens(healed).filter(isComment)).toHaveLength(133);
+    expect(countWords(healed)).toBe(countWords(content));
+    expect(healDocument(healed)).toBe(healed); // idempotent
   });
 });
 

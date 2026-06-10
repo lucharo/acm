@@ -299,6 +299,131 @@ export function clampAnchorOutsideComments(content: string, at: number): number 
   return enclosing ? enclosing.to : at;
 }
 
+// ── Structural heals: repair converter-era leaks IN PLACE ──────────────────────
+// Two mechanical repairs for markup that renders raw (both produced by the old
+// docx converter; the fixed converter no longer emits them, but existing docs
+// carry them):
+//   • a highlight whose `==}` lies past a blank line (multi-block anchor) — the
+//     open moves to the start of the close's block, so the anchor becomes a legal
+//     single-block span on the text nearest the comment; earlier paragraphs stay
+//     as plain prose. Stacked `{=={==` forms converge to the canonical stacked-
+//     thread shape over iterations.
+//   • complete comments trapped inside a tracked change (`{++{>>c<<}x++}`) — the
+//     comments move to just AFTER the wrapper, where adjacency threads them onto
+//     it; the wrapper then parses.
+
+/** Position just past the matching `==}` for the `{==` at `openPos`, scanning
+ *  nesting-aware and treating complete constructs as opaque (a `==}` inside a
+ *  comment body can't match). -1 when the highlight never closes. */
+function findHighlightClose(text: string, openPos: number): number {
+  let depth = 1;
+  let i = openPos + 3;
+  while (i < text.length) {
+    if (text.startsWith("==}", i)) {
+      depth -= 1;
+      if (depth === 0) return i;
+      i += 3;
+      continue;
+    }
+    if (text.startsWith("{==", i)) {
+      depth += 1;
+      i += 3;
+      continue;
+    }
+    if (text.startsWith("{>>", i)) {
+      const s = scanComment(text, i);
+      i = s ? s.end : i + 3;
+      continue;
+    }
+    if (text[i] === "{") {
+      const m = matchConstructAt(text, i);
+      if (m && m.type !== "highlight") {
+        i = m.to;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+// Markdown line prefix at a block start (blockquote markers, list bullet, heading)
+// — a relocated `{==` must land AFTER it so the block still parses as markdown.
+const BLOCK_LINE_PREFIX = /^(?:\s*>\s?)*(?:\s*(?:[-*+]|\d{1,3}[.)])\s+)?(?:#{1,6}\s+)?/;
+
+/** ONE multi-block-anchor repair, or null when none is needed. */
+function healOneMultiBlockAnchor(content: string): string | null {
+  for (let i = content.indexOf("{=="); i >= 0; i = content.indexOf("{==", i + 3)) {
+    const close = findHighlightClose(content, i);
+    if (close < 0) continue; // truly dangling — not mechanically healable
+    const inner = content.slice(i + 3, close);
+    BLANK_LINE.lastIndex = 0;
+    if (!BLANK_LINE.test(inner)) continue; // single-block — fine
+    // Start of the close's block: just past the LAST blank line before the close…
+    let blockStart = i + 3;
+    const re = /\n[ \t]*\n/g;
+    for (let m = re.exec(inner); m; m = re.exec(inner)) blockStart = i + 3 + m.index + m[0].length;
+    // …skipping the markdown line prefix so `> `/`- `/`#` keep their meaning.
+    const prefix = BLOCK_LINE_PREFIX.exec(content.slice(blockStart, close))?.[0] ?? "";
+    const insertAt = blockStart + prefix.length;
+    // Remove the open at i, re-insert at the block (offsets shift left by 3).
+    const without = content.slice(0, i) + content.slice(i + 3);
+    return without.slice(0, insertAt - 3) + "{==" + without.slice(insertAt - 3);
+  }
+  return null;
+}
+
+/** ONE comment-inside-wrapper repair, or null when none is needed. */
+function healOneCommentInWrapper(content: string): string | null {
+  for (const open of ["{++", "{--"]) {
+    const close = open === "{++" ? "++}" : "--}";
+    for (let i = content.indexOf(open); i >= 0; i = content.indexOf(open, i + 3)) {
+      if (matchConstructAt(content, i)) continue; // parses — nothing to heal
+      const closeAt = content.indexOf(close, i + 3);
+      if (closeAt < 0 || closeAt >= paragraphEnd(content, i)) continue;
+      const inner = content.slice(i + 3, closeAt);
+      const comments = scanTokens(inner).filter((t): t is CommentToken => t.type === "comment");
+      if (comments.length === 0) continue;
+      // Pull the comments out; the wrapper is healable only if what remains is
+      // construct-free (a residual {== etc. would still break it).
+      let residue = "";
+      let cursor = 0;
+      for (const c of comments) {
+        residue += inner.slice(cursor, c.from);
+        cursor = c.to;
+      }
+      residue += inner.slice(cursor);
+      // The residue must carry NO other markup — a leftover open would still break
+      // the wrapper, and a leftover close (`==}` etc.) would, once the wrapper
+      // parses, be swallowed INTO it and change how surrounding markup resolves
+      // (seen in the wild: `{==a {++==}{>>c<<}b++}` — healing the insert dangled
+      // the outer highlight). Cross-construct interleaves stay flagged, unhealed.
+      if (NESTED_OPEN.test(residue) || /==\}|<<\}|\+\+\}|--\}|~~\}/.test(residue)) continue;
+      const moved = comments.map((c) => c.raw).join("");
+      return (
+        content.slice(0, i) + open + residue + close + moved + content.slice(closeAt + 3)
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Every mechanical repair, applied to a fixpoint: nested comments flattened,
+ * trapped comments moved out of tracked changes, multi-block anchors re-anchored
+ * on their final block. What it can't fix (true danglings, cross-construct
+ * interleaves) is left for the validator to keep flagging.
+ */
+export function healDocument(content: string): string {
+  let out = healNestedComments(content);
+  for (let guard = 0; guard < 500; guard++) {
+    const next = healOneCommentInWrapper(out) ?? healOneMultiBlockAnchor(out);
+    if (next === null) break;
+    out = next;
+  }
+  return out;
+}
+
 // ── Hard-wrap (#10): reflow prose to a max width, markup-safe ──────────────────
 // Like vim's textwidth: plain paragraphs are unwrapped then greedily refilled at
 // `width` columns. Everything that isn't a plain paragraph is left verbatim —

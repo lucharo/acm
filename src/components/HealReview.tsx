@@ -15,8 +15,11 @@ interface HealReviewProps {
   content: string;
   /** Auto-healable (nested) issues, in document order: { from, preview }. */
   issues: { from: number; preview: string }[];
-  /** ALL malformed comments (nested + broken-close + dangling). */
+  /** ALL markup defects (every delimiter the validator flags). */
   brokenTotal: number;
+  /** How many of those "Heal all" repairs in one step (nested comments +
+   *  structural leaks: multi-block anchors, comments inside tracked changes). */
+  fixableTotal: number;
   onHealOne: (from: number) => void;
   onHealAll: () => void;
   onJump: (from: number) => void;
@@ -26,7 +29,7 @@ interface HealReviewProps {
 }
 
 export default function HealReview(props: HealReviewProps) {
-  const { content, issues, brokenTotal, onHealOne, onHealAll, onJump, onJumpManual, onClose } = props;
+  const { content, issues, brokenTotal, fixableTotal, onHealOne, onHealAll, onJump, onJumpManual, onClose } = props;
   const [cursor, setCursor] = useState(0);
 
   // Issues shrink as you heal; keep the cursor in range.
@@ -34,7 +37,10 @@ export default function HealReview(props: HealReviewProps) {
     if (cursor >= issues.length && issues.length > 0) setCursor(issues.length - 1);
   }, [issues.length, cursor]);
 
-  const manualCount = Math.max(0, brokenTotal - issues.length);
+  const manualCount = Math.max(0, brokenTotal - fixableTotal);
+  // Structural leaks Heal-all fixes beyond the per-issue (nested comment) list:
+  // multi-paragraph anchors and comments trapped inside tracked changes.
+  const structuralCount = Math.max(0, fixableTotal - issues.length);
   const issue = issues[Math.min(cursor, issues.length - 1)];
   const detail = issue ? nestedCommentDetail(content, issue.from) : null;
   const line = issue ? content.slice(0, issue.from).split("\n").length : 0;
@@ -61,17 +67,23 @@ export default function HealReview(props: HealReviewProps) {
 
       {issues.length === 0 ? (
         <div className="py-2 text-[var(--muted)]">
-          {manualCount > 0 ? (
+          {structuralCount > 0 ? (
             <>
-              No auto-fixable issues left. <span className="font-medium text-[var(--warn)]">{manualCount}</span> need a manual fix (a broken{" "}
-              <code className="text-[12px]">{"‹‹}"}</code> close).{" "}
+              <span className="font-medium text-[var(--ink)]">{structuralCount}</span> structural leak{structuralCount === 1 ? "" : "s"}{" "}
+              (a highlight crossing a paragraph break, or a comment trapped inside a tracked change) can be repaired in one step — anchors move to
+              their final paragraph, trapped comments move out. Undoable.
+            </>
+          ) : manualCount > 0 ? (
+            <>
+              No auto-fixable issues left. <span className="font-medium text-[var(--warn)]">{manualCount}</span> need a manual fix (broken or{" "}
+              interleaved markup).{" "}
               <button type="button" onClick={onJumpManual} className="font-medium text-[var(--accent)] underline">
                 Jump to the first
               </button>
               .
             </>
           ) : (
-            <span className="text-[var(--crit-ins)]">✓ All comments display correctly.</span>
+            <span className="text-[var(--crit-ins)]">✓ All markup displays correctly.</span>
           )}
         </div>
       ) : (
@@ -156,12 +168,12 @@ export default function HealReview(props: HealReviewProps) {
 
       {/* Footer: escape hatch + honesty about non-fixable */}
       <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-2.5 text-[11px]">
-        {issues.length > 0 ? (
+        {fixableTotal > 0 ? (
           <button type="button" onClick={onHealAll} className="font-medium text-[var(--muted)] hover:text-[var(--ink)]">
-            Heal all {issues.length}
+            Heal all {fixableTotal}
           </button>
         ) : null}
-        {manualCount > 0 && issues.length > 0 ? (
+        {manualCount > 0 && fixableTotal > 0 ? (
           <button type="button" onClick={onJumpManual} className="ml-auto text-[var(--warn)] hover:underline">
             {manualCount} need you →
           </button>

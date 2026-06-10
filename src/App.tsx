@@ -31,7 +31,7 @@ import {
   groupCards,
   countWords,
   resolveAnchorEdit,
-  healNestedComments,
+  healDocument,
   healOneNestedComment,
   nestedCommentIssues,
   validateMarkup,
@@ -389,6 +389,12 @@ function Workspace({
   // dangling opens, stray closes, malformed comments), as positioned diagnostics
   // (#18). Drives the warning pill; healIssues is the auto-healable subset.
   const diagnostics = useMemo(() => validateMarkup(doc), [doc]);
+  // How many of those one click can repair: simulate the full heal and diff the
+  // counts (covers nested comments, trapped comments, multi-block anchors).
+  const fixableCount = useMemo(
+    () => (diagnostics.length === 0 ? 0 : diagnostics.length - validateMarkup(healDocument(doc)).length),
+    [doc, diagnostics.length],
+  );
 
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that
@@ -673,13 +679,14 @@ function Workspace({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Auto-heal: flatten every nested comment into adjacent comments (rejoining the
-  // split word). A normal editor edit, so it saves cleanly and is undoable (Cmd+Z).
+  // Auto-heal EVERYTHING mechanical: nested comments flattened, comments trapped
+  // in tracked changes moved out, multi-block anchors re-anchored on their final
+  // block. A normal editor edit, so it saves cleanly and is undoable (Cmd+Z).
   const healAll = useCallback(() => {
     const v = editor.viewRef.current;
     if (!v) return;
     const cur = v.state.doc.toString();
-    const healed = healNestedComments(cur);
+    const healed = healDocument(cur);
     if (healed !== cur) v.dispatch({ changes: dispatchableDiff(cur, healed) });
   }, [editor.viewRef]);
 
@@ -1206,6 +1213,7 @@ function Workspace({
           content={doc}
           issues={healIssues}
           brokenTotal={diagnostics.length}
+          fixableTotal={fixableCount}
           onHealOne={healOne}
           onHealAll={healAll}
           onJump={jumpTo}
@@ -1231,8 +1239,8 @@ function Workspace({
             {diagnostics.length} markup issue{diagnostics.length === 1 ? "" : "s"} render raw
             <span className="font-normal text-[var(--muted)]">
               {" — "}
-              {healIssues.length} auto-fixable
-              {diagnostics.length - healIssues.length > 0 ? `, ${diagnostics.length - healIssues.length} need you` : ""}
+              {fixableCount} auto-fixable
+              {diagnostics.length - fixableCount > 0 ? `, ${diagnostics.length - fixableCount} need you` : ""}
             </span>
           </span>
           <span className="rounded-full bg-[var(--warn)] px-2 py-0.5 text-[11px] font-semibold text-[var(--panel)]">Review</span>
