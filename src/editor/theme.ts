@@ -31,12 +31,13 @@ export const acmTheme: Extension = EditorView.theme(
     // only needs a modest right gutter for the comment-anchor glyphs + connectors.
     ".cm-content": {
       maxWidth: "680px",
-      margin: "0 auto",
+      // Bottom margin = extra scroll reach when comment cards stack below the
+      // last line (set by App from the sidebar's overflow report). A margin —
+      // not min-height — so the page sheet never stretches past the prose; the
+      // reach reads as desk/background, and scroll range still covers the cards.
+      margin: "0 auto var(--acm-scroll-reach, 0px)",
       padding: "2.5rem 3rem 6rem 3rem",
       caretColor: "var(--ink)",
-      // App sets --acm-content-min so the doc can scroll far enough to reveal
-      // comment cards that stack below the last line of text.
-      minHeight: "var(--acm-content-min, auto)",
     },
     ".cm-line": {
       padding: "0",
@@ -318,12 +319,12 @@ export const pageTheme: Extension = EditorView.theme({
   },
   ".cm-content": {
     maxWidth: "740px",
-    margin: "0 auto",
+    margin: "0 auto var(--acm-scroll-reach, 0px)", // same reach var as the base theme
     padding: "4rem 4.5rem 6rem",
     backgroundColor: "var(--panel)",
     border: "1px solid var(--line)",
     borderRadius: "2px",
     boxShadow: "0 1px 2px rgba(0, 0, 0, 0.07), 0 14px 40px rgba(0, 0, 0, 0.09)",
-    minHeight: "var(--acm-content-min, 70vh)",
+    minHeight: "70vh", // a fresh/short doc still reads as a sheet
   },
 });

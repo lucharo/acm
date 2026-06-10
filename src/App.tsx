@@ -271,8 +271,10 @@ function Workspace({
   const [navOpen, setNavOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const [tocActiveFrom, setTocActiveFrom] = useState<number | null>(null);
-  // Min content height so the doc scrolls far enough to reveal comment cards that
-  // stack below the last line (reported by the sidebar). 0 = let content size itself.
+  // Extra scroll reach (px of scroller bottom padding) so cards stacked below the
+  // last line stay reachable — reported by the sidebar as overflow past the last
+  // text line. 0 = no overflow. Padding, not content min-height: the page sheet
+  // must never stretch past the prose (the old approach left a huge white gap).
   const [contentMin, setContentMin] = useState(0);
 
   // Hide the right-margin comment column when the reading area is too narrow to
@@ -1151,7 +1153,7 @@ function Workspace({
                 onClick={(e) => focusCommentAtPoint(e.clientX, e.clientY)}
                 style={
                   commentsVisible && contentMin
-                    ? ({ ["--acm-content-min" as string]: `${contentMin}px` })
+                    ? ({ ["--acm-scroll-reach" as string]: `${contentMin}px` })
                     : undefined
                 }
               />

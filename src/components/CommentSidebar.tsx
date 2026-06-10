@@ -63,8 +63,9 @@ interface CommentSidebarProps {
   onRejectSuggestion: (card: SidebarCard) => void;
   onFocusThread: (card: SidebarCard) => void;
   onCardContextMenu?: (card: SidebarCard, e: ReactMouseEvent) => void;
-  /** Lowest card's bottom in editor-content space — App uses it as the editor's
-   *  min content height so cards stacked below the last line stay scroll-reachable. */
+  /** How far the lowest card sticks out BELOW the document's last line (px, ≥0).
+   *  App applies it as extra scroller bottom padding so those cards stay
+   *  scroll-reachable — without stretching the page sheet itself. */
   onContentExtent?: (px: number) => void;
 }
 
@@ -233,7 +234,11 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           anchorY: docTop + view0.lineBlockAt(t.from).top,
           height: cardRefs.current.get(t.id)?.offsetHeight ?? 0,
         }));
-        return { valid: true as const, measured, origin: contentRect.right - cRect.left, docTop, padTop };
+        // Bottom of the LAST text line in column coords — the reference for how far
+        // the card stack overflows the prose (independent of any applied spacer,
+        // so there's no feedback loop with the padding this ultimately drives).
+        const lastLineBottom = docTop + view0.lineBlockAt(view0.state.doc.length).bottom;
+        return { valid: true as const, measured, origin: contentRect.right - cRect.left, docTop, padTop, lastLineBottom };
       },
       write(data) {
         if (!data.valid) {
@@ -242,7 +247,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           requestAnimationFrame(() => recomputeRef.current());
           return;
         }
-        const { measured, origin, docTop, padTop } = data;
+        const { measured, origin, lastLineBottom } = data;
         const sorted = [...measured].sort((a, b) => a.anchorY - b.anchorY);
         const next = new Map<string, CardLayout>();
         const h = (m: (typeof sorted)[number]) => m.height || 80;
@@ -274,13 +279,12 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           setLayout(next);
         }
         setOriginX((prev) => (Math.abs(prev - origin) > 0.5 ? origin : prev));
-        // The lowest card bottom in editor-content space (line 0 at content padTop),
-        // so the editor can grow tall enough to scroll it into view.
-        // Reserve extra scroll height for cards stacked below the last line — but
-        // RESET to 0 when there are no visible cards (e.g. everything marked seen),
-        // otherwise the old reserved height lingers as a huge blank gap in the page.
+        // Card-stack overflow BELOW the last text line — extra scroll the reader
+        // needs to reach the lowest card. RESET to 0 with no visible cards (e.g.
+        // everything seen), so stale reach never lingers as a blank gap.
         if (onContentExtent) {
-          onContentExtent(sorted.length > 0 ? Math.ceil(padTop + (maxBottom - docTop) + 64) : 0);
+          const overflow = Math.max(0, Math.ceil(maxBottom - lastLineBottom) + 24);
+          onContentExtent(sorted.length > 0 && maxBottom > lastLineBottom ? overflow : 0);
         }
         syncTransform();
       },
