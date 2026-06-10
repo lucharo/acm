@@ -97,4 +97,20 @@ describe("threadsSummary", () => {
     const sug = s.find((t) => t.anchor === "a tired claim")!;
     expect(sug.applicable).toBe(true); // carries an applyable SUGGEST
   });
+
+  test("anchor uses the same gap-tolerant rule as applicability (stray space)", () => {
+    // A space between span and comment must not yield `anchor: null` on a thread
+    // that IS applyable — the two fields previously used different adjacency rules.
+    const doc = "The {==argument is methodical==} {>>@claude: SUGGEST: argument is systematic<<} here.";
+    const [t] = threadsSummary(doc);
+    expect(t.applicable).toBe(true);
+    expect(t.anchor).toBe("argument is methodical");
+  });
+
+  test("anchor resolves when the span wraps tracked changes", () => {
+    const doc = "A {==span with {++new++} bits==}{>>@claude: SUGGEST: cleaner span<<} here.";
+    const [t] = threadsSummary(doc);
+    expect(t.applicable).toBe(true);
+    expect(t.anchor).toBe("span with {++new++} bits");
+  });
 });

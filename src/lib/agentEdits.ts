@@ -13,8 +13,9 @@ import {
   resolveAnchorEdit,
   suggestionReplacement,
   applicableSuggestionIds,
+  anchorHighlightFor,
 } from "./criticmarkup";
-import type { CommentToken, CommentThread, CritToken } from "./criticmarkup";
+import type { CommentToken, CommentThread } from "./criticmarkup";
 
 /** Raised when a phrase/span matches zero or more than one target — the caller
  *  must resolve the ambiguity rather than guess. */
@@ -117,18 +118,19 @@ export interface ThreadSummary {
 /** Read/verify surface: every thread with its anchor span, authors, count, and
  *  whether it carries an applyable suggestion. Drives `acm threads [--json]`. */
 export function threadsSummary(content: string): ThreadSummary[] {
-  type Highlight = Extract<CritToken, { type: "highlight" }>;
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
-  const highlights = tokens.filter((t): t is Highlight => t.type === "highlight");
   const applicable = applicableSuggestionIds(content, tokens);
   return groupThreads(comments, content).map((th) => {
-    const hl = highlights.filter((h) => h.to <= th.from).sort((a, b) => b.to - a.to)[0];
+    // Same gap-tolerant adjacency rule as the sidebar/apply path — a stray space
+    // between span and comment must not report `anchor: null` on an applyable
+    // suggestion (they previously disagreed: strict equality here, ANCHOR_GAP there).
+    const hl = anchorHighlightFor(content, th.comments[0], tokens);
     return {
       id: th.id,
       from: th.from,
       to: th.to,
-      anchor: hl && hl.to === th.from ? hl.inner : null,
+      anchor: hl && hl.type === "highlight" ? hl.inner : null,
       authors: [...new Set(th.comments.map((c) => c.author ?? "?"))],
       count: th.comments.length,
       applicable: th.comments.some((c) => applicable.has(c.id)),

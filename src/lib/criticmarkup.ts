@@ -671,8 +671,11 @@ export function suggestionReplacement(body: string): string | null {
  * highlight, or null (e.g. a point comment or a reply — not anchored to a span).
  *
  * Tokens may be passed in to avoid re-scanning when the caller already has them.
+ *
+ * Exported so every reader of "what span is this thread about" (sidebar,
+ * inlineSuggestions, `acm threads`) shares the ONE adjacency rule.
  */
-function anchorHighlightFor(
+export function anchorHighlightFor(
   content: string,
   comment: { from: number },
   tokens?: CritToken[],
