@@ -25,6 +25,8 @@ Anchor WRAPPING tracked changes (nesting-aware grammar): the {==span keeps {++pe
 
 Competing suggestions on ONE span ("or" separator): this {==phrasing needs work==}{>>@claude: SUGGEST: phrasing reads rough<<}{>>@maya: SUGGEST: wording needs a pass<<} — the second proposal is prefixed with a muted "or" so the two never read as one run.
 
+Suggestion GROUP (⛓, accepted as one unit): move a clause = {==drop it here==}{>>@claude: SUGGEST[g:mv]: <<} and {==land the thought==}{>>@claude: SUGGEST[g:mv]: land the thought, plus the moved clause<<} — both carry a ⛓2 chip inline, and either sidebar card offers "Apply all 2 / Reject all" (one undo).
+
 ## Comment threads & density
 
 Single comment: this span has just {==one note==}{>>@luis: minor<<} on it.

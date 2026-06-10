@@ -40,6 +40,7 @@ import {
   inlineSuggestions,
   wrappableSpan,
   hardWrap,
+  suggestionGroupEdits,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
 import type {
@@ -547,6 +548,31 @@ function Workspace({
     },
     [editor.viewRef],
   );
+
+  // Accept / reject EVERY member of a suggestion group (#21) as ONE transaction
+  // (array of changes in original coordinates → atomic apply + a single undo).
+  const runGroupEdit = useCallback(
+    (groupId: string, mode: "accept" | "reject") => {
+      const v = editor.viewRef.current;
+      if (!v) return;
+      const { edits } = suggestionGroupEdits(v.state.doc.toString(), groupId, mode);
+      if (edits.length) {
+        v.dispatch({ changes: edits });
+        setActiveId(null);
+      }
+    },
+    [editor.viewRef],
+  );
+
+  // commentId → its suggestion group (id + member count), for the sidebar's
+  // group-wide Apply/Reject controls. Only real groups (≥2 members) qualify.
+  const suggestionGroupOf = useMemo(() => {
+    const map = new Map<string, { id: string; size: number }>();
+    for (const s of inlineSuggestionList) {
+      if (s.groupId && s.groupSize > 1) map.set(s.commentId, { id: s.groupId, size: s.groupSize });
+    }
+    return map;
+  }, [inlineSuggestionList]);
 
   // ── Comment threads ───────────────────────────────────────────────────────────
   const focusThread = useCallback(
@@ -1150,6 +1176,8 @@ function Workspace({
                   onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
                   onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
                   applicableSuggestionIds={applicableSuggestionIds}
+                  suggestionGroupOf={suggestionGroupOf}
+                  onGroupEdit={runGroupEdit}
                   onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
                   onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
                   onFocusThread={focusThread}

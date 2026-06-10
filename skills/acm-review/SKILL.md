@@ -80,6 +80,16 @@ so you can propose a concrete edit in the middle of a discussion, not just at th
 Here `@claude`'s suggestion replaces `currency we spend` (the span the thread is about),
 and `@luis`'s question stays attached to the edited span when it's accepted.
 
+## Suggestion groups — edits that only make sense together
+
+Some edits are one logical change in several places (move a clause = delete here +
+re-word there; rename a term across a section). Tag each member with the same group
+id — `SUGGEST[g:<id>]: …` — and ACM treats the set as a unit: members render with a
+⛓ chip, and the human (or you, via `acm accept --group <id>`) applies or rejects
+ALL of them in one atomic step. Author members with `acm suggest … --group <id>`
+(pick any short id, e.g. `mv1`). Members can still be accepted individually; the
+group controls are the convenience, not a lock.
+
 ## Find comments precisely (reuse ACM's own parser)
 
 Don't hand-roll regex. ACM ships a parser you can import:
@@ -116,8 +126,11 @@ to the file, so a running editor reflects them within ~1s.
 acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST]
 acm comment "<phrase>" "<text>"   # reply to the thread whose comment matches <phrase>
 acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
+acm suggest … --group <id>        # tag the suggestion as part of group <id> (a SET applied as one unit)
 acm accept "<phrase>"             # accept the suggestion matching <phrase> (keep new)
 acm reject "<phrase>"             # reject it (keep the original span)
+acm accept --group <id>           # accept EVERY suggestion in the group, one atomic write
+acm reject --group <id>           # reject the whole group (keep every original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>
 acm apply <edits.json>            # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split

@@ -199,6 +199,8 @@ class SuggestionInlineWidget extends WidgetType {
     readonly replacement: string,
     readonly threadCount: number,
     readonly alternativeIndex: number,
+    readonly groupId: string | null,
+    readonly groupSize: number,
   ) {
     super();
   }
@@ -208,7 +210,9 @@ class SuggestionInlineWidget extends WidgetType {
       other.to === this.to &&
       other.replacement === this.replacement &&
       other.threadCount === this.threadCount &&
-      other.alternativeIndex === this.alternativeIndex
+      other.alternativeIndex === this.alternativeIndex &&
+      other.groupId === this.groupId &&
+      other.groupSize === this.groupSize
     );
   }
   toDOM() {
@@ -252,6 +256,16 @@ class SuggestionInlineWidget extends WidgetType {
     controls.appendChild(accept);
     controls.appendChild(reject);
     wrap.appendChild(controls);
+
+    if (this.groupId && this.groupSize > 1) {
+      // Member of a suggestion group — a set meant to be accepted/rejected as one
+      // unit. Informational chip; the group-wide controls live on the sidebar card.
+      const chip = document.createElement("span");
+      chip.className = "cm-crit-suggest-group";
+      chip.textContent = `⛓${this.groupSize}`;
+      chip.title = `Part of suggestion group “${this.groupId}” — ${this.groupSize} edits meant to be applied together (group controls on the sidebar card)`;
+      wrap.appendChild(chip);
+    }
 
     if (this.threadCount > 1) {
       // A discussion hangs off this suggestion — show the message COUNT so accepting
@@ -411,6 +425,8 @@ function buildWidgets(view: EditorView): DecorationSet {
                       sug.replacement,
                       sug.threadCount,
                       sug.alternativeIndex,
+                      sug.groupId,
+                      sug.groupSize,
                     )
                   : new CommentAnchorWidget(node.from, node.to),
               }).range(node.from, node.to),

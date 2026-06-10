@@ -918,13 +918,24 @@ export function groupCards(tokens: CritToken[], text: string): SidebarCard[] {
 // replacement} is all a future inline accept/reject needs, so existing suggestions
 // auto-upgrade.
 
-const SUGGESTION_PREFIX = /^\s*SUGGEST:\s?([\s\S]*)$/;
+// `SUGGEST: new wording` — optionally tagged with a group id, `SUGGEST[g:7a]: …`,
+// so a SET of suggestions can be accepted/rejected as one unit (#21). The tag
+// lives inside the comment body, so the substrate stays plain CriticMarkup.
+const SUGGESTION_PREFIX = /^\s*SUGGEST(?:\[g:([^\]\s]+)\])?:\s?([\s\S]*)$/;
 
 /** If `body` is a structured suggestion, the proposed replacement text (may be ""
- *  → suggest deleting the span); otherwise null. */
+ *  → suggest deleting the span); otherwise null. A group tag is NOT part of the
+ *  replacement. */
 export function suggestionReplacement(body: string): string | null {
   const m = body.match(SUGGESTION_PREFIX);
-  return m ? m[1] : null;
+  return m ? m[2] : null;
+}
+
+/** The suggestion-group id (`SUGGEST[g:7a]: …` → "7a"), or null for an untagged
+ *  suggestion / a non-suggestion body. */
+export function suggestionGroupId(body: string): string | null {
+  const m = body.match(SUGGESTION_PREFIX);
+  return m ? (m[1] ?? null) : null;
 }
 
 /**
@@ -1071,6 +1082,8 @@ export interface InlineSuggestion {
   hasReplies: boolean; // the comment's thread carries ≥1 other message
   threadCount: number; // total messages in the thread (for the inline "N" badge)
   alternativeIndex: number; // nth suggestion on this anchor (0 = first; >0 → competing)
+  groupId: string | null; // SUGGEST[g:id] — member of a multi-edit group (#21)
+  groupSize: number; // members in that group (1 for ungrouped)
 }
 
 /**
@@ -1110,7 +1123,63 @@ export function inlineSuggestions(content: string, tokens?: CritToken[]): Inline
       hasReplies: threadCount > 1,
       threadCount,
       alternativeIndex,
+      groupId: suggestionGroupId(t.body),
+      groupSize: 1, // filled below once every member is known
     });
+  }
+  const groupSizes = new Map<string, number>();
+  for (const s of out) if (s.groupId) groupSizes.set(s.groupId, (groupSizes.get(s.groupId) ?? 0) + 1);
+  for (const s of out) if (s.groupId) s.groupSize = groupSizes.get(s.groupId)!;
+  return out;
+}
+
+// ── Suggestion groups (#21): a set of edits accepted/rejected as ONE unit ──────
+// Members are anchored SUGGEST comments sharing a `[g:id]` tag. Accept-all /
+// reject-all turn into ONE batch of non-overlapping ranged edits, all in ORIGINAL
+// coordinates — the editor dispatches them as a single transaction (atomic undo)
+// and the CLI applies them back-to-front in one write.
+
+/**
+ * The accept/reject edits for every member of group `groupId`. Members whose
+ * anchor can't resolve, or whose edit would overlap an earlier member's (two
+ * suggestions on ONE thread — contradictory to apply together; the first wins),
+ * are counted in `skipped` rather than silently dropped.
+ */
+export function suggestionGroupEdits(
+  content: string,
+  groupId: string,
+  mode: "accept" | "reject",
+): { edits: { from: number; to: number; insert: string }[]; skipped: number } {
+  const tokens = scanTokens(content);
+  const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
+  const members = inlineSuggestions(content, tokens).filter((s) => s.groupId === groupId);
+  const edits: { from: number; to: number; insert: string }[] = [];
+  let skipped = 0;
+  for (const m of members) {
+    const c = comments.find((t) => t.from === m.commentFrom);
+    const e = c ? suggestionThreadEdit(content, c, mode) : null;
+    if (e) edits.push(e);
+    else skipped += 1;
+  }
+  edits.sort((a, b) => a.from - b.from);
+  const clean: typeof edits = [];
+  for (const e of edits) {
+    const prev = clean[clean.length - 1];
+    if (prev && e.from < prev.to) skipped += 1;
+    else clean.push(e);
+  }
+  return { edits: clean, skipped };
+}
+
+/** Apply non-overlapping ranged edits to a string (back-to-front, so earlier
+ *  offsets stay valid). The string-side mirror of a single CM transaction. */
+export function applyRangedEdits(
+  content: string,
+  edits: { from: number; to: number; insert: string }[],
+): string {
+  let out = content;
+  for (const e of [...edits].sort((a, b) => b.from - a.from)) {
+    out = out.slice(0, e.from) + e.insert + out.slice(e.to);
   }
   return out;
 }

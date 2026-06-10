@@ -8,8 +8,14 @@ import {
   resolveSuggestion,
   resolveThread,
   threadsSummary,
+  resolveSuggestionGroup,
 } from "./agentEdits";
-import { scanTokens } from "./criticmarkup";
+import {
+  scanTokens,
+  suggestionReplacement,
+  suggestionGroupId,
+  inlineSuggestions,
+} from "./criticmarkup";
 
 const DOC =
   "Intro. The {==quick brown fox==}{>>@luis: too vivid?<<} jumps. " +
@@ -75,6 +81,66 @@ describe("addComment / addSuggestion", () => {
   test("addSuggestion still refuses a span that CUTS a tracked change", () => {
     const doc = "Writing it was {++genuinely++} hard.";
     expect(() => addSuggestion(doc, "was {++genuinely", "claude", "x")).toThrow(AmbiguityError);
+  });
+});
+
+describe("suggestion groups (#21)", () => {
+  // Two related edits, tagged with one group id, in different paragraphs.
+  const GDOC =
+    "Move the clause: {==delete this here==}{>>@claude: SUGGEST[g:7a]: <<} and then.\n\n" +
+    "Land it there: {==old wording==}{>>@claude: SUGGEST[g:7a]: old wording, plus the moved clause<<} done.\n\n" +
+    "Unrelated: {==solo span==}{>>@claude: SUGGEST: solo replacement<<} stays.";
+
+  test("the [g:id] tag parses: replacement excludes it, group id extracted", () => {
+    expect(suggestionReplacement("SUGGEST[g:7a]: new words")).toBe("new words");
+    expect(suggestionGroupId("SUGGEST[g:7a]: new words")).toBe("7a");
+    expect(suggestionGroupId("SUGGEST: untagged")).toBeNull();
+    expect(suggestionGroupId("a plain comment")).toBeNull();
+  });
+
+  test("inlineSuggestions carries groupId + groupSize", () => {
+    const sugs = inlineSuggestions(GDOC);
+    expect(sugs).toHaveLength(3);
+    const grouped = sugs.filter((s) => s.groupId === "7a");
+    expect(grouped).toHaveLength(2);
+    for (const s of grouped) expect(s.groupSize).toBe(2);
+    expect(sugs.find((s) => s.groupId === null)!.groupSize).toBe(1);
+  });
+
+  test("accept-all applies every member in one batch; the solo suggestion is untouched", () => {
+    const { content, applied, skipped } = resolveSuggestionGroup(GDOC, "7a", "accept");
+    expect(applied).toBe(2);
+    expect(skipped).toBe(0);
+    expect(content).toContain("Move the clause:  and then."); // empty replacement = delete
+    expect(content).toContain("Land it there: old wording, plus the moved clause done.");
+    expect(content).toContain("{==solo span==}{>>@claude: SUGGEST: solo replacement<<}");
+  });
+
+  test("reject-all keeps every original span, drops the group's SUGGEST comments", () => {
+    const { content } = resolveSuggestionGroup(GDOC, "7a", "reject");
+    expect(content).toContain("Move the clause: delete this here and then.");
+    expect(content).toContain("Land it there: old wording done.");
+    expect(content).not.toContain("[g:7a]");
+  });
+
+  test("two members on ONE thread are contradictory — first wins, second stays pending", () => {
+    const doc =
+      "x {==span==}{>>@a: SUGGEST[g:z]: first<<}{>>@b: SUGGEST[g:z]: second<<} y";
+    const { content, applied, skipped } = resolveSuggestionGroup(doc, "z", "accept");
+    expect(applied).toBe(1);
+    expect(skipped).toBe(1);
+    // The first member's accept keeps the remaining discussion (thread rebuild),
+    // so the second suggestion SURVIVES, now anchored on the edited span.
+    expect(content).toBe("x {==first==}{>>@b: SUGGEST[g:z]: second<<} y");
+  });
+
+  test("unknown / empty group throws", () => {
+    expect(() => resolveSuggestionGroup(GDOC, "nope", "accept")).toThrow(AmbiguityError);
+  });
+
+  test("addSuggestion --group writes the tagged form", () => {
+    const out = addSuggestion("plain prose here", "prose", "claude", "wording", "7a");
+    expect(out).toContain("{==prose==}{>>@claude: SUGGEST[g:7a]: wording<<}");
   });
 });
 

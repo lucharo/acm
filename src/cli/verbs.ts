@@ -14,6 +14,7 @@ import {
   addComment,
   addSuggestion,
   resolveSuggestion,
+  resolveSuggestionGroup,
   resolveThread,
   threadsSummary,
 } from "../lib/agentEdits";
@@ -27,6 +28,7 @@ export function isAgentVerb(cmd?: string): boolean {
 interface Flags {
   doc?: string;
   author?: string;
+  group?: string;
   json: boolean;
   positional: string[];
 }
@@ -36,6 +38,7 @@ function parseFlags(argv: string[]): Flags {
     const a = argv[i];
     if (a === "--doc") f.doc = argv[++i];
     else if (a === "--author") f.author = argv[++i];
+    else if (a === "--group") f.group = argv[++i];
     else if (a === "--json") f.json = true;
     else f.positional.push(a);
   }
@@ -114,15 +117,22 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       case "suggest": {
         const [span, replacement] = f.positional;
         if (!span || replacement === undefined)
-          throw new Error('usage: acm suggest "<span>" "<new wording>" [--doc] [--author]');
-        after = addSuggestion(before, span, author, replacement);
-        note = `SUGGEST anchored on "${span.slice(0, 40)}" as @${author}`;
+          throw new Error('usage: acm suggest "<span>" "<new wording>" [--group <id>] [--doc] [--author]');
+        after = addSuggestion(before, span, author, replacement, f.group);
+        note = `SUGGEST${f.group ? `[g:${f.group}]` : ""} anchored on "${span.slice(0, 40)}" as @${author}`;
         break;
       }
       case "accept":
       case "reject": {
+        if (f.group) {
+          // Whole-group resolution (#21): every member edit lands in ONE write.
+          const r = resolveSuggestionGroup(before, f.group, cmd);
+          after = r.content;
+          note = `${cmd}ed suggestion group "${f.group}" — ${r.applied} edits${r.skipped ? `, ${r.skipped} skipped` : ""}`;
+          break;
+        }
         const [phrase] = f.positional;
-        if (!phrase) throw new Error(`usage: acm ${cmd} "<phrase>" [--doc]`);
+        if (!phrase) throw new Error(`usage: acm ${cmd} "<phrase>" | acm ${cmd} --group <id>  [--doc]`);
         after = resolveSuggestion(before, phrase, cmd);
         note = `${cmd}ed the suggestion matching "${phrase.slice(0, 40)}"`;
         break;

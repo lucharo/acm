@@ -269,6 +269,15 @@ export const acmTheme: Extension = EditorView.theme(
       margin: "0 0.35em 0 0.15em",
       fontFamily: "ui-sans-serif, system-ui, sans-serif",
     },
+    // Suggestion-group membership chip (⛓N) — informational; group-wide controls
+    // live on the sidebar card.
+    ".cm-crit-suggest-group": {
+      marginLeft: "4px",
+      color: "var(--muted)",
+      fontSize: "0.72em",
+      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      verticalAlign: "baseline",
+    },
     // Empty-replacement suggestion = "delete this span" — a muted marker, not green.
     ".cm-crit-suggest-del": {
       color: "var(--muted)",

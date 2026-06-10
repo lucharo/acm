@@ -53,6 +53,11 @@ interface CommentSidebarProps {
   /** Ids of SUGGEST: comments with a resolvable anchor → their Apply is real.
    *  A SUGGEST: not in this set shows the proposal but no (dead) Apply button. */
   applicableSuggestionIds: Set<string>;
+  /** commentId → its suggestion group (id + member count), for SUGGEST[g:id]
+   *  members (#21). Only real groups (≥2 members) appear here. */
+  suggestionGroupOf: Map<string, { id: string; size: number }>;
+  /** Accept/reject EVERY member of a group as one atomic edit. */
+  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
   /** Accept / reject a suggestion card's suggestion. */
   onAcceptSuggestion: (card: SidebarCard) => void;
   onRejectSuggestion: (card: SidebarCard) => void;
@@ -127,6 +132,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReplyAndSeen,
     onSuggestEdit,
     onApplySuggestion,
+    suggestionGroupOf,
+    onGroupEdit,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
     onAcceptSuggestion,
@@ -619,6 +626,35 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                   no anchored span to apply to
                                 </p>
                               )}
+                              {(() => {
+                                // Member of a suggestion group (#21): offer the whole-set
+                                // controls — every member edit lands as ONE undoable apply.
+                                const g = suggestionGroupOf.get(c.id);
+                                if (!g) return null;
+                                return (
+                                  <div className="mt-1.5 flex items-center gap-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]">
+                                    <span title={`Suggestion group “${g.id}” — ${g.size} edits meant to be applied together`}>
+                                      ⛓ group · {g.size} edits
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); onGroupEdit(g.id, "accept"); }}
+                                      title={`Apply all ${g.size} edits in this group (one undo)`}
+                                      className="rounded-md bg-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--panel)]"
+                                    >
+                                      Apply all {g.size}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); onGroupEdit(g.id, "reject"); }}
+                                      title={`Reject all ${g.size} edits in this group (one undo)`}
+                                      className="rounded-md border border-[var(--line-strong)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-del)]"
+                                    >
+                                      Reject all
+                                    </button>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })()}

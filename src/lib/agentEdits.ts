@@ -15,6 +15,8 @@ import {
   applicableSuggestionIds,
   anchorHighlightFor,
   wrappableSpan,
+  suggestionGroupEdits,
+  applyRangedEdits,
 } from "./criticmarkup";
 import type { CommentToken, CommentThread } from "./criticmarkup";
 
@@ -83,11 +85,34 @@ export function addComment(content: string, phrase: string, author: string, text
 }
 
 /** Anchor a new SUGGEST: to the unique prose `span` — wraps it as
- *  `{==span==}{>>@author: SUGGEST: replacement<<}`. */
-export function addSuggestion(content: string, span: string, author: string, replacement: string): string {
+ *  `{==span==}{>>@author: SUGGEST: replacement<<}`. With `group`, the suggestion
+ *  is tagged `SUGGEST[g:<group>]:` so the whole set can be accepted as one unit. */
+export function addSuggestion(
+  content: string,
+  span: string,
+  author: string,
+  replacement: string,
+  group?: string,
+): string {
   const at = uniqueProseIndex(content, span);
-  const marker = `{==${span}==}` + formatComment(author, `SUGGEST: ${replacement}`);
+  const prefix = group ? `SUGGEST[g:${group}]: ` : "SUGGEST: ";
+  const marker = `{==${span}==}` + formatComment(author, prefix + replacement);
   return content.slice(0, at) + marker + content.slice(at + span.length);
+}
+
+/** Accept or reject EVERY member of suggestion group `groupId` in one write.
+ *  Throws when the group has no applyable members. Members that can't resolve
+ *  (or would contradict an earlier member on the same thread) are skipped. */
+export function resolveSuggestionGroup(
+  content: string,
+  groupId: string,
+  mode: "accept" | "reject",
+): { content: string; applied: number; skipped: number } {
+  const { edits, skipped } = suggestionGroupEdits(content, groupId, mode);
+  if (edits.length === 0) {
+    throw new AmbiguityError(`group "${groupId}" has no applyable suggestions`);
+  }
+  return { content: applyRangedEdits(content, edits), applied: edits.length, skipped };
 }
 
 /** Accept (keep replacement) or reject (keep span) the SUGGEST matched by `phrase`. */
