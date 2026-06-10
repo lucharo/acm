@@ -21,9 +21,8 @@ import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
 import { CriticMarkup } from "./criticMarkupParser";
-import { criticMarkupExtension, critCallbacksFacet, setCritHighlights, setInlineSuggestions } from "./criticMarkupView";
+import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
-import type { InlineSuggestion } from "../lib/criticmarkup";
 import { markdownPreview } from "./markdownPreview";
 import { bionicReading } from "./bionicView";
 import { acmTheme, pageTheme } from "./theme";
@@ -44,8 +43,6 @@ export interface UseCodeMirrorResult {
   applyRemote: (content: string) => void;
   /** Tell the editor which comment-anchor highlights are active / seen / busy (by `from`). */
   setHighlightState: (state: { active: number | null; seen: number[]; busy: number[] }) => void;
-  /** Push the anchored SUGGEST: pairs for the inline accept/reject layer. */
-  pushInlineSuggestions: (suggestions: InlineSuggestion[]) => void;
 }
 
 /** Marks transactions that originate from a remote/agent edit, so the update
@@ -217,12 +214,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     [],
   );
 
-  const pushInlineSuggestions = useCallback((suggestions: InlineSuggestion[]) => {
-    viewRef.current?.dispatch({ effects: setInlineSuggestions.of(suggestions) });
-  }, []);
-
   return useMemo(
-    () => ({ containerRef, viewRef, applyRemote, setHighlightState, pushInlineSuggestions }),
-    [applyRemote, setHighlightState, pushInlineSuggestions],
+    () => ({ containerRef, viewRef, applyRemote, setHighlightState }),
+    [applyRemote, setHighlightState],
   );
 }

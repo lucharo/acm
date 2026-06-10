@@ -31,6 +31,7 @@ import {
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Facet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { Extension, Range, RangeSet } from "@codemirror/state";
+import { inlineSuggestions } from "../lib/criticmarkup";
 import type { InlineSuggestion } from "../lib/criticmarkup";
 
 // ── Active / seen highlight state (App → editor bridge) ───────────────────────
@@ -54,23 +55,33 @@ export const critHighlightField = StateField.define<CritHighlightState>({
       if (e.is(setCritHighlights))
         return { active: e.value.active, seen: new Set(e.value.seen), busy: new Set(e.value.busy) };
     }
+    // Edits shift every anchor offset; map the keys through the change so the
+    // active/seen/busy styling stays glued to its highlight until App's next
+    // authoritative push (which re-derives the keys from fresh tokens).
+    if (tr.docChanged) {
+      const map = (p: number) => tr.changes.mapPos(p);
+      return {
+        active: value.active === null ? null : map(value.active),
+        seen: new Set([...value.seen].map(map)),
+        busy: new Set([...value.busy].map(map)),
+      };
+    }
     return value;
   },
 });
 
-// ── Inline-suggestion state (App → editor bridge) ─────────────────────────────
-// App computes the anchored SUGGEST: pairs with the lib (inlineSuggestions) and
-// pushes them here. The decoration layer stays presentational: it places marks /
-// widgets on REAL lezer nodes and only consults this list to CLASSIFY which
-// highlight is a struck suggestion-span and which comment is an inline suggestion.
-// (Same split as critHighlightField — node owns placement, bridge owns meaning —
-// so a one-frame-stale list can only mis-classify briefly, never mis-place.)
-export const setInlineSuggestions = StateEffect.define<InlineSuggestion[]>();
+// ── Inline-suggestion state (derived from the doc) ────────────────────────────
+// The anchored SUGGEST: pairs, recomputed from the document itself on every doc
+// change (the lib scan is one pure O(n) pass — cheap at document scale). The
+// decoration layer stays presentational: it places marks / widgets on REAL lezer
+// nodes and only consults this list to CLASSIFY which highlight is a struck
+// suggestion-span and which comment is an inline suggestion. Deriving in-state
+// (rather than a React round-trip) means classification can never lag the doc —
+// no one-frame flicker of suggestion widgets collapsing to plain dots.
 export const inlineSuggestionsField = StateField.define<InlineSuggestion[]>({
-  create: () => [],
+  create: (state) => inlineSuggestions(state.doc.toString()),
   update(value, tr) {
-    for (const e of tr.effects) if (e.is(setInlineSuggestions)) return e.value;
-    return value;
+    return tr.docChanged ? inlineSuggestions(tr.newDoc.toString()) : value;
   },
 });
 
