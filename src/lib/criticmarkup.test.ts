@@ -439,6 +439,83 @@ describe("scanTokens — no-swallow guard", () => {
   });
 });
 
+// ── nesting-aware highlights (anchors wrapping tracked changes) ───────────────
+// The editor's lezer grammar treats `{==`/`==}` as paired delimiters, so a
+// highlight can WRAP tracked changes — the GDocs converter and agent suggestions
+// both produce `{==a {++b++} c==}{>>…<<}`. scanTokens must agree, or the editor
+// renders an anchor the lib can't see and any SUGGEST on it is dead.
+
+describe("scanTokens — highlight wrapping tracked changes", () => {
+  const text =
+    "The {==span with {++inserted++} and {--deleted--} bits==}{>>@claude: SUGGEST: span with mixed edits<<} is complex.";
+
+  test("emits the anchor highlight AND the contained tracked changes", () => {
+    const tokens = scanTokens(text);
+    expect(tokens.map((t) => t.type)).toEqual(["highlight", "insert", "delete", "comment"]);
+    const [hl, ins, del] = tokens;
+    expect(hl.raw).toBe("{==span with {++inserted++} and {--deleted--} bits==}");
+    if (hl.type === "highlight")
+      expect(hl.inner).toBe("span with {++inserted++} and {--deleted--} bits");
+    // Containment: the tracked changes live INSIDE the highlight's range.
+    expect(ins.from).toBeGreaterThan(hl.from);
+    expect(del.to).toBeLessThan(hl.to);
+    // Raw-slice invariant still holds for every token.
+    for (const t of tokens) expect(text.slice(t.from, t.to)).toBe(t.raw);
+  });
+
+  test("a SUGGEST on such an anchor is applyable (inline + sidebar agree)", () => {
+    const sugs = inlineSuggestions(text);
+    expect(sugs).toHaveLength(1);
+    expect(sugs[0].replacement).toBe("span with mixed edits");
+    expect(applicableSuggestionIds(text).has(sugs[0].commentId)).toBe(true);
+  });
+
+  test("accept replaces the whole span; reject keeps it verbatim (pending edits intact)", () => {
+    const comment = scanTokens(text).find(isComment) as CommentToken;
+    expect(applySuggestionEdit(text, comment)).toEqual({
+      from: 4,
+      to: 102,
+      insert: "span with mixed edits",
+    });
+    expect(rejectSuggestionEdit(text, comment)).toEqual({
+      from: 4,
+      to: 102,
+      insert: "span with {++inserted++} and {--deleted--} bits",
+    });
+  });
+
+  test("a `==}` inside a nested construct body cannot close the highlight early", () => {
+    const tricky = "x {==a {++b==}c++} d==} y";
+    const tokens = scanTokens(tricky);
+    expect(tokens.map((t) => t.type)).toEqual(["highlight", "insert"]);
+    expect(tokens[0].raw).toBe("{==a {++b==}c++} d==}");
+    expect((tokens[1] as { inner: string }).inner).toBe("b==}c");
+  });
+
+  test("a half-typed nested open is literal text, the highlight still closes", () => {
+    const tokens = scanTokens("x {==a {++half b==} y");
+    expect(tokens.map((t) => t.type)).toEqual(["highlight"]);
+    if (tokens[0].type === "highlight") expect(tokens[0].inner).toBe("a {++half b");
+  });
+
+  test("nested {== or {>> keeps the flat stacked-thread model (outer unparsed)", () => {
+    // Stacked GDocs thread: inner highlight + comments tokenize; outer is gap noise.
+    const stacked = "lead {=={==span==}{>>@a: parent<<}==}{>>@b: reply<<} tail";
+    expect(scanTokens(stacked).map((t) => t.type)).toEqual(["highlight", "comment", "comment"]);
+  });
+
+  test("a stray {== never swallows a later real anchor", () => {
+    const tokens = scanTokens("stray {== text. Later {==real==}{>>@c: x<<} end");
+    expect(tokens.map((t) => t.raw)).toEqual(["{==real==}", "{>>@c: x<<}"]);
+  });
+
+  test("highlight body still cannot cross a blank line", () => {
+    const tokens = scanTokens("{==spans a {++x++} break\n\nand on==} y");
+    // The highlight is unparsed (single-block); only the inner insert tokenizes.
+    expect(tokens.map((t) => t.type)).toEqual(["insert"]);
+  });
+});
+
 describe("groupThreads", () => {
   test("adjacent comments form one thread; spaced-out ones stay separate", () => {
     const text = "x {>>@a: one<<}{>>@b: two<<} y {>>@c: far<<} z";

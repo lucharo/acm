@@ -43,6 +43,7 @@ const SUBSTITUTE_ARROW = "~>";
 // not contain another construct's opening delimiter. Both guards keep scanTokens
 // in agreement with the editor's block-bounded lezer parser and prevent a stray /
 // half-typed open from swallowing a later construct (and the prose between it).
+// (Highlights are the exception — they are nesting-aware, see matchHighlightAt.)
 const BLANK_LINE = /\n[ \t]*\n/;
 const NESTED_OPEN = /\{(\+\+|--|~~|==|>>)/;
 
@@ -55,8 +56,12 @@ const NESTED_OPEN = /\{(\+\+|--|~~|==|>>)/;
  *   • `@author:` prefixes inside comments (author + body split out)
  *   • dangling / half-typed markup (`{++` with no close) → simply not matched
  *   • delimiter chars appearing in body text (non-greedy, bounded matching)
- * Tokens must NOT overlap each other in their [from,to) ranges (the markup
- * constructs are themselves non-overlapping in the linear text).
+ * Tokens do not overlap, with ONE deliberate exception: a highlight anchor may
+ * WRAP tracked changes (`{==a {++b++} c==}` — the GDocs converter and agent
+ * suggestions both produce this), and then the nested insert/delete/substitute
+ * tokens are ALSO emitted, contained inside the highlight's [from,to). Consumers
+ * that walk suggestions or comments see exactly the tokens they always did; the
+ * containing highlight is additive (it's what anchors a SUGGEST to the span).
  */
 export function scanTokens(text: string): CritToken[] {
   const tokens: CritToken[] = [];
@@ -78,7 +83,10 @@ export function scanTokens(text: string): CritToken[] {
 
     tokens.push(buildToken(String(index), match));
     index += 1;
-    i = match.to; // continue strictly after this match — no overlap
+    // A highlight wrapping tracked changes: re-enter its inner so the nested
+    // {++/--/~~} constructs get their own (contained) tokens too. Everything
+    // else continues strictly after the match — no overlap.
+    i = match.type === "highlight" && NESTED_OPEN.test(match.inner) ? match.from + 3 : match.to;
   }
 
   return tokens;
@@ -103,6 +111,10 @@ function matchConstructAt(text: string, from: number): ConstructMatch | null {
     const openAt = from + 1; // just past `{`
     if (!text.startsWith(open, openAt)) continue;
 
+    // Highlights are nesting-aware (they anchor comments and may wrap tracked
+    // changes) — they get their own matcher that mirrors the lezer grammar.
+    if (type === "highlight") return matchHighlightAt(text, from);
+
     const innerStart = openAt + open.length;
     const closeMarker = close + "}";
     // Earliest close at/after innerStart → non-greedy, body delimiters safe.
@@ -126,6 +138,55 @@ function matchConstructAt(text: string, from: number): ConstructMatch | null {
     return { type, from, to, raw: text.slice(from, to), inner };
   }
   return null;
+}
+
+/**
+ * Highlight-specific matcher: NESTING-AWARE, mirroring the editor's lezer grammar
+ * (where `{==`/`==}` are paired delimiters, so an anchor may WRAP tracked changes:
+ * `{==span with {++ins++} and {--del--} bits==}`). The generic NESTED_OPEN guard
+ * would drop such an anchor entirely — the editor would render a highlight the lib
+ * can't see, leaving any `SUGGEST:` comment on it dead (no inline render, no Apply).
+ * Rules:
+ *   • a COMPLETE nested insert/delete/substitution is opaque — skipped whole, so a
+ *     `==}` inside its body can't close the highlight early;
+ *   • a nested `{==` or `{>>` bails (unparsed), preserving the FLAT stacked-thread
+ *     model where outer wrappers are gap noise and inner comments stay tokens;
+ *   • a half-typed nested open is literal text (same as lezer, whose failed inline
+ *     parse simply doesn't consume);
+ *   • single-block: a blank line before the close → no match.
+ */
+function matchHighlightAt(text: string, from: number): ConstructMatch | null {
+  const innerStart = from + 3; // past `{==`
+  for (let i = innerStart; i < text.length; ) {
+    const ch = text[i];
+    if (ch === "=" && text.startsWith("==}", i)) {
+      const to = i + 3;
+      return {
+        type: "highlight",
+        from,
+        to,
+        raw: text.slice(from, to),
+        inner: text.slice(innerStart, i),
+      };
+    }
+    if (ch === "\n") {
+      let j = i + 1;
+      while (j < text.length && (text[j] === " " || text[j] === "\t")) j += 1;
+      if (j < text.length && text[j] === "\n") return null; // crossed a blank line
+      i = j;
+      continue;
+    }
+    if (ch === "{") {
+      if (text.startsWith("{==", i) || text.startsWith("{>>", i)) return null;
+      const nested = matchConstructAt(text, i);
+      if (nested) {
+        i = nested.to;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return null; // dangling open
 }
 
 function buildToken(id: string, m: ConstructMatch): CritToken {
