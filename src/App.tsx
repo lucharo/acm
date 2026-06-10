@@ -295,6 +295,9 @@ function Workspace({
   const [hasSelection, setHasSelection] = useState(false);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  // Whether the captured selection can anchor as a `{==span==}` (vs falling back to
+  // a point comment) — surfaced in the composer so the fallback is never silent.
+  const [composerAnchored, setComposerAnchored] = useState(true);
   const commentAnchor = useRef<number | null>(null);
   // Full selection range captured when the composer opens, so a comment can anchor to
   // the SPAN (wrapping it in `{==…==}`), not just a point — set in openComposer.
@@ -747,6 +750,9 @@ function Workspace({
     if (sel.empty) return;
     commentAnchor.current = sel.to;
     commentRange.current = { from: sel.from, to: sel.to };
+    // Tell the composer up front whether this selection anchors as a span or will
+    // fall back to a point comment (selection cuts markup / crosses a paragraph).
+    setComposerAnchored(wrappableSpan(v.state.doc.toString(), sel.from, sel.to));
     setDraft("");
     setComposing(true);
   }, [editor.viewRef]);
@@ -999,6 +1005,7 @@ function Workspace({
         wordCount={wordCount}
         canComment={hasSelection}
         composing={composing}
+        composerAnchored={composerAnchored}
         draft={draft}
         onDraftChange={setDraft}
         onOpenComposer={openComposer}
@@ -1143,6 +1150,7 @@ interface HeaderProps {
   wordCount: number;
   canComment: boolean;
   composing: boolean;
+  composerAnchored: boolean;
   draft: string;
   onDraftChange: (v: string) => void;
   onOpenComposer: () => void;
@@ -1171,6 +1179,7 @@ function Header(props: HeaderProps) {
     wordCount,
     canComment,
     composing,
+    composerAnchored,
     draft,
     onDraftChange,
     onOpenComposer,
@@ -1236,6 +1245,17 @@ function Header(props: HeaderProps) {
               placeholder="Comment on selection…  (⇧↵ for a new line)"
               className="block max-h-32 w-60 resize-none overflow-y-auto rounded border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
             />
+            {!composerAnchored && (
+              /* The selection can't be wrapped as a {==span==} (it cuts markup or
+                 crosses a paragraph) — disclose the point fallback instead of
+                 silently degrading. */
+              <span
+                className="max-w-24 text-[10px] italic leading-tight text-[var(--muted)]"
+                title="This selection crosses markup or a paragraph break, so the comment will attach at its end point instead of anchoring the span."
+              >
+                attaches at a point — selection can't anchor
+              </span>
+            )}
             <button
               type="button"
               onClick={onPostComment}
