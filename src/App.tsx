@@ -32,8 +32,7 @@ import {
   healNestedComments,
   healOneNestedComment,
   nestedCommentIssues,
-  unparsedCommentCount,
-  firstUnparsedCommentStart,
+  validateMarkup,
   clampAnchorOutsideComments,
   suggestionThreadEdit,
   inlineSuggestions,
@@ -380,9 +379,10 @@ function Workspace({
   // (nested `{>>…{>>…<<}…<<}`) — they render raw and split words. Each is
   // auto-healable (pull the inner one out into an adjacent comment).
   const healIssues = useMemo(() => nestedCommentIssues(doc), [doc]);
-  // ALL malformed comments (nested OR broken/missing close OR dangling) — drives
-  // the warning marker. healIssues is the auto-healable (nested) subset.
-  const unparsedCount = useMemo(() => unparsedCommentCount(doc), [doc]);
+  // ALL markup defects — every delimiter that renders raw (leaking highlights,
+  // dangling opens, stray closes, malformed comments), as positioned diagnostics
+  // (#18). Drives the warning pill; healIssues is the auto-healable subset.
+  const diagnostics = useMemo(() => validateMarkup(doc), [doc]);
 
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that
@@ -610,12 +610,13 @@ function Workspace({
     [editor.viewRef, tokens, threads, focusThread],
   );
 
-  // Jump to the first malformed comment (nested, broken-close, or dangling).
+  // Jump to the first markup defect (leaking highlight, stray close, malformed
+  // comment — anything the validator flags).
   const goToFirstIssue = useCallback(() => {
     const v = editor.viewRef.current;
     if (!v) return;
-    const pos = firstUnparsedCommentStart(v.state.doc.toString());
-    if (pos != null) v.dispatch({ effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+    const first = validateMarkup(v.state.doc.toString())[0];
+    if (first) v.dispatch({ effects: EditorView.scrollIntoView(first.from, { y: "center" }) });
   }, [editor.viewRef]);
 
   // Auto-heal: flatten every nested comment into adjacent comments (rejoining the
@@ -1125,14 +1126,14 @@ function Workspace({
         <HealReview
           content={doc}
           issues={healIssues}
-          brokenTotal={unparsedCount}
+          brokenTotal={diagnostics.length}
           onHealOne={healOne}
           onHealAll={healAll}
           onJump={jumpTo}
           onJumpManual={goToFirstIssue}
           onClose={() => setReviewOpen(false)}
         />
-      ) : unparsedCount > 0 ? (
+      ) : diagnostics.length > 0 ? (
         // Calm, honest status pill (amber = recoverable, NOT the destructive red).
         // Splits the count: auto-fixable vs needs-you. "Review" opens the per-issue
         // walkthrough rather than blindly healing.
@@ -1140,7 +1141,7 @@ function Workspace({
           type="button"
           onClick={() => setReviewOpen(true)}
           className="fixed bottom-3 right-3 z-40 flex items-center gap-2 rounded-full border border-[var(--warn)] bg-[var(--warn-bg)] py-1.5 pl-3 pr-3.5 text-[12px] shadow-lg transition-transform hover:scale-[1.03]"
-          title="Some comments can't display (a comment landed inside another, or a broken close). Click to review and fix them one at a time."
+          title="Some markup can't display (a leaking highlight, a stray close, or a comment inside another). Click to review and fix."
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -1148,11 +1149,11 @@ function Workspace({
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
           <span className="font-medium text-[var(--ink)]">
-            {unparsedCount} comment{unparsedCount === 1 ? "" : "s"} can’t display
+            {diagnostics.length} markup issue{diagnostics.length === 1 ? "" : "s"} render raw
             <span className="font-normal text-[var(--muted)]">
               {" — "}
               {healIssues.length} auto-fixable
-              {unparsedCount - healIssues.length > 0 ? `, ${unparsedCount - healIssues.length} need you` : ""}
+              {diagnostics.length - healIssues.length > 0 ? `, ${diagnostics.length - healIssues.length} need you` : ""}
             </span>
           </span>
           <span className="rounded-full bg-[var(--warn)] px-2 py-0.5 text-[11px] font-semibold text-[var(--panel)]">Review</span>

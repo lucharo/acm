@@ -19,6 +19,7 @@ import {
   rejectSuggestionEdit,
   inlineSuggestions,
   applicableSuggestionIds,
+  validateMarkup,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -527,6 +528,76 @@ describe("scanTokens — highlight wrapping tracked changes", () => {
     const tokens = scanTokens("{==spans a {++x++} break\n\nand on==} y");
     // The highlight is unparsed (single-block); only the inner insert tokenizes.
     expect(tokens.map((t) => t.type)).toEqual(["insert"]);
+  });
+});
+
+// ── validateMarkup (#18) — positioned diagnostics for everything that leaks ───
+
+describe("validateMarkup", () => {
+  test("clean documents produce ZERO diagnostics (incl. stacked threads + wrapped anchors)", () => {
+    const clean = [
+      "plain prose, no markup at all",
+      "a {==x==}{>>@l: note<<} b {++ins++} c {--del--} d {~~o~>n~~} e",
+      "stacked {=={==x==}{>>@a: p<<}==}{>>@b: r<<} thread",
+      "wrapped {==a {++b++} and {--c--} d==}{>>@x: SUGGEST: e<<} anchor",
+      "gap {==x==} {>>@l: spaced<<} tolerance",
+      "a {x} brace and a ~> arrow in prose",
+    ];
+    for (const c of clean) expect(validateMarkup(c)).toEqual([]);
+  });
+
+  test("dangling opens and stray closes are flagged at the delimiter", () => {
+    const d1 = validateMarkup("a {++ never closed");
+    expect(d1).toHaveLength(1);
+    expect(d1[0].kind).toBe("dangling-open");
+    expect(d1[0].from).toBe(2);
+
+    const d2 = validateMarkup("orphan ++} here and ==} there");
+    expect(d2.map((d) => d.kind)).toEqual(["stray-close", "stray-close"]);
+  });
+
+  test("a multi-paragraph highlight leaks: open flagged at the break, close flagged stray", () => {
+    const d = validateMarkup("{==spans\n\nparagraphs==} end");
+    expect(d.map((x) => x.kind)).toEqual(["dangling-open", "stray-close"]);
+    expect(d[0].from).toBe(0); // the {==
+  });
+
+  test("nested comment flagged once, aligned with the heal flow", () => {
+    const text = "host {>>@a: outer {>>@b: inner<<} more<<} tail";
+    const d = validateMarkup(text);
+    expect(d).toHaveLength(1);
+    expect(d[0].kind).toBe("nested-comment");
+    expect(d[0].from).toBe(nestedCommentIssues(text)[0].from);
+  });
+
+  test("arrowless substitution: ONE diagnostic, close not double-flagged", () => {
+    const d = validateMarkup("a {~~just old~~} b");
+    expect(d).toHaveLength(1);
+    expect(d[0].kind).toBe("unparsed");
+  });
+
+  test("a comment body containing markup delimiters is flagged (it won't parse)", () => {
+    const d = validateMarkup("note {>>@a: see {++this++} bit<<} end");
+    // The comment open leaks; the inner insert parses on its own; the comment's
+    // orphaned <<} is flagged stray.
+    expect(d.map((x) => x.kind)).toEqual(["unparsed", "stray-close"]);
+  });
+
+  test("the seed doc's known leaks are all caught (warning no longer undercounts)", () => {
+    const path = join(import.meta.dir, "..", "..", "seed", "sample-essay.md");
+    const content = readFileSync(path, "utf8");
+    const d = validateMarkup(content);
+    // ~6 multi-paragraph anchors + 2 comments nested inside insertions (+ their
+    // orphaned closes). Pin the observed count so a parser change that silently
+    // alters leak detection fails loudly.
+    expect(d).toHaveLength(22);
+    expect(d.filter((x) => x.kind === "dangling-open")).toHaveLength(8);
+    // Every diagnostic points at a real delimiter.
+    for (const x of d) {
+      expect(["{++", "{--", "{~~", "{==", "{>>", "++}", "--}", "~~}", "==}", "<<}"]).toContain(
+        content.slice(x.from, x.to),
+      );
+    }
   });
 });
 

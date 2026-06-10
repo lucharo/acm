@@ -299,6 +299,149 @@ export function clampAnchorOutsideComments(content: string, at: number): number 
   return enclosing ? enclosing.to : at;
 }
 
+// ── Markup validator (#18): positioned diagnostics for everything that leaks ──
+// A single left-to-right pass with a highlight-delimiter stack, mirroring how the
+// EDITOR actually resolves markup — so a stacked thread (`{=={==x==}{>>a<<}==}…`)
+// and an anchor wrapping tracked changes are CLEAN, while anything that renders
+// raw gets a diagnostic at the exact leaking delimiter. Replaces the comment-only
+// warning count (which undercounted: leaking highlights were invisible to it).
+
+export interface MarkupDiagnostic {
+  from: number;
+  to: number; // end of the offending delimiter
+  kind: "dangling-open" | "stray-close" | "nested-comment" | "unparsed";
+  message: string;
+}
+
+const SIMPLE_CLOSE: Record<string, string> = { "{++": "++}", "{--": "--}", "{~~": "~~}" };
+const STRAY_CLOSES = ["++}", "--}", "~~}", "<<}"];
+
+/** Offset of the end of the current paragraph (the next blank line), or text end. */
+function paragraphEnd(text: string, from: number): number {
+  BLANK_LINE.lastIndex = 0;
+  const m = BLANK_LINE.exec(text.slice(from));
+  return m ? from + m.index : text.length;
+}
+
+export function validateMarkup(text: string): MarkupDiagnostic[] {
+  const out: MarkupDiagnostic[] = [];
+  const hlStack: number[] = [];
+  const flushHlStack = () => {
+    while (hlStack.length) {
+      const p = hlStack.pop()!;
+      out.push({
+        from: p,
+        to: p + 3,
+        kind: "dangling-open",
+        message: "highlight doesn't close in this paragraph — its {== renders raw",
+      });
+    }
+  };
+
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+
+    if (ch === "\n") {
+      // Paragraph break: no construct survives it — any open highlight leaks.
+      let j = i + 1;
+      while (j < text.length && (text[j] === " " || text[j] === "\t")) j += 1;
+      if (j < text.length && text[j] === "\n") flushHlStack();
+      i += 1;
+      continue;
+    }
+
+    if (ch === "{") {
+      const open3 = text.slice(i, i + 3);
+
+      if (open3 === "{>>") {
+        const s = scanComment(text, i);
+        if (!s) {
+          out.push({ from: i, to: i + 3, kind: "dangling-open", message: "comment never closes (missing <<})" });
+          i += 3;
+          continue;
+        }
+        const raw = text.slice(i, s.end);
+        if (s.nested) {
+          // Healable: the per-issue review (HealReview) can pull the inner one out.
+          out.push({ from: i, to: i + 3, kind: "nested-comment", message: "a comment is nested inside this comment — auto-fixable" });
+          i = s.end;
+          continue;
+        }
+        if (BLANK_LINE.test(raw)) {
+          out.push({ from: i, to: i + 3, kind: "unparsed", message: "comment crosses a paragraph break — renders raw" });
+          i += 3; // scan the body so inner constructs/closes get their own diagnostics
+          continue;
+        }
+        if (NESTED_OPEN.test(raw.slice(3, -3))) {
+          out.push({ from: i, to: i + 3, kind: "unparsed", message: "comment body contains markup delimiters — won't parse" });
+          i += 3;
+          continue;
+        }
+        i = s.end; // clean comment
+        continue;
+      }
+
+      if (open3 in SIMPLE_CLOSE) {
+        const m = matchConstructAt(text, i);
+        if (m) {
+          i = m.to; // parses — nothing inside a simple construct can leak
+          continue;
+        }
+        const close = SIMPLE_CLOSE[open3];
+        const closeAt = text.indexOf(close, i + 3);
+        const blockEnd = paragraphEnd(text, i);
+        if (closeAt === -1 || closeAt >= blockEnd) {
+          out.push({ from: i, to: i + 3, kind: "dangling-open", message: `${open3} never closes in this paragraph` });
+          i += 3;
+          continue;
+        }
+        if (open3 === "{~~" && !text.slice(i + 3, closeAt).includes(SUBSTITUTE_ARROW)) {
+          // One diagnostic for the whole arrowless substitution; consume it so the
+          // ~~} isn't double-flagged.
+          out.push({ from: i, to: i + 3, kind: "unparsed", message: "substitution is missing the ~> arrow — renders raw" });
+          i = closeAt + close.length;
+          continue;
+        }
+        // Close exists but the body swallows another construct's open — the open
+        // renders raw; the inner construct (and the orphaned close) scan on their own.
+        out.push({ from: i, to: i + 3, kind: "unparsed", message: `${open3} contains another construct's opening delimiter — won't parse` });
+        i += 3;
+        continue;
+      }
+
+      if (open3 === "{==") {
+        hlStack.push(i);
+        i += 3;
+        continue;
+      }
+
+      i += 1;
+      continue;
+    }
+
+    if (ch === "=" && text.startsWith("==}", i)) {
+      if (hlStack.length) hlStack.pop();
+      else out.push({ from: i, to: i + 3, kind: "stray-close", message: "==} with no matching {== — renders raw" });
+      i += 3;
+      continue;
+    }
+
+    const stray = STRAY_CLOSES.find((c) => text.startsWith(c, i));
+    if (stray) {
+      out.push({ from: i, to: i + 3, kind: "stray-close", message: `${stray} with no matching open — renders raw` });
+      i += 3;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  flushHlStack(); // anything still open at EOF leaks
+  out.sort((a, b) => a.from - b.from);
+  return out;
+}
+
 /**
  * Whether `[from,to)` can be wrapped as a `{==span==}` anchor without corrupting
  * markup. THE shared gate for every span-wrapping writer (the UI's add-comment
