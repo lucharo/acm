@@ -38,3 +38,10 @@ typecheck:
 # Compile the standalone `acm` binary
 bin:
     bun run build:bin
+
+# Install the global `acm` CLI: link this checkout's source onto PATH (bun link)
+# and build the SPA it serves. After pulling/merging changes, `just install`
+# again (or just `just build`) so the served UI matches the source.
+install:
+    bun run build
+    bun link
