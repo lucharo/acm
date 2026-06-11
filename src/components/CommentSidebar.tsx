@@ -283,8 +283,11 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         // needs to reach the lowest card. RESET to 0 with no visible cards (e.g.
         // everything seen), so stale reach never lingers as a blank gap.
         if (onContentExtent) {
-          const overflow = Math.max(0, Math.ceil(maxBottom - lastLineBottom) + 24);
-          onContentExtent(sorted.length > 0 && maxBottom > lastLineBottom ? overflow : 0);
+          onContentExtent(
+            sorted.length > 0 && maxBottom > lastLineBottom
+              ? Math.ceil(maxBottom - lastLineBottom) + 24
+              : 0,
+          );
         }
         syncTransform();
       },

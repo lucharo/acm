@@ -171,7 +171,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         // trapped in tracked changes, multi-block anchors. Snapshot-first (below).
         const beforeCount = validateMarkup(before).length;
         after = healDocument(before);
-        note = `healed ${beforeCount - validateMarkup(after).length} of ${beforeCount} markup issues (${validateMarkup(after).length} remain)`;
+        const remaining = validateMarkup(after).length;
+        note = `healed ${beforeCount - remaining} of ${beforeCount} markup issues (${remaining} remain)`;
         break;
       }
       case "wrap": {

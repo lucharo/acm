@@ -785,9 +785,13 @@ export function countWords(text: string): number {
  * soft-wrapped paragraph lines), plus the page total. Word counting matches {@link countWords} (comments
  * and deletions aren't prose), applied per line.
  */
+/** Accepted-prose words per A4 page (11pt single-spaced ballpark) — the one
+ *  pagination constant; UI copy derives from it too. */
+export const WORDS_PER_A4_PAGE = 550;
+
 export function pageBreakLines(
   text: string,
-  wordsPerPage = 550,
+  wordsPerPage = WORDS_PER_A4_PAGE,
 ): { breaks: { line: number; frac: number }[]; pages: number } {
   // countWords is applied PER LINE below, but comments/deletions may span lines
   // (multi-line reply bodies) — a per-line regex can't strip an unclosed half and

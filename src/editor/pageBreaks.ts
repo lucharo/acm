@@ -19,7 +19,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
 import type { Extension, Text } from "@codemirror/state";
-import { pageBreakLines } from "../lib/criticmarkup";
+import { pageBreakLines, WORDS_PER_A4_PAGE } from "../lib/criticmarkup";
 
 /** The spacer between pages: a slim gap with a dashed rule + "p. N" label. */
 class PageGapWidget extends WidgetType {
@@ -111,7 +111,7 @@ class PageChipPlugin {
     }
     const text = `p. ${Math.min(page, pages)} / ${pages}`;
     if (this.chip.textContent !== text) this.chip.textContent = text;
-    this.chip.title = `≈ ${pages} A4 pages at ~550 words/page (standard 11pt single-spaced)`;
+    this.chip.title = `≈ ${pages} A4 pages at ~${WORDS_PER_A4_PAGE} words/page (standard 11pt single-spaced)`;
   }
 
   destroy() {
