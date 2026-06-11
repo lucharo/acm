@@ -26,7 +26,11 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Record this process as the ACM serving `doc` on `port` (prunes dead entries). */
+/** Record this process as the ACM serving `doc` on `port` (prunes dead entries).
+ *  KNOWN, tolerated race: concurrent read-modify-writes of instances.json can
+ *  drop an entry (no file lock). Liveness is the authority, not the file — a
+ *  lost entry re-registers on the next boot and readers verify pid + port
+ *  anyway, so the worst case is a transient "no document" message. */
 export async function registerInstance(port: number, doc: string): Promise<void> {
   const all = await readConfig<Record<string, InstanceEntry>>(FILE, {});
   for (const [key, e] of Object.entries(all)) {
@@ -48,4 +52,17 @@ export async function liveInstances(): Promise<InstanceEntry[]> {
   return Object.values(all)
     .filter((e) => isAlive(e.pid))
     .sort((a, b) => a.port - b.port);
+}
+
+/** Second-factor liveness: a recycled PID can impersonate a dead server, but it
+ *  won't answer ACM's /api/doc on the registered port. Short timeout — local. */
+export async function probeInstance(e: InstanceEntry): Promise<boolean> {
+  try {
+    const res = await fetch(`http://localhost:${e.port}/api/doc`, {
+      signal: AbortSignal.timeout(400),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

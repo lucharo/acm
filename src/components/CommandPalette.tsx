@@ -61,7 +61,13 @@ export default function CommandPalette({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+              // Own the toggle while open — don't let the window-level opener
+              // also fire (fragile double-handling otherwise).
+              e.preventDefault();
+              e.stopPropagation();
+              onClose();
+            } else if (e.key === "Escape") {
               e.preventDefault();
               onClose();
             } else if (e.key === "ArrowDown") {

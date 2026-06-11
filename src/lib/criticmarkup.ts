@@ -312,9 +312,9 @@ export function clampAnchorOutsideComments(content: string, at: number): number 
 //     comments move to just AFTER the wrapper, where adjacency threads them onto
 //     it; the wrapper then parses.
 
-/** Position just past the matching `==}` for the `{==` at `openPos`, scanning
- *  nesting-aware and treating complete constructs as opaque (a `==}` inside a
- *  comment body can't match). -1 when the highlight never closes. */
+/** Position OF the matching `==}` for the `{==` at `openPos` (not past it),
+ *  scanning nesting-aware and treating complete constructs as opaque (a `==}`
+ *  inside a comment body can't match). -1 when the highlight never closes. */
 function findHighlightClose(text: string, openPos: number): number {
   let depth = 1;
   let i = openPos + 3;
@@ -357,8 +357,7 @@ function healOneMultiBlockAnchor(content: string): string | null {
     const close = findHighlightClose(content, i);
     if (close < 0) continue; // truly dangling — not mechanically healable
     const inner = content.slice(i + 3, close);
-    BLANK_LINE.lastIndex = 0;
-    if (!BLANK_LINE.test(inner)) continue; // single-block — fine
+    if (!BLANK_LINE.test(inner)) continue; // single-block — fine (non-global regex, stateless)
     // Start of the close's block: just past the LAST blank line before the close…
     let blockStart = i + 3;
     const re = /\n[ \t]*\n/g;
@@ -439,6 +438,8 @@ const NON_PARAGRAPH_LINE =
 /** Greedy refill of one paragraph block. Break points are whitespace runs OUTSIDE
  *  any CriticMarkup construct; whitespace inside a construct (incl. newlines in a
  *  comment body) is preserved verbatim as part of its atom. */
+const WS = /\s/;
+
 function wrapParagraph(para: string, width: number): string {
   const tokens = scanTokens(para);
   let t = 0; // tokens are sorted by from; advance a cursor instead of re-scanning
@@ -447,7 +448,7 @@ function wrapParagraph(para: string, width: number): string {
   for (let i = 0; i < para.length; i++) {
     while (t < tokens.length && tokens[t].to <= i) t++;
     const insideToken = t < tokens.length && i >= tokens[t].from && i < tokens[t].to;
-    if (!insideToken && /\s/.test(para[i])) {
+    if (!insideToken && WS.test(para[i])) {
       if (cur) {
         atoms.push(cur);
         cur = "";
@@ -484,7 +485,7 @@ export function hardWrap(text: string, width = 88): string {
     }
   };
   for (const line of lines) {
-    if (/^(```|~~~)/.test(line.trim())) {
+    if (/^ {0,3}(```|~~~)/.test(line)) {
       flush();
       inFence = !inFence;
       out.push(line);
@@ -520,7 +521,6 @@ const STRAY_CLOSES = ["++}", "--}", "~~}", "<<}"];
 
 /** Offset of the end of the current paragraph (the next blank line), or text end. */
 function paragraphEnd(text: string, from: number): number {
-  BLANK_LINE.lastIndex = 0;
   const m = BLANK_LINE.exec(text.slice(from));
   return m ? from + m.index : text.length;
 }
@@ -789,7 +789,14 @@ export function pageBreakLines(
   text: string,
   wordsPerPage = 550,
 ): { breaks: { line: number; frac: number }[]; pages: number } {
-  const lines = text.split("\n");
+  // countWords is applied PER LINE below, but comments/deletions may span lines
+  // (multi-line reply bodies) — a per-line regex can't strip an unclosed half and
+  // would count raw delimiter fragments as words. Blank them out FIRST, replacing
+  // every non-newline char with a space so line indices stay aligned.
+  const blanked = text.replace(/\{>>[\s\S]*?<<\}|\{--[\s\S]*?--\}/g, (m) =>
+    m.replace(/[^\n]/g, " "),
+  );
+  const lines = blanked.split("\n");
   const breaks: { line: number; frac: number }[] = [];
   let words = 0;
   let nextBoundary = wordsPerPage;
@@ -798,7 +805,9 @@ export function pageBreakLines(
     if (w === 0) continue;
     const before = words;
     words += w;
-    while (words >= nextBoundary) {
+    // STRICTLY greater: a boundary landing exactly on the doc's last word fills
+    // the page without starting a new one (no phantom trailing divider).
+    while (words > nextBoundary) {
       // The boundary falls WITHIN this (possibly paragraph-long, soft-wrapped)
       // line — record how far through, so the renderer can interpolate the
       // divider inside the line's rendered block instead of snapping to its end.
@@ -889,30 +898,6 @@ export function firstNestedCommentStart(content: string): number | null {
 /** Whether the document has any comment nested inside another (auto-healable). */
 export function hasNestedComments(content: string): boolean {
   return firstNestedCommentStart(content) !== null;
-}
-
-/**
- * Count of malformed comment openers: every `{>>` that scanTokens did NOT resolve
- * into a comment token — i.e. nested-in-another, broken/missing `<<}` close, or
- * dangling. Drives the warning marker (broader than just nesting).
- */
-export function unparsedCommentCount(content: string): number {
-  const raw = (content.match(/\{>>/g) ?? []).length;
-  const parsed = scanTokens(content).filter((t) => t.type === "comment").length;
-  return Math.max(0, raw - parsed);
-}
-
-/** Offset of the first `{>>` that didn't parse into a comment token (jump target). */
-export function firstUnparsedCommentStart(content: string): number | null {
-  const parsedStarts = new Set(
-    scanTokens(content)
-      .filter((t) => t.type === "comment")
-      .map((t) => t.from),
-  );
-  for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
-    if (!parsedStarts.has(i)) return i;
-  }
-  return null;
 }
 
 /** List each malformed (nested) comment: its offset + a short preview of the text

@@ -277,7 +277,7 @@ function Workspace({
   // last line stay reachable — reported by the sidebar as overflow past the last
   // text line. 0 = no overflow. Padding, not content min-height: the page sheet
   // must never stretch past the prose (the old approach left a huge white gap).
-  const [contentMin, setContentMin] = useState(0);
+  const [scrollReach, setScrollReach] = useState(0);
 
   // Hide the right-margin comment column when the reading area is too narrow to
   // fit both the prose and the ~320px comments — below this the editor is
@@ -389,14 +389,14 @@ function Workspace({
   const healIssues = useMemo(() => nestedCommentIssues(doc), [doc]);
   // ALL markup defects — every delimiter that renders raw (leaking highlights,
   // dangling opens, stray closes, malformed comments), as positioned diagnostics
-  // (#18). Drives the warning pill; healIssues is the auto-healable subset.
-  const diagnostics = useMemo(() => validateMarkup(doc), [doc]);
-  // How many of those one click can repair: simulate the full heal and diff the
-  // counts (covers nested comments, trapped comments, multi-block anchors).
-  const fixableCount = useMemo(
-    () => (diagnostics.length === 0 ? 0 : diagnostics.length - validateMarkup(healDocument(doc)).length),
-    [doc, diagnostics.length],
-  );
+  // (#18) — plus how many of those one click can repair (simulate the full heal,
+  // diff the counts). ONE memo so a defect-carrying doc pays the heal+validate
+  // simulation once per doc change, not once per derived value.
+  const { diagnostics, fixableCount } = useMemo(() => {
+    const diags = validateMarkup(doc);
+    if (diags.length === 0) return { diagnostics: diags, fixableCount: 0 };
+    return { diagnostics: diags, fixableCount: diags.length - validateMarkup(healDocument(doc)).length };
+  }, [doc]);
 
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that
@@ -460,6 +460,9 @@ function Workspace({
   // synchronously from the initial doc + localStorage, so the first run sees the
   // real targets; the guard trips regardless so a thread added later by an agent
   // never yanks the reader's scroll. rAF lets CM finish its first measure.
+  // KNOWN trade-off: the server's seen-set hydrates async (fetchConfig) and may
+  // be ahead of localStorage on a multi-device setup — we scroll against the
+  // local snapshot rather than visibly delaying the landing on a fetch.
   const didInitialScroll = useRef(false);
   useEffect(() => {
     if (didInitialScroll.current) return;
@@ -651,13 +654,13 @@ function Workspace({
   );
 
   // Jump to the first markup defect (leaking highlight, stray close, malformed
-  // comment — anything the validator flags).
+  // comment — anything the validator flags). Reuses the diagnostics memo — same
+  // source as the pill count, so jump target and count can't disagree.
   const goToFirstIssue = useCallback(() => {
     const v = editor.viewRef.current;
-    if (!v) return;
-    const first = validateMarkup(v.state.doc.toString())[0];
-    if (first) v.dispatch({ effects: EditorView.scrollIntoView(first.from, { y: "center" }) });
-  }, [editor.viewRef]);
+    const first = diagnostics[0];
+    if (v && first) v.dispatch({ effects: EditorView.scrollIntoView(first.from, { y: "center" }) });
+  }, [editor.viewRef, diagnostics]);
 
   // Hard-wrap the prose to 88 columns (#10) — markup-safe (constructs are atomic,
   // so token ids and seen-state survive). A normal editor edit: saves + undoable.
@@ -1163,8 +1166,8 @@ function Workspace({
                 onContextMenu={openEditorMenu}
                 onClick={(e) => focusCommentAtPoint(e.clientX, e.clientY)}
                 style={
-                  commentsVisible && contentMin
-                    ? ({ ["--acm-scroll-reach" as string]: `${contentMin}px` })
+                  commentsVisible && scrollReach
+                    ? ({ ["--acm-scroll-reach" as string]: `${scrollReach}px` })
                     : undefined
                 }
               />
@@ -1195,7 +1198,7 @@ function Workspace({
                   onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
                   onFocusThread={focusThread}
                   onCardContextMenu={openCommentMenu}
-                  onContentExtent={(px) => setContentMin((p) => (Math.abs(p - px) > 2 ? px : p))}
+                  onContentExtent={(px) => setScrollReach((p) => (Math.abs(p - px) > 2 ? px : p))}
                 />
               </aside>
             ) : null}

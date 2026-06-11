@@ -8,7 +8,7 @@
 
 import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
-import { liveInstances } from "../server/instances";
+import { liveInstances, probeInstance } from "../server/instances";
 import {
   AmbiguityError,
   appendToThread,
@@ -50,7 +50,11 @@ async function docPathFrom(f: Flags): Promise<string> {
   if (p) return resolve(p);
   // No explicit doc → the one open in the running editor (instance registry).
   // Exactly one live instance resolves; several is ambiguous — never guess.
-  const live = await liveInstances();
+  // Probe each candidate's port too: a recycled PID can impersonate a dead
+  // server, but it won't answer /api/doc.
+  const registered = await liveInstances();
+  const probes = await Promise.all(registered.map(probeInstance));
+  const live = registered.filter((_, i) => probes[i]);
   if (live.length === 1) {
     console.error(`acm: using ${live[0].doc} (open in ACM on :${live[0].port})`);
     return live[0].doc;
@@ -211,6 +215,11 @@ async function runImport(f: Flags): Promise<void> {
     console.error("usage: acm import <file.docx> [out.md]");
     process.exit(1);
   }
+  const srcPath = resolve(src);
+  if (!(await Bun.file(srcPath).exists())) {
+    console.error(`acm import: file not found: ${src}`);
+    process.exit(1);
+  }
   const out = resolve(outArg ?? src.replace(/\.docx$/i, ".md"));
   const converter =
     process.env.ACM_CONVERTER ?? `${process.env.HOME}/Projects/acm-seed/convert.py`;
@@ -218,7 +227,7 @@ async function runImport(f: Flags): Promise<void> {
     console.error(`acm import: converter not found at ${converter} — set ACM_CONVERTER`);
     process.exit(1);
   }
-  const proc = Bun.spawn(["uv", "run", converter, resolve(src), out], {
+  const proc = Bun.spawn(["uv", "run", converter, srcPath, out], {
     stdout: "inherit",
     stderr: "inherit",
   });

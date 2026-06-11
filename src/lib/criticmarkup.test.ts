@@ -23,6 +23,7 @@ import {
   hardWrap,
   healDocument,
   pageBreakLines,
+  wrappableSpan,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -534,6 +535,30 @@ describe("scanTokens — highlight wrapping tracked changes", () => {
   });
 });
 
+// ── wrappableSpan — the shared anchor-wrap gate (UI composer + acm suggest) ───
+
+describe("wrappableSpan", () => {
+  const doc = "Plain prose with {++an insert++} and {==a span==}{>>@l: note<<} in it.";
+  test("clean prose wraps; empty/blank does not", () => {
+    expect(wrappableSpan(doc, 0, 11)).toBe(true); // "Plain prose"
+    expect(wrappableSpan(doc, 5, 5)).toBe(false); // empty
+    expect(wrappableSpan("a  b", 1, 3)).toBe(false); // whitespace-only
+  });
+  test("a selection CONTAINING a complete tracked change wraps", () => {
+    expect(wrappableSpan(doc, 12, 33)).toBe(true); // "with {++an insert++}"
+  });
+  test("a selection that CUTS a construct does not", () => {
+    expect(wrappableSpan(doc, 0, 22)).toBe(false); // ends inside {++an insert++}
+  });
+  test("contained comments / highlights fall back", () => {
+    expect(wrappableSpan(doc, 37, 64)).toBe(false); // the {==span==}{>>note<<} pair
+  });
+  test("half-typed delimiters and paragraph breaks fall back", () => {
+    expect(wrappableSpan("a {++half open here", 0, 12)).toBe(false);
+    expect(wrappableSpan("one para\n\ntwo para", 0, 18)).toBe(false);
+  });
+});
+
 // ── pageBreakLines — standard-document page estimation ────────────────────────
 
 describe("pageBreakLines", () => {
@@ -555,6 +580,23 @@ describe("pageBreakLines", () => {
     const { pages } = pageBreakLines(content);
     expect(pages).toBeGreaterThanOrEqual(12);
     expect(pages).toBeLessThanOrEqual(20);
+  });
+
+  test("multi-line comments/deletions don't leak delimiter fragments into counts", () => {
+    const prose = "word ".repeat(20).trim();
+    const multiline = prose + " {>>@a: first line of reply\nsecond line of the same reply<<} " + prose;
+    // 40 prose words; the comment body (10 words) must NOT count, nor its delimiters.
+    const { pages } = pageBreakLines(multiline, 30);
+    expect(pages).toBe(2); // 40/30 → 2, not 3 (50 words would still be 2 — use a tighter probe)
+    const { pages: exact } = pageBreakLines(multiline, 41);
+    expect(exact).toBe(1); // 40 ≤ 41 → one page, proving the body was excluded
+  });
+
+  test("an exact page multiple yields no phantom trailing break", () => {
+    const doc = "w ".repeat(80).trim(); // exactly 80 words
+    const { breaks, pages } = pageBreakLines(doc, 40);
+    expect(pages).toBe(2);
+    expect(breaks).toHaveLength(1); // one boundary at word 40 — none at word 80
   });
 
   test("empty/short docs are one page, no breaks", () => {

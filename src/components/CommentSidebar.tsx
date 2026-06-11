@@ -238,7 +238,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         // the card stack overflows the prose (independent of any applied spacer,
         // so there's no feedback loop with the padding this ultimately drives).
         const lastLineBottom = docTop + view0.lineBlockAt(view0.state.doc.length).bottom;
-        return { valid: true as const, measured, origin: contentRect.right - cRect.left, docTop, padTop, lastLineBottom };
+        return { valid: true as const, measured, origin: contentRect.right - cRect.left, lastLineBottom };
       },
       write(data) {
         if (!data.valid) {

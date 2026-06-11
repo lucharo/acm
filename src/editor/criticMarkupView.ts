@@ -52,8 +52,17 @@ export const critHighlightField = StateField.define<CritHighlightState>({
   create: () => ({ active: null, seen: new Set<number>(), busy: new Set<number>() }),
   update(value, tr) {
     for (const e of tr.effects) {
-      if (e.is(setCritHighlights))
-        return { active: e.value.active, seen: new Set(e.value.seen), busy: new Set(e.value.busy) };
+      if (e.is(setCritHighlights)) {
+        // The effect's positions were computed against the PRE-transaction doc;
+        // if this same transaction also edits, map them through (defensive — App
+        // currently dispatches highlight pushes as standalone transactions).
+        const map = tr.docChanged ? (p: number) => tr.changes.mapPos(p) : (p: number) => p;
+        return {
+          active: e.value.active === null ? null : map(e.value.active),
+          seen: new Set(e.value.seen.map(map)),
+          busy: new Set(e.value.busy.map(map)),
+        };
+      }
     }
     // Edits shift every anchor offset; map the keys through the change so the
     // active/seen/busy styling stays glued to its highlight until App's next
