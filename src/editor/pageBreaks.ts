@@ -1,90 +1,122 @@
 // ── A4 page-break markers (toggled in settings) ────────────────────────────────
-// Draws a dashed divider + page number every "A4 page" of rendered content, plus
-// an "≈ N A4 pages" tally under the last line — a sense of how many pages the doc
-// fills, like Word/GDocs page view, WITHOUT real pagination (CodeMirror renders
-// one continuous document; true page boxes aren't possible).
-//
-// Page height = rendered content width × √2 (the A4 aspect ratio) — so what you
-// see corresponds to "this text block, printed at this width, on A4". An
-// approximation by design: real print margins/fonts will differ.
-//
-// Mechanics: one absolutely-positioned overlay div appended to .cm-scroller
-// (made position:relative by the theme), so the markers scroll with the content.
-// Recomputed on geometry/doc changes via requestMeasure — read in the measure
-// phase, DOM writes in the write phase, never mid-update.
+// A sense of how many STANDARD pages the doc fills — estimated the way a word
+// processor would paginate (≈550 accepted-prose words per A4 page; 11pt
+// single-spaced, the GDocs/Word ballpark), NOT by rendered screen height (the
+// editor's roomy 17px/1.7 typography would inflate the count ~2×). The lib
+// (pageBreakLines) decides WHERE the breaks fall, by cumulative word count; this
+// plugin only renders them:
+//   • a dashed divider + "p. N" label at each page boundary,
+//   • a fixed "p. n / N" chip (bottom-left) tracking the page under the viewport
+//     centre as you scroll.
+// Word-based breaks are stable under CodeMirror's async line-height measurement —
+// the count never drifts as heights settle; only divider PIXEL positions refine.
 
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-
-const SQRT2 = Math.SQRT2; // A4 aspect: height = width × √2
+import { pageBreakLines } from "../lib/criticmarkup";
 
 class PageBreaksPlugin {
   overlay: HTMLDivElement;
+  chip: HTMLDivElement;
+  breaks: { line: number; frac: number }[] = []; // 1-based line + fraction through it
+  pages = 1;
+  breakTops: number[] = []; // pixel positions (scroller space) of each divider
+  onScroll: () => void;
 
   constructor(readonly view: EditorView) {
     this.overlay = document.createElement("div");
     this.overlay.className = "cm-acm-pagebreaks";
     this.overlay.setAttribute("aria-hidden", "true");
     view.scrollDOM.appendChild(this.overlay);
+
+    this.chip = document.createElement("div");
+    this.chip.className = "cm-acm-pagechip";
+    this.chip.setAttribute("aria-hidden", "true");
+    // The chip is FIXED in the editor frame (doesn't scroll): parent is .cm-editor.
+    view.dom.appendChild(this.chip);
+
+    this.onScroll = () => this.updateChip();
+    view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
+
+    this.recountWords();
     this.schedule();
   }
 
   update(u: ViewUpdate) {
+    if (u.docChanged) this.recountWords();
     if (u.docChanged || u.geometryChanged || u.viewportChanged) this.schedule();
   }
 
+  /** Word-based pagination — doc-content-only, immune to layout jitter. */
+  recountWords() {
+    const { breaks, pages } = pageBreakLines(this.view.state.doc.toString());
+    this.breaks = breaks;
+    this.pages = pages;
+  }
+
+  /** Resolve break lines to pixel positions and (re)draw. Measure-phase reads. */
   schedule() {
     this.view.requestMeasure({
       key: "acm-pagebreaks",
       read: (view) => {
         const content = view.contentDOM;
-        // offsetParent is the (position:relative) scroller, so these offsets are
-        // directly usable for absolutely-positioned overlay children.
+        const doc = view.state.doc;
+        const tops = this.breaks.map(({ line: lineNo, frac }) => {
+          const line = doc.line(Math.min(lineNo, doc.lines));
+          const block = view.lineBlockAt(line.from);
+          // Interpolate inside the (soft-wrapped) line block by word fraction.
+          return content.offsetTop + block.top + block.height * frac;
+        });
         return {
-          top: content.offsetTop,
+          tops,
           left: content.offsetLeft,
           width: content.offsetWidth,
-          height: content.offsetHeight,
         };
       },
       write: (m) => {
-        const pageH = m.width * SQRT2;
-        if (!(pageH > 0) || !(m.height > 0)) return;
-        const pages = Math.max(1, Math.ceil(m.height / pageH));
+        this.breakTops = m.tops;
         const frag = document.createDocumentFragment();
-        for (let k = 1; k * pageH < m.height; k++) {
+        m.tops.forEach((top, i) => {
           const line = document.createElement("div");
           line.className = "cm-acm-pagebreak";
-          line.style.top = `${Math.round(m.top + k * pageH)}px`;
+          line.style.top = `${Math.round(top)}px`;
           line.style.left = `${m.left}px`;
           line.style.width = `${m.width}px`;
           const label = document.createElement("span");
           label.className = "cm-acm-pagebreak-label";
-          label.textContent = `p. ${k + 1}`;
+          label.textContent = `p. ${i + 2}`;
           line.appendChild(label);
           frag.appendChild(line);
-        }
-        const tally = document.createElement("div");
-        tally.className = "cm-acm-pagetally";
-        tally.style.top = `${Math.round(m.top + m.height + 6)}px`;
-        tally.style.left = `${m.left}px`;
-        tally.style.width = `${m.width}px`;
-        tally.textContent = `≈ ${pages} A4 page${pages === 1 ? "" : "s"}`;
-        frag.appendChild(tally);
+        });
         this.overlay.replaceChildren(frag);
+        this.updateChip();
       },
     });
   }
 
+  /** "p. n / N" for the page under the viewport centre. */
+  updateChip() {
+    const sc = this.view.scrollDOM;
+    const mid = sc.scrollTop + sc.clientHeight / 2;
+    let page = 1;
+    for (const top of this.breakTops) {
+      if (top <= mid) page += 1;
+      else break;
+    }
+    const text = `p. ${Math.min(page, this.pages)} / ${this.pages}`;
+    if (this.chip.textContent !== text) this.chip.textContent = text;
+    this.chip.title = `≈ ${this.pages} A4 pages at ~550 words/page (standard 11pt single-spaced)`;
+  }
+
   destroy() {
+    this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
     this.overlay.remove();
+    this.chip.remove();
   }
 }
 
 const pageBreaksTheme = EditorView.theme({
-  // The overlay's children are positioned against the scroller (made relative in
-  // acmTheme); the overlay itself is just a transparent grouping node.
   ".cm-acm-pagebreaks": {
     pointerEvents: "none",
   },
@@ -102,16 +134,24 @@ const pageBreaksTheme = EditorView.theme({
     color: "var(--faint)",
     userSelect: "none",
   },
-  ".cm-acm-pagetally": {
+  // Fixed page-position chip, bottom-left of the editor frame.
+  ".cm-acm-pagechip": {
     position: "absolute",
-    textAlign: "right",
+    left: "10px",
+    bottom: "10px",
+    zIndex: "10",
+    padding: "2px 8px",
+    borderRadius: "999px",
+    border: "1px solid var(--line)",
+    backgroundColor: "var(--panel)",
+    color: "var(--muted)",
     fontSize: "11px",
     fontFamily: "ui-sans-serif, system-ui, sans-serif",
-    color: "var(--muted)",
     userSelect: "none",
     pointerEvents: "none",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
   },
 });
 
-/** A4 page-break markers + page tally, toggled from settings like the page view. */
+/** A4 page-break markers + "p. n / N" chip, toggled from settings like page view. */
 export const pageBreaks: Extension = [ViewPlugin.fromClass(PageBreaksPlugin), pageBreaksTheme];

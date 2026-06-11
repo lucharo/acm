@@ -777,6 +777,39 @@ export function countWords(text: string): number {
 }
 
 /**
+ * Where A4 page breaks fall, estimated the way a STANDARD document would paginate
+ * (≈550 accepted-prose words per page — 11pt single-spaced, GDocs/Word ballpark) —
+ * NOT by rendered screen height, which inflates the count ~2× (editor typography
+ * is roomier than print). Each break is a 1-based line number plus how far
+ * through that line's words the boundary falls (for interpolation inside long
+ * soft-wrapped paragraph lines), plus the page total. Word counting matches {@link countWords} (comments
+ * and deletions aren't prose), applied per line.
+ */
+export function pageBreakLines(
+  text: string,
+  wordsPerPage = 550,
+): { breaks: { line: number; frac: number }[]; pages: number } {
+  const lines = text.split("\n");
+  const breaks: { line: number; frac: number }[] = [];
+  let words = 0;
+  let nextBoundary = wordsPerPage;
+  for (let i = 0; i < lines.length; i++) {
+    const w = countWords(lines[i]);
+    if (w === 0) continue;
+    const before = words;
+    words += w;
+    while (words >= nextBoundary) {
+      // The boundary falls WITHIN this (possibly paragraph-long, soft-wrapped)
+      // line — record how far through, so the renderer can interpolate the
+      // divider inside the line's rendered block instead of snapping to its end.
+      breaks.push({ line: i + 1, frac: (nextBoundary - before) / w });
+      nextBoundary += wordsPerPage;
+    }
+  }
+  return { breaks, pages: Math.max(1, Math.ceil(words / wordsPerPage)) };
+}
+
+/**
  * The edit that RESOLVES an anchored comment run `[runFrom, runTo)`. If the comments
  * are anchored to a highlight — `{==span==}{>>..<<}`, including the stacked nested
  * form `{=={==span==}{>>c0<<}==}{>>c1<<}` — strip the WHOLE anchor (the outer `{==`

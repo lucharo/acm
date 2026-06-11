@@ -22,6 +22,7 @@ import {
   validateMarkup,
   hardWrap,
   healDocument,
+  pageBreakLines,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -530,6 +531,35 @@ describe("scanTokens — highlight wrapping tracked changes", () => {
     const tokens = scanTokens("{==spans a {++x++} break\n\nand on==} y");
     // The highlight is unparsed (single-block); only the inner insert tokenizes.
     expect(tokens.map((t) => t.type)).toEqual(["insert"]);
+  });
+});
+
+// ── pageBreakLines — standard-document page estimation ────────────────────────
+
+describe("pageBreakLines", () => {
+  test("paginates by accepted-prose words, not raw text", () => {
+    // 30 words of prose + a comment (not prose) + a deletion (not prose).
+    const line = "word ".repeat(30).trim();
+    const doc = [line, "", "x {--dropped words here--} {>>@a: a long comment that is not prose<<}", "", line].join("\n");
+    const { breaks, pages } = pageBreakLines(doc, 40);
+    expect(pages).toBe(2); // 61 prose words at 40/page
+    expect(breaks).toHaveLength(1);
+    // The 40th prose word falls inside line 5 (words 32-61), ~30% through it.
+    expect(breaks[0].line).toBe(5);
+    expect(breaks[0].frac).toBeCloseTo((40 - 31) / 30, 5);
+  });
+
+  test("the live-scale doc lands near the standard-document intuition (~16, not ~40)", () => {
+    const path = join(import.meta.dir, "..", "..", "seed", "sample-essay.md");
+    const content = readFileSync(path, "utf8");
+    const { pages } = pageBreakLines(content);
+    expect(pages).toBeGreaterThanOrEqual(12);
+    expect(pages).toBeLessThanOrEqual(20);
+  });
+
+  test("empty/short docs are one page, no breaks", () => {
+    expect(pageBreakLines("a few words only")).toEqual({ breaks: [], pages: 1 });
+    expect(pageBreakLines("")).toEqual({ breaks: [], pages: 1 });
   });
 });
 
