@@ -8,6 +8,7 @@
 
 import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
+import { liveInstances } from "../server/instances";
 import {
   AmbiguityError,
   appendToThread,
@@ -44,13 +45,23 @@ function parseFlags(argv: string[]): Flags {
   }
   return f;
 }
-function docPathFrom(f: Flags): string {
+async function docPathFrom(f: Flags): Promise<string> {
   const p = f.doc ?? process.env.ACM_DOC;
-  if (!p) {
-    console.error("acm: no document — pass --doc <file.md> or set ACM_DOC");
+  if (p) return resolve(p);
+  // No explicit doc → the one open in the running editor (instance registry).
+  // Exactly one live instance resolves; several is ambiguous — never guess.
+  const live = await liveInstances();
+  if (live.length === 1) {
+    console.error(`acm: using ${live[0].doc} (open in ACM on :${live[0].port})`);
+    return live[0].doc;
+  }
+  if (live.length > 1) {
+    console.error("acm: multiple ACM editors running — pass --doc <file.md> (or set ACM_DOC):");
+    for (const e of live) console.error(`  :${e.port} → ${e.doc}`);
     process.exit(1);
   }
-  return resolve(p);
+  console.error("acm: no document — pass --doc <file.md>, set ACM_DOC, or open the doc in ACM first");
+  process.exit(1);
 }
 
 export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
@@ -63,7 +74,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     return;
   }
 
-  const docPath = docPathFrom(f);
+  const docPath = await docPathFrom(f);
 
   // ── Read-only verb ──────────────────────────────────────────────────────────
   if (cmd === "threads") {

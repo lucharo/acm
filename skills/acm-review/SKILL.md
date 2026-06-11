@@ -119,8 +119,11 @@ it threads cleanly. This is the reliable way to locate anchors and avoid mis-edi
 For the common review ops, use the CLI verbs instead of hand-editing. They anchor by
 **unique text match** (fail safe on ambiguity — nothing applies unless exactly one
 target matches), **snapshot the doc before every write** (`<docDir>/.acm/snapshots/`),
-and **re-parse + report** after. Pass `--doc <file.md>` (or set `ACM_DOC`); writes go
-to the file, so a running editor reflects them within ~1s.
+and **re-parse + report** after. **No `--doc` needed when ONE ACM editor is running**
+— the verbs resolve the doc the human has open (announced on stderr). Resolution
+order: `--doc <file.md>` > `ACM_DOC` > the running editor's doc; with several editors
+running the verbs refuse and list them rather than guess. Writes go to the file, so
+the editor reflects them within ~1s.
 
 ```
 acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST]

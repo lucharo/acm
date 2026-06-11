@@ -1,0 +1,51 @@
+// ── Running-instance registry (~/.config/acm/instances.json) ───────────────────
+// Every ACM server registers {port → doc, pid} at boot, so the `acm` verbs can
+// resolve "the doc that's open in the editor" without --doc or ACM_DOC. Readers
+// filter by PID LIVENESS — a crashed/killed server can't leave a convincing stale
+// entry — and registration prunes dead entries as it writes. No unregister hook
+// needed: liveness is the authority.
+
+import { resolve } from "node:path";
+import { readConfig, writeConfig } from "./config";
+
+export interface InstanceEntry {
+  port: number;
+  doc: string; // absolute path of the served document
+  pid: number;
+  startedAt: string;
+}
+
+const FILE = "instances.json";
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // signal 0 = existence probe, sends nothing
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Record this process as the ACM serving `doc` on `port` (prunes dead entries). */
+export async function registerInstance(port: number, doc: string): Promise<void> {
+  const all = await readConfig<Record<string, InstanceEntry>>(FILE, {});
+  for (const [key, e] of Object.entries(all)) {
+    if (!isAlive(e.pid)) delete all[key];
+  }
+  all[String(port)] = {
+    port,
+    doc: resolve(doc),
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+  };
+  await writeConfig(FILE, all);
+}
+
+/** Every registered instance whose process is still alive, sorted by port (so the
+ *  prod convention :12000 lists first). */
+export async function liveInstances(): Promise<InstanceEntry[]> {
+  const all = await readConfig<Record<string, InstanceEntry>>(FILE, {});
+  return Object.values(all)
+    .filter((e) => isAlive(e.pid))
+    .sort((a, b) => a.port - b.port);
+}

@@ -21,6 +21,7 @@ import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
 import { readConfig, writeConfig } from "./src/server/config";
+import { registerInstance } from "./src/server/instances";
 
 const SETTINGS_FILE = "settings.json";
 
@@ -199,6 +200,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
   });
 
   console.log(`ACM server on http://localhost:${port} — doc: ${docPath}`);
+
+  // Register in ~/.config/acm/instances.json so `acm` verbs can resolve "the doc
+  // open in the editor" without --doc/ACM_DOC. Fire-and-forget; liveness (pid
+  // probing) is the authority, so no unregister-on-exit bookkeeping is needed.
+  void registerInstance(port, docPath);
 
   return {
     server,

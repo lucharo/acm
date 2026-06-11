@@ -46,7 +46,8 @@ Usage:
   acm                Open a new untitled document
   acm skill          Install the agent-review skill (~/.claude + ~/.agents)
 
-Agent verbs (operate on --doc <file.md> or $ACM_DOC; snapshot before every write):
+Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
+running ACM editor; snapshot before every write):
   acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]
   acm comment "<phrase>" "<text>"   Reply to the thread matching <phrase>
   acm suggest "<span>" "<new>"      Anchor a SUGGEST: on the unique prose <span>
