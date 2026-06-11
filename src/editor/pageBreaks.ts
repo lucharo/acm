@@ -3,136 +3,143 @@
 // processor would paginate (≈550 accepted-prose words per A4 page; 11pt
 // single-spaced, the GDocs/Word ballpark), NOT by rendered screen height (the
 // editor's roomy 17px/1.7 typography would inflate the count ~2×). The lib
-// (pageBreakLines) decides WHERE the breaks fall, by cumulative word count; this
-// plugin only renders them:
-//   • a dashed divider + "p. N" label at each page boundary,
-//   • a fixed "p. n / N" chip (bottom-left) tracking the page under the viewport
-//     centre as you scroll.
+// (pageBreakLines) decides WHERE the breaks fall, by cumulative word count.
+//
+// Rendered as REAL page gaps: small block-widget spacers (dashed rule + "p. N"
+// label) between lines, GDocs-style — so the break adds a little breathing room
+// instead of striking text through. Block widgets affect vertical layout, which
+// CM6 only permits from a StateField (not a view plugin), so the spacers live in
+// one; the "p. n / N" scroll chip is a separate DOM-only plugin.
+//
 // Word-based breaks are stable under CodeMirror's async line-height measurement —
-// the count never drifts as heights settle; only divider PIXEL positions refine.
+// the count never drifts as heights settle. A boundary that falls inside a long
+// soft-wrapped paragraph snaps to the nearest line boundary (frac ≥ 0.5 → after).
 
-import { EditorView, ViewPlugin } from "@codemirror/view";
-import type { ViewUpdate } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
+import type { DecorationSet, ViewUpdate } from "@codemirror/view";
+import { RangeSetBuilder, StateField } from "@codemirror/state";
+import type { Extension, Text } from "@codemirror/state";
 import { pageBreakLines } from "../lib/criticmarkup";
 
-class PageBreaksPlugin {
-  overlay: HTMLDivElement;
+/** The spacer between pages: a slim gap with a dashed rule + "p. N" label. */
+class PageGapWidget extends WidgetType {
+  constructor(readonly page: number) {
+    super();
+  }
+  eq(other: PageGapWidget) {
+    return other.page === this.page;
+  }
+  toDOM() {
+    const gap = document.createElement("div");
+    gap.className = "cm-acm-pagegap";
+    gap.setAttribute("aria-hidden", "true");
+    const rule = document.createElement("div");
+    rule.className = "cm-acm-pagegap-rule";
+    const label = document.createElement("span");
+    label.className = "cm-acm-pagegap-label";
+    label.textContent = `p. ${this.page}`;
+    gap.appendChild(rule);
+    gap.appendChild(label);
+    return gap;
+  }
+  get estimatedHeight() {
+    return 30;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+interface PageBreakState {
+  deco: DecorationSet;
+  /** Doc positions (line starts) of each spacer, for the scroll chip. */
+  positions: number[];
+  pages: number;
+}
+
+function buildSpacers(doc: Text): PageBreakState {
+  const { breaks, pages } = pageBreakLines(doc.toString());
+  const builder = new RangeSetBuilder<Decoration>();
+  const positions: number[] = [];
+  let lastPos = -1;
+  breaks.forEach(({ line, frac }, i) => {
+    // Snap the word boundary to the nearest LINE boundary (block widgets live
+    // between lines; sub-line precision isn't possible without real pagination).
+    const target = Math.min(frac >= 0.5 ? line + 1 : line, doc.lines);
+    const pos = doc.line(target).from;
+    if (pos === lastPos) return; // a >1-page line would stack spacers — keep one
+    lastPos = pos;
+    positions.push(pos);
+    builder.add(pos, pos, Decoration.widget({ widget: new PageGapWidget(i + 2), side: -1, block: true }));
+  });
+  return { deco: builder.finish(), positions, pages };
+}
+
+const pageBreaksField = StateField.define<PageBreakState>({
+  create: (state) => buildSpacers(state.doc),
+  update: (value, tr) => (tr.docChanged ? buildSpacers(tr.newDoc) : value),
+  provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
+});
+
+// ── "p. n / N" chip — fixed bottom-left, tracks the page under viewport centre ──
+class PageChipPlugin {
   chip: HTMLDivElement;
-  breaks: { line: number; frac: number }[] = []; // 1-based line + fraction through it
-  pages = 1;
-  breakTops: number[] = []; // pixel positions (scroller space) of each divider
   onScroll: () => void;
 
   constructor(readonly view: EditorView) {
-    this.overlay = document.createElement("div");
-    this.overlay.className = "cm-acm-pagebreaks";
-    this.overlay.setAttribute("aria-hidden", "true");
-    view.scrollDOM.appendChild(this.overlay);
-
     this.chip = document.createElement("div");
     this.chip.className = "cm-acm-pagechip";
     this.chip.setAttribute("aria-hidden", "true");
-    // The chip is FIXED in the editor frame (doesn't scroll): parent is .cm-editor.
     view.dom.appendChild(this.chip);
-
     this.onScroll = () => this.updateChip();
     view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
-
-    this.recountWords();
-    this.schedule();
+    this.updateChip();
   }
 
   update(u: ViewUpdate) {
-    if (u.docChanged) this.recountWords();
-    if (u.docChanged || u.geometryChanged || u.viewportChanged) this.schedule();
+    if (u.docChanged || u.geometryChanged) this.updateChip();
   }
 
-  /** Word-based pagination — doc-content-only, immune to layout jitter. */
-  recountWords() {
-    const { breaks, pages } = pageBreakLines(this.view.state.doc.toString());
-    this.breaks = breaks;
-    this.pages = pages;
-  }
-
-  /** Resolve break lines to pixel positions and (re)draw. Measure-phase reads. */
-  schedule() {
-    this.view.requestMeasure({
-      key: "acm-pagebreaks",
-      read: (view) => {
-        const content = view.contentDOM;
-        const doc = view.state.doc;
-        const tops = this.breaks.map(({ line: lineNo, frac }) => {
-          const line = doc.line(Math.min(lineNo, doc.lines));
-          const block = view.lineBlockAt(line.from);
-          // Interpolate inside the (soft-wrapped) line block by word fraction.
-          return content.offsetTop + block.top + block.height * frac;
-        });
-        return {
-          tops,
-          left: content.offsetLeft,
-          width: content.offsetWidth,
-        };
-      },
-      write: (m) => {
-        this.breakTops = m.tops;
-        const frag = document.createDocumentFragment();
-        m.tops.forEach((top, i) => {
-          const line = document.createElement("div");
-          line.className = "cm-acm-pagebreak";
-          line.style.top = `${Math.round(top)}px`;
-          line.style.left = `${m.left}px`;
-          line.style.width = `${m.width}px`;
-          const label = document.createElement("span");
-          label.className = "cm-acm-pagebreak-label";
-          label.textContent = `p. ${i + 2}`;
-          line.appendChild(label);
-          frag.appendChild(line);
-        });
-        this.overlay.replaceChildren(frag);
-        this.updateChip();
-      },
-    });
-  }
-
-  /** "p. n / N" for the page under the viewport centre. */
   updateChip() {
+    const { positions, pages } = this.view.state.field(pageBreaksField);
     const sc = this.view.scrollDOM;
-    const mid = sc.scrollTop + sc.clientHeight / 2;
+    const mid = sc.scrollTop + sc.clientHeight / 2 - this.view.documentTop;
     let page = 1;
-    for (const top of this.breakTops) {
-      if (top <= mid) page += 1;
+    for (const pos of positions) {
+      if (this.view.lineBlockAt(pos).top <= mid) page += 1;
       else break;
     }
-    const text = `p. ${Math.min(page, this.pages)} / ${this.pages}`;
+    const text = `p. ${Math.min(page, pages)} / ${pages}`;
     if (this.chip.textContent !== text) this.chip.textContent = text;
-    this.chip.title = `≈ ${this.pages} A4 pages at ~550 words/page (standard 11pt single-spaced)`;
+    this.chip.title = `≈ ${pages} A4 pages at ~550 words/page (standard 11pt single-spaced)`;
   }
 
   destroy() {
     this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
-    this.overlay.remove();
     this.chip.remove();
   }
 }
 
 const pageBreaksTheme = EditorView.theme({
-  ".cm-acm-pagebreaks": {
+  // The page gap: real vertical space between "pages" (GDocs-like), with the
+  // dashed rule + label inside it.
+  ".cm-acm-pagegap": {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "13px 0",
+    userSelect: "none",
     pointerEvents: "none",
   },
-  ".cm-acm-pagebreak": {
-    position: "absolute",
+  ".cm-acm-pagegap-rule": {
+    flex: "1",
     borderTop: "1.5px dashed var(--line-strong)",
-    zIndex: "3",
   },
-  ".cm-acm-pagebreak-label": {
-    position: "absolute",
-    right: "0",
-    top: "2px",
+  ".cm-acm-pagegap-label": {
     fontSize: "10px",
     fontFamily: "ui-sans-serif, system-ui, sans-serif",
     color: "var(--faint)",
-    userSelect: "none",
+    lineHeight: "1",
   },
   // Fixed page-position chip, bottom-left of the editor frame.
   ".cm-acm-pagechip": {
@@ -153,5 +160,9 @@ const pageBreaksTheme = EditorView.theme({
   },
 });
 
-/** A4 page-break markers + "p. n / N" chip, toggled from settings like page view. */
-export const pageBreaks: Extension = [ViewPlugin.fromClass(PageBreaksPlugin), pageBreaksTheme];
+/** A4 page-break spacers + "p. n / N" chip, toggled from settings like page view. */
+export const pageBreaks: Extension = [
+  pageBreaksField,
+  ViewPlugin.fromClass(PageChipPlugin),
+  pageBreaksTheme,
+];

@@ -583,7 +583,15 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                         {(() => {
                           const repl = suggestionReplacement(c.body);
                           if (repl === null) {
-                            return <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)]">{c.body}</p>;
+                            // Non-active cards CLAMP long bodies (some review replies run
+                            // hundreds of words) — otherwise the greedy stack cascades tens
+                            // of thousands of px past the prose and the doc tail becomes a
+                            // huge empty scroll. Focusing a card shows the full text.
+                            return (
+                              <p className={`whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)] ${isActive ? "" : "line-clamp-5"}`}>
+                                {c.body}
+                              </p>
+                            );
                           }
                           // A structured SUGGEST: comment — show the proposed wording as a
                           // real suggested edit + an Apply (replaces the anchored span).
@@ -595,7 +603,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 </svg>
                                 Suggested edit
                               </div>
-                              <p className="whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed text-[var(--crit-ins)]">
+                              <p className={`whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed text-[var(--crit-ins)] ${isActive ? "" : "line-clamp-5"}`}>
                                 {repl.trim() ? repl : "(delete this span)"}
                               </p>
                               {applicableSuggestionIds.has(c.id) ? (

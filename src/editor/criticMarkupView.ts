@@ -420,21 +420,36 @@ function buildWidgets(view: EditorView): DecorationSet {
             // substitution. Otherwise the plain clickable bubble. Stacked comments
             // → several adjacent replaces with DISTINCT ranges (no overlap).
             const sug = suggestByComment.get(node.from);
-            ranges.push(
-              Decoration.replace({
-                widget: sug
-                  ? new SuggestionInlineWidget(
-                      node.from,
-                      node.to,
-                      sug.replacement,
-                      sug.threadCount,
-                      sug.alternativeIndex,
-                      sug.groupId,
-                      sug.groupSize,
-                    )
-                  : new CommentAnchorWidget(node.from, node.to),
-              }).range(node.from, node.to),
-            );
+            const widget = sug
+              ? new SuggestionInlineWidget(
+                  node.from,
+                  node.to,
+                  sug.replacement,
+                  sug.threadCount,
+                  sug.alternativeIndex,
+                  sug.groupId,
+                  sug.groupSize,
+                )
+              : new CommentAnchorWidget(node.from, node.to);
+            // A comment body may contain REAL newlines (multi-line reply). View
+            // plugins MAY NOT provide replace decorations that span a line break
+            // (CM6 throws and the whole view blanks out — seen in the wild). Split
+            // the replacement at line boundaries: the first segment carries the
+            // widget, later segments hide invisibly; the newline itself stays (a
+            // blank continuation line beats a crashed view).
+            const doc = view.state.doc;
+            let pos = node.from;
+            let first = true;
+            while (pos < node.to) {
+              const lineEnd = Math.min(doc.lineAt(pos).to, node.to);
+              if (first) {
+                ranges.push(Decoration.replace({ widget }).range(pos, lineEnd));
+              } else if (lineEnd > pos) {
+                ranges.push(Decoration.replace({}).range(pos, lineEnd));
+              }
+              first = false;
+              pos = lineEnd + 1; // past the newline
+            }
             return false;
           }
           default:
