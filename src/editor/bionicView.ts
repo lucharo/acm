@@ -6,6 +6,7 @@
 // Its own ViewPlugin / decoration set (mark-only), so it composes with — never
 // collides with — the markdown + CriticMarkup decoration layers.
 
+import { syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -44,7 +45,8 @@ const bionicPlugin = ViewPlugin.fromClass(
       this.decorations = buildBionic(view);
     }
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged) this.decorations = buildBionic(u.view);
+      if (u.docChanged || u.viewportChanged || syntaxTree(u.state) !== syntaxTree(u.startState))
+        this.decorations = buildBionic(u.view);
     }
   },
   { decorations: (v) => v.decorations },

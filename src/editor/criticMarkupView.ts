@@ -374,6 +374,10 @@ const markPlugin = ViewPlugin.fromClass(
       if (
         u.docChanged ||
         u.viewportChanged ||
+        // The syntax parse is ASYNC on large docs: the tree can extend with no
+        // doc/viewport change. Without this check, decorations freeze at the
+        // first-paint parse boundary and everything beyond renders raw.
+        syntaxTree(u.state) !== syntaxTree(u.startState) ||
         u.startState.field(critHighlightField, false) !== u.state.field(critHighlightField, false) ||
         u.startState.field(inlineSuggestionsField, false) !== u.state.field(inlineSuggestionsField, false)
       ) {
@@ -458,6 +462,7 @@ const widgetPlugin = ViewPlugin.fromClass(
       if (
         u.docChanged ||
         u.viewportChanged ||
+        syntaxTree(u.state) !== syntaxTree(u.startState) || // async parse progress (see markPlugin)
         u.startState.field(inlineSuggestionsField, false) !== u.state.field(inlineSuggestionsField, false)
       ) {
         this.decorations = buildWidgets(u.view);

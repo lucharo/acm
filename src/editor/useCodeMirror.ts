@@ -140,6 +140,9 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
 
     const view = new EditorView({ state, parent });
     viewRef.current = view;
+    // Dev-only escape hatch: lets headless debugging (agent-browser eval) reach the
+    // live view to introspect parse state / decorations. Stripped in prod builds.
+    if (import.meta.env?.DEV) (window as unknown as Record<string, unknown>).__acmView = view;
 
     return () => {
       view.destroy();

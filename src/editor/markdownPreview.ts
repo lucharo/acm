@@ -190,7 +190,9 @@ const styleViewPlugin = ViewPlugin.fromClass(
       this.decorations = buildStyle(view);
     }
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged || u.selectionSet) {
+      // syntaxTree check: the parse is async on large docs — rebuild when the
+      // tree extends, or styling freezes at the first-paint parse boundary.
+      if (u.docChanged || u.viewportChanged || u.selectionSet || syntaxTree(u.state) !== syntaxTree(u.startState)) {
         this.decorations = buildStyle(u.view);
       }
     }
@@ -269,7 +271,7 @@ const hideViewPlugin = ViewPlugin.fromClass(
       this.decorations = buildHide(view);
     }
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged) {
+      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged || syntaxTree(u.state) !== syntaxTree(u.startState)) {
         this.decorations = buildHide(u.view);
       }
     }
