@@ -59,6 +59,7 @@ interface ViewSettings {
   page: boolean; // A4-style page view (document as a sheet on a desk)
   lineNumbers: boolean;
   bionic: boolean; // bionic-reading: bold the lead of each word (rendered only)
+  pageBreaks: boolean; // A4 page-break markers + page tally (a sense of print length)
   showSeen: boolean; // reveal comments marked "seen" (off = they're hidden, zero-inbox)
   author: string; // name stamped on comments YOU add through the UI
 }
@@ -100,6 +101,7 @@ const DEFAULT_SETTINGS: ViewSettings = {
   page: true,
   lineNumbers: false,
   bionic: false,
+  pageBreaks: false,
   showSeen: false,
   author: "You",
 };
@@ -441,6 +443,7 @@ function Workspace({
     lineNumbers: settings.lineNumbers,
     page: settings.page,
     bionic: settings.bionic,
+    pageBreaks: settings.pageBreaks,
   });
 
   // Surface the (once-created) view as state so the sidebar gets it. The hook's
@@ -924,6 +927,7 @@ function Workspace({
       { id: "page", label: settings.page ? "Disable page view" : "Enable page view", run: () => onChangeSettings({ page: !settings.page }) },
       { id: "lines", label: settings.lineNumbers ? "Hide line numbers" : "Show line numbers", run: () => onChangeSettings({ lineNumbers: !settings.lineNumbers }) },
       { id: "bionic", label: settings.bionic ? "Disable bionic reading" : "Enable bionic reading", run: () => onChangeSettings({ bionic: !settings.bionic }) },
+      { id: "pagebreaks", label: settings.pageBreaks ? "Hide A4 page breaks" : "Show A4 page breaks", run: () => onChangeSettings({ pageBreaks: !settings.pageBreaks }) },
       { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },
       { id: "nav", label: navOpen ? "Hide overview panel" : "Show overview panel", run: () => setNavOpen((o) => !o) },
       { id: "toc", label: tocOpen ? "Hide outline" : "Show outline", run: () => setTocOpen((o) => !o) },
@@ -1489,6 +1493,11 @@ function Header(props: HeaderProps) {
                 label="Bionic reading"
                 checked={settings.bionic}
                 onToggle={() => onChangeSettings({ bionic: !settings.bionic })}
+              />
+              <SettingRow
+                label="A4 page breaks"
+                checked={settings.pageBreaks}
+                onToggle={() => onChangeSettings({ pageBreaks: !settings.pageBreaks })}
               />
               <SettingRow
                 label="Show seen comments"

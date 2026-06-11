@@ -26,6 +26,9 @@ export const acmTheme: Extension = EditorView.theme(
       fontFamily: "var(--editor-font)",
       lineHeight: "1.7",
       overflow: "auto",
+      // Containing block for absolutely-positioned overlays that must scroll
+      // with the content (the A4 page-break markers).
+      position: "relative",
     },
     // Centred prose column. The comment sidebar is its own panel, so the editor
     // only needs a modest right gutter for the comment-anchor glyphs + connectors.
