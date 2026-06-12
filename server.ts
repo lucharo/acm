@@ -22,6 +22,7 @@ import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
 import { readConfig, writeConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
+import { recordHistory } from "./src/server/history";
 
 const SETTINGS_FILE = "settings.json";
 
@@ -110,6 +111,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
           await Bun.write(docPath, content);
           lastKnownHash = Bun.hash(content);
           version++;
+          recordHistorySoon("edit");
           return Response.json({ version });
         });
       }
@@ -128,6 +130,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
           lastKnownHash = Bun.hash(next);
           version++;
           pushUpdate(next);
+          recordHistorySoon("comment");
           return Response.json({ version });
         });
       }
@@ -195,6 +198,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         lastKnownHash = hash;
         version++;
         pushUpdate(content);
+        recordHistorySoon("agent edit");
       });
     }, 100);
   });
@@ -206,6 +210,17 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // probing) is the authority, so no unregister-on-exit bookkeeping is needed.
   void registerInstance(port, docPath);
 
+  // Doc history (#11): a git shadow journal in <docDir>/.acm/history.git.
+  // Baseline at boot, then a commit after each QUIET PERIOD of writes (saves
+  // land every 500ms while typing — journal entries shouldn't). Crashes lose at
+  // most the last minute; agent verbs additionally snapshot before every write.
+  void recordHistory(docPath, "open");
+  let historyTimer: ReturnType<typeof setTimeout> | undefined;
+  const recordHistorySoon = (source: string) => {
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => void recordHistory(docPath, source), 60_000);
+  };
+
   return {
     server,
     port,
@@ -213,6 +228,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
     stop: () => {
       watcher.close();
       if (debounce) clearTimeout(debounce);
+      if (historyTimer) clearTimeout(historyTimer);
+      void recordHistory(docPath, "close"); // best-effort final journal entry
       server.stop();
     },
   };

@@ -9,6 +9,7 @@
 import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
 import { liveInstances, probeInstance } from "../server/instances";
+import { listHistory, showVersion, recordHistory } from "../server/history";
 import {
   AmbiguityError,
   appendToThread,
@@ -21,7 +22,7 @@ import {
 } from "../lib/agentEdits";
 import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup, healDocument } from "../lib/criticmarkup";
 
-const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal"]);
+const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -79,6 +80,37 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   }
 
   const docPath = await docPathFrom(f);
+
+  // ── History: the git shadow journal (server records; these read/restore) ─────
+  if (cmd === "history") {
+    const n = f.positional[0] ? Number(f.positional[0]) : 20;
+    const entries = await listHistory(docPath, Number.isFinite(n) && n > 0 ? n : 20);
+    if (entries.length === 0) {
+      console.log("acm history: no journal yet — it builds while an ACM server is editing this doc");
+      return;
+    }
+    for (const e of entries) console.log(e);
+    console.log(`\nrestore with: acm restore <sha>  (snapshots the current doc first)`);
+    return;
+  }
+  if (cmd === "restore") {
+    const ref = f.positional[0];
+    if (!ref) {
+      console.error("usage: acm restore <ref>   (refs from `acm history`)");
+      process.exit(1);
+    }
+    const content = await showVersion(docPath, ref);
+    if (content === null) {
+      console.error(`acm restore: ${ref} not found in the journal (see \`acm history\`)`);
+      process.exit(1);
+    }
+    const snap = await snapshot(docPath, "restore"); // keep the pre-restore state
+    await recordHistory(docPath, "pre-restore"); // and journal it, so restore is reversible
+    await Bun.write(docPath, content);
+    console.log(`acm restore: doc restored to ${ref}`);
+    if (snap) console.log(`  pre-restore backup → ${snap}`);
+    return;
+  }
 
   // ── Read-only verb ──────────────────────────────────────────────────────────
   if (cmd === "threads") {

@@ -55,6 +55,11 @@ running ACM editor; snapshot before every write):
   acm reject "<phrase>"             Reject it (keep the original span)
   acm resolve "<phrase>"            Strip the thread matching <phrase>
   acm apply <edits.json>            Batch reply-append (idempotent); [{id,match,insert}]
+  acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
+  acm heal                          Repair markup that renders raw; snapshot-first
+  acm import <file.docx> [out.md]   Word → CriticMarkup .md (needs the converter)
+  acm history [n]                   The doc's version journal (auto-recorded)
+  acm restore <sha>                 Restore a journal version (snapshots first)
     (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
 
 Options:

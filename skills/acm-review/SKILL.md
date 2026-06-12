@@ -139,6 +139,8 @@ acm apply <edits.json>            # batch reply-append; [{id,match,insert}]; ide
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
 acm import <file.docx> [out.md]   # Word → CriticMarkup .md (tracked changes + comments); validates the result
 acm heal                          # repair markup that renders raw (multi-block anchors, trapped/nested comments); snapshot-first
+acm history [n]                   # the doc's version journal (auto-recorded by the editor; git shadow repo in .acm/)
+acm restore <sha>                 # restore the doc to a journal version (snapshots + journals the current state first)
 ```
 
 Typical loop: `acm threads --json` to see open threads → `acm comment` / `acm suggest`
