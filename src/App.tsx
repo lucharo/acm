@@ -17,15 +17,15 @@ import { useDocSync } from "./client/useDocSync";
 import type { SaveState } from "./client/useDocSync";
 import { useCodeMirror } from "./editor/useCodeMirror";
 import type { CritCallbacks } from "./editor/criticMarkupView";
-import CommentSidebar, { MOD, handleCommentKey } from "./components/CommentSidebar";
+import CommentSidebar, { MOD } from "./components/CommentSidebar";
 import HealReview from "./components/HealReview";
 import Toc from "./components/Toc";
 import NavPanel from "./components/NavPanel";
 import Header from "./components/Header";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
-import { FONT_STACKS, loadSettings } from "./lib/viewSettings";
 import type { ViewSettings } from "./lib/viewSettings";
+import { useViewSettings, useSeenState, commentKey } from "./hooks/useConfigState";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import {
@@ -72,49 +72,6 @@ function dispatchableDiff(before: string, after: string): { from: number; to: nu
   return { from: p, to: before.length - s, insert: after.slice(p, after.length - s) };
 }
 
-
-// ── "Seen" comment tracking (declutter between review rounds) ──────────────────
-// "Seen" is a lightweight, NON-destructive state (unlike Resolve, which strips the
-// markup from the file). It lives client-side in localStorage, keyed by comment
-// CONTENT (author+body) so it survives the positional-id shifts that edits cause —
-// the file is never touched.
-function commentKey(c: { author: string | null; body: string }): string {
-  // NUL separator (written as an escape, not a raw byte: a raw NUL makes every
-  // tool treat this file as binary): un-typeable, so "a b"+"c" can never collide
-  // with "a"+"b c". The escape keeps the exact runtime string - stored seen-keys
-  // (localStorage + ~/.config/acm) stay valid.
-  return `${c.author ?? ""}\u0000${c.body}`;
-}
-// (wrappableSpan — whether a selection can become a `{==span==}` anchor — lives in
-// lib/criticmarkup so the composer and the `acm suggest` verb share one gate.)
-function loadSeen(): Set<string> {
-  try {
-    return new Set<string>(JSON.parse(localStorage.getItem("acm-seen") ?? "[]"));
-  } catch {
-    return new Set();
-  }
-}
-
-// ── Server-side config sync (~/.config/acm/settings.json) ──────────────────────
-// localStorage stays the INSTANT cache (theme/font apply with no fetch flash); the
-// server file is the cross-instance source of truth. Each writer PUTs only its own
-// key (settings | seen) and the server merges, so they never clobber each other.
-async function fetchConfig(): Promise<Record<string, unknown> | null> {
-  try {
-    const res = await fetch("/api/settings");
-    return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-function putConfig(patch: Record<string, unknown>): void {
-  void fetch("/api/settings", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  }).catch(() => {});
-}
-
 export default function App() {
   // Remote updates (WS push / reconnect resync / 409) are forwarded into the
   // Workspace once it has registered its handler. An update can arrive in the gap
@@ -132,40 +89,10 @@ export default function App() {
     },
   });
 
-  // View settings live here so theme/font apply to the loading screen too. Initialised
-  // from localStorage (instant, no flash) and reconciled with the server file below.
-  const [settings, setSettings] = useState<ViewSettings>(loadSettings);
-  useEffect(() => {
-    const root = document.documentElement;
-    root.dataset.theme = settings.theme;
-    root.style.setProperty("--editor-font", FONT_STACKS[settings.font]);
-    localStorage.setItem("acm-settings", JSON.stringify(settings));
-  }, [settings]);
-  const onChangeSettings = useCallback(
-    (patch: Partial<ViewSettings>) => setSettings((s) => ({ ...s, ...patch })),
-    [],
-  );
-  // On mount: adopt the server's settings (cross-instance truth); if it has none,
-  // migrate this browser's localStorage settings up to the server. Gate the sync
-  // PUT until after this so we don't clobber the server before reading it.
-  const settingsHydrated = useRef(false);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchConfig().then((cfg) => {
-      if (cancelled) return;
-      if (cfg && cfg.settings) setSettings((s) => ({ ...s, ...(cfg.settings as Partial<ViewSettings>) }));
-      else putConfig({ settings: loadSettings() }); // first run → migrate
-      settingsHydrated.current = true;
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  useEffect(() => {
-    if (!settingsHydrated.current) return;
-    const t = setTimeout(() => putConfig({ settings }), 300);
-    return () => clearTimeout(t);
-  }, [settings]);
+  // View settings live at the App level so theme/font apply to the loading
+  // screen too (state + persistence in useConfigState).
+  const { settings, onChangeSettings } = useViewSettings();
+
 
   if (sync.initialDoc === null) {
     return <Loading connected={sync.connected} />;
@@ -305,31 +232,10 @@ function Workspace({
     [inlineSuggestionList],
   );
 
-  // "Seen" tracking — content-keyed, non-destructive. localStorage is the instant
-  // cache; ~/.config/acm/settings.json is the cross-instance truth (synced below).
-  const [seen, setSeen] = useState<Set<string>>(loadSeen);
-  useEffect(() => {
-    localStorage.setItem("acm-seen", JSON.stringify([...seen]));
-  }, [seen]);
-  // On mount: adopt the server's seen set, or migrate localStorage up on first run.
-  const seenHydrated = useRef(false);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchConfig().then((cfg) => {
-      if (cancelled) return;
-      if (cfg && Array.isArray(cfg.seen)) setSeen(new Set(cfg.seen as string[]));
-      else putConfig({ seen: [...loadSeen()] });
-      seenHydrated.current = true;
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  useEffect(() => {
-    if (!seenHydrated.current) return;
-    const t = setTimeout(() => putConfig({ seen: [...seen] }), 300);
-    return () => clearTimeout(t);
-  }, [seen]);
+  // "Seen" tracking — content-keyed, non-destructive (state + persistence in
+  // useConfigState).
+  const { seen, setSeen } = useSeenState();
+
   const seenThreadIds = useMemo(
     () =>
       new Set(
