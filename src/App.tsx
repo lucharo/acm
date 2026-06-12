@@ -26,6 +26,7 @@ import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
 import { useViewSettings, useSeenState, commentKey } from "./hooks/useConfigState";
+import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import {
@@ -197,73 +198,27 @@ function Workspace({
   // the SPAN (wrapping it in `{==…==}`), not just a point — set in openComposer.
   const commentRange = useRef<{ from: number; to: number } | null>(null);
 
-  const tokens = useMemo(() => scanTokens(doc), [doc]);
-  const wordCount = useMemo(() => countWords(doc), [doc]);
-  // Markdown headings → the floating outline (TOC). Strip any inline CriticMarkup
-  // from the displayed text; `from` is the heading line's doc offset (jump target).
-  const headings = useMemo(() => {
-    const out: { level: number; text: string; from: number }[] = [];
-    const re = /^(#{1,6})[ \t]+(.+)$/gm;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(doc)) !== null) {
-      const text = m[2]
-        .replace(/\{>>[\s\S]*?<<\}/g, "")
-        .replace(/\{(\+\+|--|~~|==)|(\+\+|--|~~|==)\}|~>/g, "")
-        .trim();
-      out.push({ level: m[1].length, text, from: m.index });
-    }
-    return out;
-  }, [doc]);
-  const comments = useMemo(() => tokens.filter(isComment), [tokens]);
-  // Adjacent comments grouped into threaded cards (root + replies).
-  const threads = useMemo(() => groupThreads(comments, doc), [comments, doc]);
-  // The full margin set: comment threads + suggestion cards (with adjacent replies),
-  // ordered by offset. Drives the sidebar.
-  const cards = useMemo(() => groupCards(tokens, doc), [tokens, doc]);
-  // Comment-kind cards only — for seen/unseen accounting (suggestions are accept/
-  // reject, not "seen", and shouldn't inflate the inbox).
-  const commentCards = useMemo(() => cards.filter((c) => c.kind === "comment"), [cards]);
-  // The anchored SUGGEST: pairs — ONE pass over the already-memoized tokens, feeding
-  // both the editor's inline accept/reject layer and the sidebar's Apply gate. The
-  // gate is just their ids, so "what's applyable" can't drift between the two.
-  const inlineSuggestionList = useMemo(() => inlineSuggestions(doc, tokens), [doc, tokens]);
-  const applicableSuggestionIds = useMemo(
-    () => new Set(inlineSuggestionList.map((s) => s.commentId)),
-    [inlineSuggestionList],
-  );
+  // Everything derived from the doc (tokens → threads/cards → suggestions →
+  // markup health) — see hooks/useDocDerived.
+  const {
+    tokens,
+    wordCount,
+    headings,
+    threads,
+    cards,
+    commentCards,
+    inlineSuggestionList,
+    applicableSuggestionIds,
+    healIssues,
+    diagnostics,
+    fixableCount,
+    suggestionGroupOf,
+  } = useDocDerived(doc);
 
   // "Seen" tracking — content-keyed, non-destructive (state + persistence in
   // useConfigState).
   const { seen, setSeen } = useSeenState();
-
-  const seenThreadIds = useMemo(
-    () =>
-      new Set(
-        commentCards.filter((t) => t.comments.every((c) => seen.has(commentKey(c)))).map((t) => t.id),
-      ),
-    [commentCards, seen],
-  );
-  // Unseen comment threads remaining (drives the zero-inbox counter).
-  const unseenCount = useMemo(
-    () => commentCards.filter((t) => !t.comments.every((c) => seen.has(commentKey(c)))).length,
-    [commentCards, seen],
-  );
-
-  // Doc health: comments accidentally inserted INSIDE another comment's body
-  // (nested `{>>…{>>…<<}…<<}`) — they render raw and split words. Each is
-  // auto-healable (pull the inner one out into an adjacent comment).
-  const healIssues = useMemo(() => nestedCommentIssues(doc), [doc]);
-  // ALL markup defects — every delimiter that renders raw (leaking highlights,
-  // dangling opens, stray closes, malformed comments), as positioned diagnostics
-  // (#18) — plus how many of those one click can repair (simulate the full heal,
-  // diff the counts). ONE memo so a defect-carrying doc pays the heal+validate
-  // simulation once per doc change, not once per derived value.
-  const { diagnostics, fixableCount } = useMemo(() => {
-    const diags = validateMarkup(doc);
-    if (diags.length === 0) return { diagnostics: diags, fixableCount: 0 };
-    return { diagnostics: diags, fixableCount: diags.length - validateMarkup(healDocument(doc)).length };
-  }, [doc]);
-
+  const { seenThreadIds, unseenCount } = useSeenDerived(commentCards, seen);
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that
   // reads the freshest handlers from this ref. The proxy identity never changes,
@@ -443,16 +398,6 @@ function Workspace({
     },
     [editor.viewRef],
   );
-
-  // commentId → its suggestion group (id + member count), for the sidebar's
-  // group-wide Apply/Reject controls. Only real groups (≥2 members) qualify.
-  const suggestionGroupOf = useMemo(() => {
-    const map = new Map<string, { id: string; size: number }>();
-    for (const s of inlineSuggestionList) {
-      if (s.groupId && s.groupSize > 1) map.set(s.commentId, { id: s.groupId, size: s.groupSize });
-    }
-    return map;
-  }, [inlineSuggestionList]);
 
   // ── Comment threads ───────────────────────────────────────────────────────────
   const focusThread = useCallback(
