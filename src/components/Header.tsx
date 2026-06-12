@@ -6,7 +6,7 @@ import { useState } from "react";
 import { MOD, handleCommentKey } from "./CommentSidebar";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
-import type { Font, ViewSettings } from "../lib/viewSettings";
+import type { Font, Theme, ViewSettings } from "../lib/viewSettings";
 
 export interface HeaderProps {
   connected: boolean;
@@ -211,6 +211,16 @@ export default function Header(props: HeaderProps) {
             <div className="fixed inset-0 z-20" onClick={() => setSettingsOpen(false)} />
             <div className="absolute right-3 top-11 z-30 w-60 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-1.5 shadow-lg">
               <FontPicker value={settings.font} onChange={(font) => onChangeSettings({ font })} />
+              <Segmented<Theme>
+                label="Theme"
+                value={settings.theme}
+                options={[
+                  { value: "light", label: "Light" },
+                  { value: "dark", label: "Dark" },
+                  { value: "system", label: "System" },
+                ]}
+                onChange={(theme) => onChangeSettings({ theme })}
+              />
               <div className="my-1 border-t border-[var(--line)]" />
               <div className="px-2 py-1.5">
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
@@ -224,11 +234,6 @@ export default function Header(props: HeaderProps) {
                 />
               </div>
               <div className="my-1 border-t border-[var(--line)]" />
-              <SettingRow
-                label="Dark mode"
-                checked={settings.theme === "dark"}
-                onToggle={() => onChangeSettings({ theme: settings.theme === "dark" ? "light" : "dark" })}
-              />
               <SettingRow
                 label="Page view"
                 checked={settings.page}
@@ -287,30 +292,56 @@ export default function Header(props: HeaderProps) {
   );
 }
 
-function FontPicker({ value, onChange }: { value: Font; onChange: (f: Font) => void }) {
+/** A labelled row of mutually-exclusive options (font, theme, …). */
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string; style?: React.CSSProperties }[];
+  onChange: (v: T) => void;
+}) {
   return (
     <div className="px-2 py-1.5">
       <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
-        Document font
+        {label}
       </div>
       <div className="flex gap-1">
-        {(["serif", "sans", "mono"] as Font[]).map((f) => (
+        {options.map((o) => (
           <button
-            key={f}
+            key={o.value}
             type="button"
-            onClick={() => onChange(f)}
+            onClick={() => onChange(o.value)}
             className={`flex-1 rounded px-2 py-1 text-[13px] transition-colors ${
-              value === f
+              value === o.value
                 ? "bg-[var(--accent)] text-[var(--panel)]"
                 : "text-[var(--muted)] hover:bg-[var(--line)]"
             }`}
-            style={{ fontFamily: FONT_STACKS[f] }}
+            style={o.style}
           >
-            {FONT_LABELS[f]}
+            {o.label}
           </button>
         ))}
       </div>
     </div>
+  );
+}
+
+function FontPicker({ value, onChange }: { value: Font; onChange: (f: Font) => void }) {
+  return (
+    <Segmented<Font>
+      label="Document font"
+      value={value}
+      options={(["serif", "sans", "mono"] as Font[]).map((f) => ({
+        value: f,
+        label: FONT_LABELS[f],
+        style: { fontFamily: FONT_STACKS[f] },
+      }))}
+      onChange={onChange}
+    />
   );
 }
 

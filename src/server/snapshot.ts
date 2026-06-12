@@ -5,7 +5,7 @@
 // Capped by count so it can't grow unbounded — important because <docDir> may live
 // under a synced tree (the .acm dir is gitignored AND should be sync-ignored).
 
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
 
 const MAX_SNAPSHOTS = 50;
@@ -20,6 +20,10 @@ export async function snapshot(docPath: string, trigger: string, ts = new Date()
   const content = await file.text();
   const dir = join(dirname(docPath), ".acm", "snapshots", basename(docPath));
   mkdirSync(dir, { recursive: true });
+  // Self-ignore the whole .acm dir so an ENCLOSING git repo never sees it as
+  // untracked noise (a nested .gitignore of `*` ignores the dir, itself included).
+  const acmIgnore = join(dirname(docPath), ".acm", ".gitignore");
+  if (!existsSync(acmIgnore)) writeFileSync(acmIgnore, "*\n");
   const stamp = ts.toISOString().replace(/[:.]/g, "-");
   const out = join(dir, `${stamp}-${trigger}.md`);
   await Bun.write(out, content);

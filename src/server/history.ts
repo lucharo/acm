@@ -11,7 +11,7 @@
 // is required.
 
 import { dirname, basename, join } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { scanTokens, countWords } from "../lib/criticmarkup";
 
 function gitDirFor(docPath: string): string {
@@ -43,10 +43,22 @@ async function git(
   return { ok: code === 0, out: (out + err).trim(), raw: out };
 }
 
+/** Make `<docDir>/.acm` invisible to any ENCLOSING git repo: a nested
+ *  `.gitignore` containing `*` ignores the whole dir (itself included), so the
+ *  journal/snapshots never show up as untracked noise in the user's repo and
+ *  nothing in their .gitignore needs editing. The journal itself is unaffected —
+ *  every git call passes explicit --git-dir/--work-tree, so an enclosing repo is
+ *  never discovered or touched. */
+function selfIgnoreAcmDir(acmDir: string): void {
+  const ignore = join(acmDir, ".gitignore");
+  if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
+}
+
 async function ensureRepo(docPath: string): Promise<boolean> {
   const dir = gitDirFor(docPath);
   if (existsSync(dir)) return true;
   mkdirSync(dirname(dir), { recursive: true });
+  selfIgnoreAcmDir(dirname(dir));
   const init = await Bun.spawn(["git", "init", "--quiet", "--bare", dir], {
     stdout: "ignore",
     stderr: "ignore",

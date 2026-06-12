@@ -3,7 +3,7 @@
 // server file (~/.config/acm/settings.json) is the cross-instance truth — see
 // the sync wiring in App.
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "system";
 export type Font = "serif" | "sans" | "mono";
 export interface ViewSettings {
   theme: Theme;
@@ -23,7 +23,7 @@ export const FONT_STACKS: Record<Font, string> = {
 export const FONT_LABELS: Record<Font, string> = { serif: "Serif", sans: "Sans", mono: "Mono" };
 
 export const DEFAULT_SETTINGS: ViewSettings = {
-  theme: "light",
+  theme: "system", // fresh installs follow the OS; stored choices override
   font: "serif",
   page: true,
   lineNumbers: false,

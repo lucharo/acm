@@ -55,9 +55,20 @@ export function useViewSettings() {
   const [settings, setSettings] = useState<ViewSettings>(loadSettings);
   useEffect(() => {
     const root = document.documentElement;
-    root.dataset.theme = settings.theme;
+    // "system" resolves to the OS preference and TRACKS it live; the CSS only
+    // knows data-theme="light|dark", so resolution happens here.
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      root.dataset.theme =
+        settings.theme === "system" ? (mq.matches ? "dark" : "light") : settings.theme;
+    };
+    apply();
     root.style.setProperty("--editor-font", FONT_STACKS[settings.font]);
     localStorage.setItem("acm-settings", JSON.stringify(settings));
+    if (settings.theme === "system") {
+      mq.addEventListener("change", apply);
+      return () => mq.removeEventListener("change", apply);
+    }
   }, [settings]);
   const onChangeSettings = useCallback(
     (patch: Partial<ViewSettings>) => setSettings((s) => ({ ...s, ...patch })),

@@ -38,4 +38,30 @@ describe("doc history (git shadow journal)", () => {
     expect(existsSync(join(dir, ".git"))).toBe(false);
     expect(existsSync(join(dir, ".acm", "history.git"))).toBe(true);
   });
+
+  test("a doc INSIDE an existing git repo: journal works, enclosing repo unaffected", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "acm-enclosing-"));
+    try {
+      const run = (args: string[]) => Bun.spawnSync(["git", "-C", repo, ...args]);
+      run(["init", "--quiet"]);
+      const inner = join(repo, "notes.md");
+      writeFileSync(inner, "# Notes\n\nDoc living inside a user repo.\n");
+      run(["add", "."]);
+      run(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "user commit"]);
+
+      const sha = await recordHistory(inner, "open");
+      expect(sha).not.toBeNull();
+      expect(await listHistory(inner)).toHaveLength(1);
+
+      // The ENCLOSING repo: HEAD untouched, and .acm/ invisible (self-ignored),
+      // so `git status` stays clean for the user.
+      const log = Bun.spawnSync(["git", "-C", repo, "log", "--oneline"]).stdout.toString();
+      expect(log.trim().split("\n")).toHaveLength(1);
+      expect(log).toContain("user commit");
+      const status = Bun.spawnSync(["git", "-C", repo, "status", "--porcelain"]).stdout.toString();
+      expect(status.trim()).toBe("");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
 });
