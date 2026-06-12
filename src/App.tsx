@@ -27,7 +27,7 @@ import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
 import { useViewSettings, useSeenState, commentKey } from "./hooks/useConfigState";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
-import { useComposer } from "./hooks/useComposer";
+import { useComposer, SUGGEST_EDIT_TEXT } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import {
@@ -42,10 +42,8 @@ import {
   healOneNestedComment,
   nestedCommentIssues,
   validateMarkup,
-  clampAnchorOutsideComments,
   suggestionThreadEdit,
   inlineSuggestions,
-  wrappableSpan,
   hardWrap,
   suggestionGroupEdits,
 } from "./lib/criticmarkup";
@@ -59,8 +57,6 @@ import type {
 } from "./lib/types";
 
 
-// Canned body for the one-click "Suggest edit" hand-off action.
-const SUGGEST_EDIT_TEXT = "suggest edit";
 
 // Minimal single-range change between two strings (shared prefix/suffix trimmed), so
 // a rewrite dispatches as a tight ranged change instead of a whole-doc replace —

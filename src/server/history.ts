@@ -49,7 +49,7 @@ async function git(
  *  nothing in their .gitignore needs editing. The journal itself is unaffected —
  *  every git call passes explicit --git-dir/--work-tree, so an enclosing repo is
  *  never discovered or touched. */
-function selfIgnoreAcmDir(acmDir: string): void {
+export function selfIgnoreAcmDir(acmDir: string): void {
   const ignore = join(acmDir, ".gitignore");
   if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
 }

@@ -776,6 +776,10 @@ export function countWords(text: string): number {
   return words ? words.length : 0;
 }
 
+/** Accepted-prose words per A4 page (11pt single-spaced ballpark) — the one
+ *  pagination constant; UI copy derives from it too. */
+export const WORDS_PER_A4_PAGE = 550;
+
 /**
  * Where A4 page breaks fall, estimated the way a STANDARD document would paginate
  * (≈550 accepted-prose words per page — 11pt single-spaced, GDocs/Word ballpark) —
@@ -785,10 +789,6 @@ export function countWords(text: string): number {
  * soft-wrapped paragraph lines), plus the page total. Word counting matches {@link countWords} (comments
  * and deletions aren't prose), applied per line.
  */
-/** Accepted-prose words per A4 page (11pt single-spaced ballpark) — the one
- *  pagination constant; UI copy derives from it too. */
-export const WORDS_PER_A4_PAGE = 550;
-
 export function pageBreakLines(
   text: string,
   wordsPerPage = WORDS_PER_A4_PAGE,

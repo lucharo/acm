@@ -60,6 +60,18 @@ export function startServer(opts: StartServerOptions): AcmServer {
   let version = 0;
   let lastKnownHash = Bun.hash(safeReadText(docPath));
 
+  // Doc history (#11): a git shadow journal in <docDir>/.acm/history.git.
+  // Baseline at boot, then a commit after each QUIET PERIOD of writes (saves
+  // land every 500ms while typing — journal entries shouldn't). Crashes lose at
+  // most the last minute; agent verbs additionally snapshot before every write.
+  // Declared BEFORE the route handlers that call it (no TDZ reliance).
+  void recordHistory(docPath, "open");
+  let historyTimer: ReturnType<typeof setTimeout> | undefined;
+  const recordHistorySoon = (source: string) => {
+    if (historyTimer) clearTimeout(historyTimer);
+    historyTimer = setTimeout(() => void recordHistory(docPath, source), 60_000);
+  };
+
   // Serialize every read-check-write-version mutation (PUT, POST, watcher) so they
   // can't interleave at their `await` points and clobber each other.
   let writeChain: Promise<unknown> = Promise.resolve();
@@ -210,16 +222,6 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // probing) is the authority, so no unregister-on-exit bookkeeping is needed.
   void registerInstance(port, docPath);
 
-  // Doc history (#11): a git shadow journal in <docDir>/.acm/history.git.
-  // Baseline at boot, then a commit after each QUIET PERIOD of writes (saves
-  // land every 500ms while typing — journal entries shouldn't). Crashes lose at
-  // most the last minute; agent verbs additionally snapshot before every write.
-  void recordHistory(docPath, "open");
-  let historyTimer: ReturnType<typeof setTimeout> | undefined;
-  const recordHistorySoon = (source: string) => {
-    if (historyTimer) clearTimeout(historyTimer);
-    historyTimer = setTimeout(() => void recordHistory(docPath, source), 60_000);
-  };
 
   return {
     server,

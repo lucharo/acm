@@ -16,8 +16,9 @@ import {
 import { isComment } from "../lib/types";
 import { commentKey } from "./useConfigState";
 
-// Canned body for the one-click "Suggest edit" hand-off action.
-const SUGGEST_EDIT_TEXT = "suggest edit";
+// Canned body for the one-click "Suggest edit" hand-off action (also matched by
+// replyAndSeen in App — the one shared definition).
+export const SUGGEST_EDIT_TEXT = "suggest edit";
 
 export function useComposer(
   viewRef: React.MutableRefObject<EditorView | null>,
