@@ -122,6 +122,21 @@ export const acmTheme: Extension = EditorView.theme(
       textDecoration: "underline",
       textUnderlineOffset: "2px",
     },
+    // Footnotes: `[^id]` references and `[^id]:` labels are clickable (jump to the
+    // note / back to the reference — see footnotes.ts). Cursor affordance only; the
+    // common reference also carries .cm-md-link colour from lezer.
+    ".cm-footnote-ref, .cm-footnote-def-label": {
+      cursor: "pointer",
+    },
+    ".cm-footnote-ref:hover, .cm-footnote-def-label:hover": {
+      textDecoration: "underline",
+      textUnderlineOffset: "2px",
+    },
+    // Brief highlight on the target a footnote jump lands on.
+    ".cm-footnote-flash": {
+      backgroundColor: "var(--crit-hl-bg-strong)",
+      borderRadius: "3px",
+    },
     // Bionic-reading: emboldened word-leads (toggled in settings).
     ".cm-bionic": {
       fontWeight: "700",

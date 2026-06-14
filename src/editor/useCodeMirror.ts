@@ -24,6 +24,7 @@ import { CriticMarkup } from "./criticMarkupParser";
 import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
 import { markdownPreview } from "./markdownPreview";
+import { footnotes } from "./footnotes";
 import { bionicReading } from "./bionicView";
 import { pageBreaks } from "./pageBreaks";
 import { acmTheme, pageTheme } from "./theme";
@@ -123,6 +124,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         // ::selection rule in theme.ts). We don't need multi-range/rectangular select.
         markdown({ base: markdownLanguage, extensions: [CriticMarkup] }),
         markdownPreview,
+        footnotes,
         criticMarkupExtension(),
         acmTheme,
         callbacksCompartment.current.of(
