@@ -98,14 +98,21 @@ const footnoteFlashField = StateField.define<DecorationSet>({
 
 const FLASH_MS = 1300;
 
+// Bumped on every jump; the clear timer only fires if it's still the latest, so a
+// rapid second jump's flash isn't cut short by the first jump's stale timer.
+let flashToken = 0;
+
 /** Scroll `target` into view and flash it, WITHOUT moving the cursor (so editing
  *  is never disturbed and a definition label stays clickable for the jump back). */
 function navigateTo(view: EditorView, target: { from: number; to: number }): void {
   view.dispatch({
     effects: [EditorView.scrollIntoView(target.from, { y: "center" }), setFootnoteFlash.of(target)],
   });
+  const token = ++flashToken;
   window.setTimeout(() => {
-    if (view.dom.isConnected) view.dispatch({ effects: setFootnoteFlash.of(null) });
+    if (token === flashToken && view.dom.isConnected) {
+      view.dispatch({ effects: setFootnoteFlash.of(null) });
+    }
   }, FLASH_MS);
 }
 
