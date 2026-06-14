@@ -49,6 +49,22 @@ references/footnotes, which live in free prose, just write the markdown link inl
 
 Decision: **free prose → inline `{~~~>~~}`. Commented/anchored text → `SUGGEST:`.**
 
+**Three rules learned the hard way:**
+
+1. **One comment = one suggestion.** A `SUGGEST:` comment's body is ONLY the
+   replacement text — never prefix it with prose (`Moving this… SUGGEST: …`). Mixed
+   comments render as a broken/blank card. If you must explain, use a SEPARATE
+   adjacent comment.
+2. **Anchor directly so it's visible.** Prefer `acm suggest "<span>" "<new>"` — it
+   anchors the SUGGEST right on the span, which is what surfaces it in the editor's
+   **Suggestions** tab. A SUGGEST *appended at the end of a long thread* still applies
+   and renders inline, but the Suggestions tab currently hides it — so don't bury a
+   suggestion mid-thread when a direct anchor will do.
+3. **Be non-destructive.** A "tighten this" suggestion must not nuke a point the human
+   values. De-duplicate by KEEPING the unique idea, not deleting it; if a span says two
+   things and one repeats, suggest a version that preserves the fresh half. When unsure,
+   suggest — don't cut.
+
 One thing that IS allowed (don't avoid it): an anchor may **wrap existing tracked
 changes** — `{==a span with {++pending++} edits==}{>>@you: SUGGEST: …<<}` parses and
 renders fine (the grammar is nesting-aware for highlights). So you can suggest over a
@@ -104,6 +120,52 @@ const threads = groupThreads(comments, text); // each thread.to = where a reply 
 `scanTokens` gives every token with exact `{from,to}` offsets, `author`, and `body`.
 `groupThreads` returns threads; **`thread.to` is exactly where you insert a reply** so
 it threads cleanly. This is the reliable way to locate anchors and avoid mis-edits.
+
+## Clearing threads — the reply sweep
+
+A move the human will love at the end of a pass: **reply to every thread still waiting
+on you**, so they can resolve the lot in one sweep. A thread is waiting if its **last
+comment's author isn't you**:
+
+```ts
+const pending = groupThreads(comments, text).filter((th) => {
+  const last = th.comments[th.comments.length - 1];
+  return (last.author || "").toLowerCase() !== "claude"; // your author name
+});
+```
+
+Reply to each — an ack ("good call, resolve"), a decision ("go with X"), or a concrete
+`SUGGEST:` — via `acm comment` / `acm apply edits.json`, so every thread ends in your
+voice. **Be confident and proactive:** you don't only respond where they commented — add
+standalone `acm suggest` cards and comments wherever you spot an error, a typo, or an
+unclear bit. Standalone suggestions (not tied to a thread) are welcome.
+
+## Spelling pass
+
+For long or transcribed prose, run a spell check and turn real typos into Apply-able
+cards rather than fixing them silently:
+
+```
+uvx codespell <doc>     # DETECT only — never -w (no silent rewrites)
+```
+
+For each genuine **prose** typo: `acm suggest "<typo>" "<fix>"`. **Skip** matches inside
+comment bodies, footnote definitions, and foreign-language spans (Spanish/German/Māori
+trigger false positives), and skip any section the human is still actively rewriting.
+
+## Pacing a large review
+
+- **Calibrate before bulk.** Never fire a 50+ edit batch uncalibrated. Do a small first
+  cluster (3–5 edits), show it, get a voice check, then roll the rest. The human's voice
+  and tolerance for cuts only become clear after they react to a sample.
+- **Re-read the live doc before each pass.** The human edits concurrently, so offsets and
+  prose drift — stale anchors are the #1 cause of mis-anchored or dead suggestions.
+  Re-read top-to-bottom (or `acm threads --json`) immediately before composing.
+- **Honor protected-spot markers.** When the human flags a passage as theirs ("hold on, I
+  can try myself", "I'll do it", "I'll write") — leave it. Offer direction, never a
+  finished rewrite; the writer's own passages stay their hand.
+- **Skip already-answered threads.** Work only the raw, unanswered ones (last comment isn't
+  you, and no prior `@claude`/`[Claude]` note). Don't re-litigate settled threads.
 
 ## Workflow
 
