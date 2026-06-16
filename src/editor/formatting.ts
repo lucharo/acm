@@ -118,18 +118,43 @@ export function planToggle(
   };
 }
 
+/** Plan the toggle across MANY ranges (multi-cursor), all in ORIGINAL document
+ *  coordinates. We deliberately avoid `state.changeByRange`: it hands the callback
+ *  offsets already mapped through earlier ranges' edits, but `planToggle` reads the
+ *  unmapped doc string — so for 2+ cursors the later ranges would slice the wrong
+ *  text. Instead we read each range against the original doc and shift its resulting
+ *  selection by the net length change of all earlier ranges. */
+export function planMultiToggle(
+  doc: string,
+  ranges: readonly { from: number; to: number }[],
+  marker: string,
+): { edits: ToggleEdit[]; sel: { anchor: number; head: number }[] } {
+  const edits: ToggleEdit[] = [];
+  const sel: { anchor: number; head: number }[] = [];
+  let delta = 0; // net chars inserted by all earlier ranges
+  for (const r of ranges) {
+    const plan = planToggle(doc, r.from, r.to, marker);
+    edits.push(...plan.edits);
+    sel.push({ anchor: plan.anchor + delta, head: plan.head + delta });
+    for (const e of plan.edits) delta += e.insert.length - (e.to - e.from);
+  }
+  return { edits, sel };
+}
+
 /** Build a CodeMirror command that toggles `marker` over every selection range. */
 function toggleCommand(marker: string): Command {
   return (view) => {
     const { state } = view;
-    const tr = state.changeByRange((range) => {
-      const plan = planToggle(state.doc.toString(), range.from, range.to, marker);
-      return {
-        changes: plan.edits,
-        range: EditorSelection.range(plan.anchor, plan.head),
-      };
+    const { edits, sel } = planMultiToggle(state.doc.toString(), state.selection.ranges, marker);
+    view.dispatch({
+      changes: edits,
+      selection: EditorSelection.create(
+        sel.map((s) => EditorSelection.range(s.anchor, s.head)),
+        state.selection.mainIndex,
+      ),
+      scrollIntoView: true,
+      userEvent: "input.format",
     });
-    view.dispatch(tr, { scrollIntoView: true, userEvent: "input.format" });
     return true;
   };
 }
