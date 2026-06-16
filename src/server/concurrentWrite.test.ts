@@ -4,7 +4,7 @@
 // that BOTH sides' content survives (disjoint) and that a true same-line overlap is
 // an honest conflict rather than a silent overwrite.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,13 +15,20 @@ const SEED = "Para one.\n\nPara two is here.\n";
 const HUMAN = "Para one EDITED.\n\nPara two is here.\n"; // edits line 0
 const CARD = "Para one.\n\nPara two is {==here==}{>>@claude: SUGGEST: present<<}.\n"; // edits line 2
 
-let nextPort = 13000 + Math.floor(Math.random() * 500);
 const live: AcmServer[] = [];
+let prevXdg: string | undefined;
 
 beforeAll(() => {
   // Isolate the instance registry / settings from the user's real ~/.config/acm so
   // a live ACM on :12000 is never perturbed by the test's registerInstance writes.
+  prevXdg = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "acm-xdg-"));
+});
+
+afterAll(() => {
+  // Restore the env so this file can't leak into other suites in the same process.
+  if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = prevXdg;
 });
 
 afterEach(() => {
@@ -31,18 +38,19 @@ afterEach(() => {
 async function boot(seed: string): Promise<{ url: string; docPath: string }> {
   const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
   await Bun.write(docPath, seed);
-  const port = nextPort++;
-  live.push(startServer({ docPath, port, staticDir: "./dist" }));
-  const url = `http://localhost:${port}`;
+  // Port 0 → the OS hands out a free ephemeral port, so parallel runs can't collide.
+  const srv = startServer({ docPath, port: 0, staticDir: "./dist" });
+  live.push(srv);
+  const url = `http://localhost:${srv.server.port}`;
   for (let i = 0; i < 100; i++) {
     try {
-      if ((await fetch(`${url}/api/doc`)).ok) break;
+      if ((await fetch(`${url}/api/doc`)).ok) return { url, docPath };
     } catch {
       /* not up yet */
     }
     await Bun.sleep(10);
   }
-  return { url, docPath };
+  throw new Error(`ACM test server on ${url} failed to start`);
 }
 
 const J = { "content-type": "application/json" };

@@ -251,7 +251,10 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       body: JSON.stringify({ base: before, content: after }),
     }).catch(() => null);
     if (!res) {
-      await Bun.write(docPath, after); // editor vanished between probe and write
+      // The editor went away between the liveness probe and this POST. Fall back to a
+      // direct write — last-write-wins, but with no live server there is no second
+      // writer to race (and the pre-edit snapshot above is the recovery net).
+      await Bun.write(docPath, after);
     } else if (res.status === 409) {
       const { conflict } = (await res.json().catch(() => ({}))) as { conflict?: string };
       const why =

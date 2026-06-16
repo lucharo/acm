@@ -64,10 +64,13 @@ export function startServer(opts: StartServerOptions): AcmServer {
 
   // Content the server held at each recent version. A writer that started from an
   // OLDER version (the editor's baseVersion, or an agent's pre-edit read) needs that
-  // version's content as the merge base — so we retain the last few. Bounded: within
-  // a 500ms save window only the most recent versions can be a live base, and the
-  // git journal (60s debounce) is far too coarse to serve this role.
-  const KEEP_VERSIONS = 8;
+  // version's content as the merge base — so we retain a generous window. A save's
+  // baseVersion is only a version or two behind the server in practice, but a burst
+  // of interleaved human+agent writes can bump several versions while a save is in
+  // flight, so keep plenty (prose docs are small; a few dozen copies is cheap). Past
+  // the window we 409 "stale" and the editor recovers by adopting disk. The git
+  // journal (60s debounce) is far too coarse to serve as the merge base.
+  const KEEP_VERSIONS = 32;
   const contentByVersion = new Map<number, string>([[0, initialContent]]);
   function recordVersion(content: string) {
     contentByVersion.set(version, content);
