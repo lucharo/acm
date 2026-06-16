@@ -69,6 +69,15 @@ async function docPathFrom(f: Flags): Promise<string> {
   process.exit(1);
 }
 
+/** The live ACM server serving `docPath`, if one is open (pid-alive + answers its
+ *  port). When present, agent writes go THROUGH it so they merge with the human's
+ *  in-editor edits instead of racing the file (issue #38). */
+async function liveServerFor(docPath: string): Promise<{ port: number } | null> {
+  const owners = (await liveInstances()).filter((e) => e.doc === docPath);
+  for (const e of owners) if (await probeInstance(e)) return { port: e.port };
+  return null;
+}
+
 export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   const f = parseFlags(argv);
   const author = f.author ?? process.env.ACM_AUTHOR ?? "claude";
@@ -229,13 +238,43 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     return;
   }
   const snap = await snapshot(docPath, cmd); // back up the PRE-edit doc
-  await Bun.write(docPath, after);
 
-  const toks = scanTokens(after);
+  // If the doc is open in a live editor, route the write THROUGH the server so this
+  // edit and the human's concurrent typing 3-way merge instead of clobbering (#38).
+  // No live editor → write the file directly (single writer, no race).
+  const live = await liveServerFor(docPath);
+  let final = after;
+  if (live) {
+    const res = await fetch(`http://localhost:${live.port}/api/agent-write`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ base: before, content: after }),
+    }).catch(() => null);
+    if (!res) {
+      await Bun.write(docPath, after); // editor vanished between probe and write
+    } else if (res.status === 409) {
+      const { conflict } = (await res.json().catch(() => ({}))) as { conflict?: string };
+      const why =
+        conflict === "cursor"
+          ? "the human's cursor is in that span in the open editor"
+          : "the document changed under this edit in the open editor";
+      console.error(`acm ${cmd}: NOT applied — ${why}. Retry in a moment.`);
+      if (snap) console.error(`  (nothing written; pre-edit backup → ${snap})`);
+      process.exit(1);
+    } else {
+      const body = (await res.json().catch(() => ({}))) as { content?: string };
+      if (body.content !== undefined) final = body.content; // the merged bytes now on disk
+    }
+  } else {
+    await Bun.write(docPath, after);
+  }
+
+  const toks = scanTokens(final);
   const comments = toks.filter((t) => t.type === "comment").length;
   console.log(`acm ${cmd}: ${note}`);
   if (snap) console.log(`  backup → ${snap}`);
-  console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(after, toks).size}`);
+  if (live) console.log(`  written via the live editor on :${live.port} (merged with any concurrent human edits)`);
+  console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}`);
 }
 
 // ── acm import <file.docx> [out.md] — docx → CriticMarkup via the converter ───

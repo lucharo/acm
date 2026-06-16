@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DocState, ServerMessage } from "../lib/types";
+import { merge3 } from "../lib/merge";
 
 interface UseDocSyncOptions {
   /**
@@ -44,6 +45,8 @@ interface UseDocSyncResult {
   save: (content: string) => void;
   /** Flush any pending save immediately (Cmd/Ctrl+S, blur, page hide). */
   flushNow: () => void;
+  /** Report the editor's live caret/selection so agent writes can avoid it. */
+  reportSelection: (from: number, to: number) => void;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -68,6 +71,11 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   // Latest content queued for save, plus the debounce timer.
   const pendingContent = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Presence: a throttled caret push so agent writes can steer clear of where the
+  // human is editing. Advisory only — the server-side merge is the real guarantee.
+  const presenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSel = useRef<{ from: number; to: number } | null>(null);
 
   // WebSocket + reconnect machinery.
   const wsRef = useRef<WebSocket | null>(null);
@@ -173,6 +181,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       mounted.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (presenceTimer.current) clearTimeout(presenceTimer.current);
       const ws = wsRef.current;
       if (ws) {
         ws.onclose = null; // don't schedule a reconnect on intentional teardown
@@ -185,8 +194,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   // Pending content is cleared ONLY on a confirmed write — never optimistically —
   // so a failed/offline/conflicting save always retains the user's edits.
   const flush = useCallback(async () => {
-    const content = pendingContent.current;
-    if (content === null) return;
+    const sent = pendingContent.current;
+    if (sent === null) return;
     if (!connectedRef.current) {
       setSaveState("offline"); // held; flushed on reconnect (onopen below)
       return;
@@ -197,37 +206,66 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       res = await fetch("/api/doc", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content, baseVersion: currentVersion.current }),
+        body: JSON.stringify({ content: sent, baseVersion: currentVersion.current }),
       });
     } catch {
       setSaveState("offline"); // network blip — keep pending, retry on reconnect
       return;
     }
 
-    if (res.status === 409) {
-      // The file changed underneath us (e.g. an agent wrote concurrently). Do NOT
-      // discard the user's edits. Adopt the server's VERSION so the retry has a
-      // valid baseVersion, KEEP the local content, flag the conflict, and re-flush
-      // so the user's version persists (user wins; a concurrent edit in this narrow
-      // window may be overwritten — surfaced via the 'conflict' status).
-      const { version } = (await res.json()) as DocState;
-      currentVersion.current = version;
-      setSaveState("conflict");
+    const data = (await res.json().catch(() => ({}))) as {
+      version: number;
+      content?: string;
+      conflict?: string;
+    };
+    currentVersion.current = data.version;
+    const reflush = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
+      saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
+    };
+
+    if (res.status === 409) {
+      // A TRUE conflict: the human and an agent changed the SAME lines, so the server
+      // could not merge. KEEP the user's buffer (never discarded), surface the
+      // conflict, and STOP. Crucially we do NOT auto-reflush — that re-flush loop was
+      // the #38 bug, re-winning for the stale buffer and clobbering the other writer.
+      // The user wins on their next deliberate edit; the displaced side is recoverable
+      // from the doc journal (`acm history`).
+      setSaveState("conflict");
       return;
     }
 
-    const { version } = (await res.json()) as { version: number };
-    currentVersion.current = version;
-    if (pendingContent.current === content) {
+    // Success. The server returns the FINAL on-disk bytes, which may differ from what
+    // we sent if it merged in a concurrent agent write. We must fold that back into
+    // the buffer so the agent's card actually LANDS here — otherwise the next save
+    // would overwrite it with our card-less buffer (the original #38 mechanism).
+    const merged = data.content !== undefined && data.content !== sent;
+    const buffer = pendingContent.current;
+
+    if (buffer === sent) {
+      // No keystrokes since we sent → adopt the server's content verbatim.
+      if (merged) onRemoteUpdate.current(data.content!, data.version);
       pendingContent.current = null; // confirmed written
       setSaveState("saved");
       setLastSavedAt(Date.now());
+      return;
+    }
+
+    // The user kept typing during the round-trip. Reconcile against the freshest buffer.
+    if (!merged) {
+      reflush(); // server stored exactly what we sent; just persist the newer keystrokes
+      return;
+    }
+    // Rebase the agent's change (sent → server content) onto the newer buffer with the
+    // SAME merge primitive the server uses. Disjoint → both survive; a rare overlap
+    // with the brand-new keystrokes surfaces as a conflict (buffer kept, no loop).
+    const m = merge3(buffer!, sent, data.content!);
+    if (m.clean) {
+      onRemoteUpdate.current(m.result, data.version); // editor now shows keystrokes + card
+      pendingContent.current = m.result;
+      reflush(); // persist the rebased buffer (the server has only `sent` + card so far)
     } else {
-      // Newer keystrokes arrived mid-flight; persist them on the next tick.
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
+      setSaveState("conflict");
     }
   }, []);
   const flushRef = useRef(flush);
@@ -250,6 +288,23 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     void flushRef.current();
   }, []);
 
+  // Report the caret/selection to the server, throttled to one PUT per ~300ms (the
+  // latest position wins). Powers the agent-avoids-cursor guard; failures are silent.
+  const reportSelection = useCallback((from: number, to: number) => {
+    pendingSel.current = { from, to };
+    if (presenceTimer.current) return; // a push is already scheduled
+    presenceTimer.current = setTimeout(() => {
+      presenceTimer.current = null;
+      const sel = pendingSel.current;
+      if (!sel || !connectedRef.current) return;
+      void fetch("/api/presence", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(sel),
+      }).catch(() => {});
+    }, 300);
+  }, []);
+
   // Persist pending edits when the tab loses focus / is hidden / is closing, so a
   // mid-debounce edit can't be stranded if the window goes away.
   useEffect(() => {
@@ -266,5 +321,5 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     };
   }, [flushNow]);
 
-  return { initialDoc, initialVersion, connected, saveState, lastSavedAt, save, flushNow };
+  return { initialDoc, initialVersion, connected, saveState, lastSavedAt, save, flushNow, reportSelection };
 }
