@@ -65,43 +65,36 @@ describe("merge3 — identical change on both sides is clean", () => {
   });
 });
 
-describe("merge3 — ADJACENT (touching, non-overlapping) line edits merge cleanly", () => {
-  test("one side edits line k, the other edits line k+1", () => {
-    // base [a,b,c,d]; mine: b→B (line 1); theirs: c→C (line 2). Adjacent, disjoint.
-    expectClean("a\nB\nc\nd\n", "a\nb\nc\nd\n", "a\nb\nC\nd\n", "a\nB\nC\nd\n");
+describe("merge3 — adjacent/competing edits are conservatively flagged (safe, never corrupting)", () => {
+  // Line-based diff3 over prose coalesces TOUCHING hunks: edits to adjacent lines and
+  // competing same-anchor insertions are reported as conflicts rather than auto-merged.
+  // A false conflict is SAFE (nothing dropped/duplicated) — the deliberate tradeoff that
+  // keeps the primitive incapable of corrupting text. A stricter `<` rule was tried and
+  // shown to silently duplicate AND drop lines on duplicate-line transpositions.
+  test("edits to adjacent lines → conflict, not a silent interleave", () => {
+    expect(merge3("a\nB\nc\nd\n", "a\nb\nc\nd\n", "a\nb\nC\nd\n").clean).toBe(false);
   });
-  test("reverse order (theirs above mine)", () => {
-    expectClean("a\nb\nC\nd\n", "a\nb\nc\nd\n", "a\nB\nc\nd\n", "a\nB\nC\nd\n");
-  });
-  test("human edits the line right after the agent's card", () => {
-    const base = "intro line\nbody line\n";
-    const agent = "intro line{>>@a: note<<}\nbody line\n"; // edits line 0
-    const human = "intro line\nbody line EDITED\n"; // edits line 1 (adjacent)
-    expectClean(human, base, agent, "intro line{>>@a: note<<}\nbody line EDITED\n");
-  });
-  test("two insertions at the same position both survive (non-destructive)", () => {
-    const m = merge3("a\nMINE\nb\n", "a\nb\n", "a\nTHEIRS\nb\n");
-    expect(m.clean).toBe(true);
-    expect(m.result.includes("MINE")).toBe(true);
-    expect(m.result.includes("THEIRS")).toBe(true);
+  test("competing insertions at the same position → conflict", () => {
+    expect(merge3("a\nMINE\nb\n", "a\nb\n", "a\nTHEIRS\nb\n").clean).toBe(false);
   });
 });
 
-describe("merge3 — never emit a clean merge that DUPLICATES a line (safety net)", () => {
-  // Same-anchor uneven insertions / transpositions that the region algebra could
-  // otherwise resolve to a duplicated line. These must be conflicts, never clean+dup.
-  test("transposition that would duplicate 'a' → conflict, not clean", () => {
-    const m = merge3("\n\na", "a\n", "\na");
-    expect(m.clean).toBe(false);
+describe("merge3 — never emit a clean merge that DUPLICATES or DROPS a line", () => {
+  // Same-anchor uneven insertions / duplicate-line transpositions are ambiguous (git
+  // conflicts on them too); the conservative coalescing makes them honest conflicts.
+  test("transposition that could duplicate 'a' → conflict, not clean", () => {
+    expect(merge3("\n\na", "a\n", "\na").clean).toBe(false);
   });
-  test("uneven blank-insertions duplicating 'x' → conflict", () => {
+  test("uneven blank-insertions around 'x' → conflict", () => {
     expect(merge3("\nx", "x\n", "\nx\nx").clean).toBe(false);
   });
-  test("a clean merge result never contains a line beyond base + both sides' additions", () => {
-    // Property spot-check: when clean, no line exceeds its additive union bound.
+  test("duplicate-line transposition that could drop an 'a' → conflict", () => {
+    expect(merge3("a\n\na", "a\na\n\n", "para\na\n\na").clean).toBe(false);
+  });
+  test("a clean merge never contains a line beyond base + both sides' additions", () => {
     const cases: Array<[string, string, string]> = [
-      ["a\nB\nc\nd\n", "a\nb\nc\nd\n", "a\nb\nC\nd\n"],
       ["x\ny\n", "y\n", "z\ny\n"],
+      ["alpha\nbeta\n", "beta\n", "beta\ngamma\n"],
     ];
     for (const [mine, base, theirs] of cases) {
       const m = merge3(mine, base, theirs);

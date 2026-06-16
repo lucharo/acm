@@ -117,12 +117,15 @@ function regions(a: string[], o: string[], b: string[]): Region[] {
     let regionEnd = first.oStart + first.oLen;
     const group: Hunk[] = [first];
     emitStableBase(regionStart);
-    // Coalesce only hunks whose base ranges STRICTLY overlap (`<`, not `<=`). Edits
-    // to merely ADJACENT lines (one side at line k, the other at k+1 — common in
-    // prose) touch at the boundary but are disjoint, so they must merge cleanly, not
-    // be flagged a conflict. Two same-side hunks never coalesce (diffHunks separates
-    // them by ≥1 common line), so a multi-hunk group still always spans BOTH sides.
-    while (idx < hunks.length && hunks[idx].oStart < regionEnd) {
+    // Coalesce every later hunk whose base range overlaps OR TOUCHES this region (`<=`).
+    // Touching is deliberately included: line-based diff3 over prose treats edits to
+    // ADJACENT lines and competing same-anchor insertions CONSERVATIVELY as one conflict
+    // region rather than risk corrupting text by interleaving them. A false conflict is
+    // SAFE; a wrong merge is not — and a stricter `<` was shown to silently duplicate AND
+    // drop lines on duplicate-line transpositions (git conflicts on those too). Two
+    // same-side hunks never coalesce (diffHunks separates them by ≥1 common line), so a
+    // multi-hunk group always spans BOTH sides → a genuine conflict.
+    while (idx < hunks.length && hunks[idx].oStart <= regionEnd) {
       const next = hunks[idx++];
       regionEnd = Math.max(regionEnd, next.oStart + next.oLen);
       group.push(next);
@@ -169,34 +172,6 @@ export interface MergeResult {
   result: string;
 }
 
-/** Per-line multiset of an array. */
-function lineCounts(arr: string[]): Map<string, number> {
-  const m = new Map<string, number>();
-  for (const l of arr) m.set(l, (m.get(l) ?? 0) + 1);
-  return m;
-}
-
-/**
- * Safety net against silent DUPLICATION on a clean merge. A faithful 3-way merge can
- * never contain a line value more times than the base held it PLUS what each side
- * added (deletions only reduce the count) — i.e. `base + max(0, mine-base) +
- * max(0, theirs-base)`. A real merge result always satisfies this, so the check never
- * rejects a valid merge; but a subtle region-algebra aliasing bug (e.g. uneven
- * insertions at a shared anchor) can over-duplicate, and we must NEVER emit that as
- * clean. If any line exceeds the bound, the merge is not faithful → treat as conflict.
- */
-function overDuplicates(merged: string[], o: string[], a: string[], b: string[]): boolean {
-  const co = lineCounts(o);
-  const ca = lineCounts(a);
-  const cb = lineCounts(b);
-  for (const [line, n] of lineCounts(merged)) {
-    const base = co.get(line) ?? 0;
-    const bound = base + Math.max(0, (ca.get(line) ?? 0) - base) + Math.max(0, (cb.get(line) ?? 0) - base);
-    if (n > bound) return true;
-  }
-  return false;
-}
-
 /**
  * 3-way merge of `mine` and `theirs` against their common ancestor `base`.
  * Disjoint edits (different lines) both survive; edits to the SAME line(s) that
@@ -234,9 +209,6 @@ export function merge3(mine: string, base: string, theirs: string): MergeResult 
       merged.push(...aSlice); // tentative only; result is ignored when !clean
     }
   }
-  // Never emit a clean merge that duplicated a line (region-algebra aliasing around
-  // uneven insertions at a shared anchor) — demote to a conflict instead.
-  if (clean && overDuplicates(merged, o, a, b)) clean = false;
   return { clean, result: merged.join("\n") };
 }
 
