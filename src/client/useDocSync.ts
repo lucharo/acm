@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DocState, ServerMessage } from "../lib/types";
-import { merge3 } from "../lib/merge";
+import { reconcileSave } from "./reconcile";
 
 interface UseDocSyncOptions {
   /**
@@ -92,6 +92,21 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     // after a newer WS push (or arrive stale/equal); applying it would regress the
     // editor. Guard before any side effect.
     if (version <= currentVersion.current) return;
+
+    // Self-echo: the server now broadcasts EVERY write, including our own PUT. If the
+    // incoming content is exactly our pending buffer, our write just landed — adopt the
+    // version and mark saved instead of flashing a spurious conflict + redundant flush.
+    if (content === pendingContent.current) {
+      currentVersion.current = version;
+      pendingContent.current = null;
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      setSaveState("saved");
+      setLastSavedAt(Date.now());
+      return;
+    }
 
     // DATA-INTEGRITY RULE: never rebase over UNSAVED local edits. If the buffer has
     // pending changes the user hasn't seen persisted, adopting remote content here
@@ -200,13 +215,14 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       setSaveState("offline"); // held; flushed on reconnect (onopen below)
       return;
     }
+    const baseVersion = currentVersion.current; // the version this buffer descends from
     setSaveState("saving");
     let res: Response;
     try {
       res = await fetch("/api/doc", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: sent, baseVersion: currentVersion.current }),
+        body: JSON.stringify({ content: sent, baseVersion }),
       });
     } catch {
       setSaveState("offline"); // network blip — keep pending, retry on reconnect
@@ -214,58 +230,50 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     }
 
     const data = (await res.json().catch(() => ({}))) as {
-      version: number;
+      version?: number;
       content?: string;
       conflict?: string;
     };
-    currentVersion.current = data.version;
     const reflush = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
     };
 
-    if (res.status === 409) {
-      // A TRUE conflict: the human and an agent changed the SAME lines, so the server
-      // could not merge. KEEP the user's buffer (never discarded), surface the
-      // conflict, and STOP. Crucially we do NOT auto-reflush — that re-flush loop was
-      // the #38 bug, re-winning for the stale buffer and clobbering the other writer.
-      // The user wins on their next deliberate edit; the displaced side is recoverable
-      // from the doc journal (`acm history`).
-      setSaveState("conflict");
-      return;
-    }
-
-    // Success. The server returns the FINAL on-disk bytes, which may differ from what
-    // we sent if it merged in a concurrent agent write. We must fold that back into
-    // the buffer so the agent's card actually LANDS here — otherwise the next save
-    // would overwrite it with our card-less buffer (the original #38 mechanism).
-    const merged = data.content !== undefined && data.content !== sent;
-    const buffer = pendingContent.current;
-
-    if (buffer === sent) {
-      // No keystrokes since we sent → adopt the server's content verbatim.
-      if (merged) onRemoteUpdate.current(data.content!, data.version);
-      pendingContent.current = null; // confirmed written
-      setSaveState("saved");
-      setLastSavedAt(Date.now());
-      return;
-    }
-
-    // The user kept typing during the round-trip. Reconcile against the freshest buffer.
-    if (!merged) {
-      reflush(); // server stored exactly what we sent; just persist the newer keystrokes
-      return;
-    }
-    // Rebase the agent's change (sent → server content) onto the newer buffer with the
-    // SAME merge primitive the server uses. Disjoint → both survive; a rare overlap
-    // with the brand-new keystrokes surfaces as a conflict (buffer kept, no loop).
-    const m = merge3(buffer!, sent, data.content!);
-    if (m.clean) {
-      onRemoteUpdate.current(m.result, data.version); // editor now shows keystrokes + card
-      pendingContent.current = m.result;
-      reflush(); // persist the rebased buffer (the server has only `sent` + card so far)
-    } else {
-      setSaveState("conflict");
+    // The pure reconcile decides what's safe. CRITICAL: on a conflict we do NOT touch
+    // currentVersion — it stays `baseVersion`, the version this buffer truly descends
+    // from, so the next save re-merges server-side instead of fast-path-overwriting
+    // content the buffer never incorporated (the data-loss path two reviews found).
+    const d = reconcileSave({
+      status: res.status,
+      version: data.version,
+      serverContent: data.content,
+      sent,
+      buffer: pendingContent.current,
+    });
+    switch (d.kind) {
+      case "failed":
+        setSaveState(connectedRef.current ? "unsaved" : "offline"); // keep pending; retry on next edit/reconnect
+        return;
+      case "conflict":
+        setSaveState("conflict"); // buffer kept; currentVersion deliberately unchanged
+        return;
+      case "saved":
+        currentVersion.current = d.version;
+        if (d.adopt !== undefined) onRemoteUpdate.current(d.adopt, d.version);
+        pendingContent.current = null; // confirmed written
+        setSaveState("saved");
+        setLastSavedAt(Date.now());
+        return;
+      case "reflush":
+        currentVersion.current = d.version;
+        reflush(); // server stored exactly what we sent; persist the newer keystrokes
+        return;
+      case "rebased":
+        currentVersion.current = d.version;
+        onRemoteUpdate.current(d.pending, d.version); // editor now shows keystrokes + the merged-in card
+        pendingContent.current = d.pending;
+        reflush(); // persist the rebased buffer
+        return;
     }
   }, []);
   const flushRef = useRef(flush);

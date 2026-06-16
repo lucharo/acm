@@ -117,10 +117,12 @@ function regions(a: string[], o: string[], b: string[]): Region[] {
     let regionEnd = first.oStart + first.oLen;
     const group: Hunk[] = [first];
     emitStableBase(regionStart);
-    // Coalesce every later hunk whose base range overlaps/touches this region.
-    // Two same-side hunks never coalesce (diffHunks separates them by ≥1 common
-    // line), so a multi-hunk group always spans BOTH sides → a genuine conflict.
-    while (idx < hunks.length && hunks[idx].oStart <= regionEnd) {
+    // Coalesce only hunks whose base ranges STRICTLY overlap (`<`, not `<=`). Edits
+    // to merely ADJACENT lines (one side at line k, the other at k+1 — common in
+    // prose) touch at the boundary but are disjoint, so they must merge cleanly, not
+    // be flagged a conflict. Two same-side hunks never coalesce (diffHunks separates
+    // them by ≥1 common line), so a multi-hunk group still always spans BOTH sides.
+    while (idx < hunks.length && hunks[idx].oStart < regionEnd) {
       const next = hunks[idx++];
       regionEnd = Math.max(regionEnd, next.oStart + next.oLen);
       group.push(next);

@@ -65,6 +65,28 @@ describe("merge3 — identical change on both sides is clean", () => {
   });
 });
 
+describe("merge3 — ADJACENT (touching, non-overlapping) line edits merge cleanly", () => {
+  test("one side edits line k, the other edits line k+1", () => {
+    // base [a,b,c,d]; mine: b→B (line 1); theirs: c→C (line 2). Adjacent, disjoint.
+    expectClean("a\nB\nc\nd\n", "a\nb\nc\nd\n", "a\nb\nC\nd\n", "a\nB\nC\nd\n");
+  });
+  test("reverse order (theirs above mine)", () => {
+    expectClean("a\nb\nC\nd\n", "a\nb\nc\nd\n", "a\nB\nc\nd\n", "a\nB\nC\nd\n");
+  });
+  test("human edits the line right after the agent's card", () => {
+    const base = "intro line\nbody line\n";
+    const agent = "intro line{>>@a: note<<}\nbody line\n"; // edits line 0
+    const human = "intro line\nbody line EDITED\n"; // edits line 1 (adjacent)
+    expectClean(human, base, agent, "intro line{>>@a: note<<}\nbody line EDITED\n");
+  });
+  test("two insertions at the same position both survive (non-destructive)", () => {
+    const m = merge3("a\nMINE\nb\n", "a\nb\n", "a\nTHEIRS\nb\n");
+    expect(m.clean).toBe(true);
+    expect(m.result.includes("MINE")).toBe(true);
+    expect(m.result.includes("THEIRS")).toBe(true);
+  });
+});
+
 describe("merge3 — true overlap is an honest conflict (never silently merged)", () => {
   test("both edit the SAME line differently", () => {
     const m = merge3("a\nHUMAN\nc\n", "a\nb\nc\n", "a\nAGENT\nc\n");
