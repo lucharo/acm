@@ -20,6 +20,7 @@ import { keymap } from "@codemirror/view";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
+import { acmFormattingKeymap } from "./formatting";
 import { CriticMarkup } from "./criticMarkupParser";
 import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
@@ -34,6 +35,8 @@ export interface UseCodeMirrorOptions {
   callbacks: CritCallbacks;
   onDocChanged: (content: string) => void;
   onUpdate?: (u: ViewUpdate) => void;
+  /** Open/toggle the keyboard-shortcuts cheat sheet (bound to ⌘/ in the editor). */
+  onShowShortcuts?: () => void;
   lineNumbers?: boolean;
   page?: boolean;
   bionic?: boolean;
@@ -114,6 +117,21 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
       doc: optsRef.current.initialDoc,
       extensions: [
         history(),
+        // Formatting keymap goes FIRST so ⌘I overrides the default keymap's
+        // selectParentSyntax (and ⌘B, which the default keymap leaves unbound).
+        // ⌘/ opens the cheat sheet — bound here (ahead of defaults) so it overrides
+        // CodeMirror's toggle-comment, which is meaningless in prose.
+        keymap.of([
+          ...acmFormattingKeymap,
+          {
+            key: "Mod-/",
+            preventDefault: true,
+            run: () => {
+              optsRef.current.onShowShortcuts?.();
+              return true;
+            },
+          },
+        ]),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
         // NB: we deliberately do NOT use drawSelection(). It paints the selection on a

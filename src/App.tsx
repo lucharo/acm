@@ -31,6 +31,8 @@ import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
 import { useComposer, SUGGEST_EDIT_TEXT } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
+import ShortcutsOverlay from "./components/ShortcutsOverlay";
+import { toggleStrong, toggleEmphasis } from "./editor/formatting";
 import {
   scanTokens,
   applySuggestion,
@@ -241,6 +243,11 @@ function Workspace({
     }
   }, []);
 
+  // The keyboard-shortcuts cheat sheet — opened from the palette, settings, and
+  // ⌘/. Declared here (ahead of useCodeMirror) so the editor's ⌘/ keybinding can
+  // toggle it via onShowShortcuts.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   const editor = useCodeMirror({
     initialDoc,
     callbacks: stableCallbacks,
@@ -249,6 +256,7 @@ function Workspace({
       save(content);
     },
     onUpdate,
+    onShowShortcuts: () => setShortcutsOpen((o) => !o),
     lineNumbers: settings.lineNumbers,
     page: settings.page,
     bionic: settings.bionic,
@@ -488,11 +496,29 @@ function Workspace({
 
   // ── Command palette (⌘K) ──────────────────────────────────────────────────────
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Settings menu lives in the header but its open-state is lifted here so ⌘,
+  // can toggle it (a keyboard handler can't reach the header's local state).
+  const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
+      } else if (mod && !e.shiftKey && !e.altKey && e.key === ",") {
+        // ⌘, → Settings (Google-Docs/macOS convention). Some browsers reserve
+        // ⌘, for their own preferences and will swallow it before we see it —
+        // the cog and the ⌘K palette remain as fallbacks.
+        e.preventDefault();
+        setSettingsOpen((o) => !o);
+      } else if (mod && !e.shiftKey && !e.altKey && e.key === "/") {
+        // ⌘/ → keyboard-shortcuts cheat sheet (Google-Docs convention). When the
+        // editor is focused its own keymap owns ⌘/ (and suppresses CodeMirror's
+        // toggle-comment); this window branch covers focus being elsewhere.
+        if (!editor.viewRef.current?.hasFocus) {
+          e.preventDefault();
+          setShortcutsOpen((o) => !o);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -651,7 +677,16 @@ function Workspace({
       const last = [...threads].sort((a, b) => a.from - b.from).at(-1);
       if (v && last) v.dispatch({ effects: EditorView.scrollIntoView(last.from, { y: "center" }) });
     };
+    const format = (cmd: typeof toggleStrong) => () => {
+      const v = editor.viewRef.current;
+      if (!v) return;
+      cmd(v);
+      v.focus(); // the palette stole focus on open — hand it back to the editor
+    };
     return [
+      { id: "bold", label: "Bold selection", hint: `${MOD}B`, disabled: !hasSelection, run: format(toggleStrong) },
+      { id: "italic", label: "Italic selection", hint: `${MOD}I`, disabled: !hasSelection, run: format(toggleEmphasis) },
+      { id: "shortcuts", label: "Keyboard shortcuts", hint: `${MOD}/`, run: () => setShortcutsOpen(true) },
       { id: "wrap", label: "Hard-wrap prose to 88 columns", hint: "acm wrap", run: wrapDoc },
       { id: "comment", label: "Comment on selection", hint: `${MOD}↵ to post`, disabled: !hasSelection, run: openComposer },
       { id: "last-thread", label: "Go to the last comment", disabled: threads.length === 0, run: goToLastThread },
@@ -883,6 +918,9 @@ function Workspace({
         onToggleToc={() => setTocOpen((v) => !v)}
         settings={settings}
         onChangeSettings={onChangeSettings}
+        settingsOpen={settingsOpen}
+        onSetSettingsOpen={setSettingsOpen}
+        onShowShortcuts={() => setShortcutsOpen(true)}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -1042,6 +1080,8 @@ function Workspace({
           ) : null}
         </>
       ) : null}
+
+      {shortcutsOpen ? <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} /> : null}
 
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
