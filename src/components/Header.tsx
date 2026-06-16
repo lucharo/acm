@@ -65,12 +65,14 @@ export default function Header(props: HeaderProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <header className="relative flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
-      {/* Overview-panel toggle */}
+    <header className="relative flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
+      {/* Overview-panel toggle — hidden on phones: the overview/comment column is a
+          wide side panel that can't fit a narrow screen (the comment sidebar already
+          auto-hides under ~800px), and the outline (next button) is the mobile nav. */}
       <button
         type="button"
         onClick={onToggleNav}
-        className={`${iconBtn} ${navOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
+        className={`${iconBtn} hidden sm:flex ${navOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
         title={navOpen ? "Hide overview" : "Show overview"}
         aria-pressed={navOpen}
       >
@@ -97,7 +99,7 @@ export default function Header(props: HeaderProps) {
 
       <img src="/logo.png" alt="" className="h-5 w-5 shrink-0 rounded-[4px]" />
       <span className="text-[13px] font-semibold tracking-tight">
-        ACM <span className="text-[var(--faint)]">· Agent CriticMarkup</span>
+        ACM <span className="hidden text-[var(--faint)] sm:inline">· Agent CriticMarkup</span>
       </span>
 
       <div className="ml-auto flex items-center gap-2">
@@ -110,7 +112,7 @@ export default function Header(props: HeaderProps) {
               onChange={(e) => onDraftChange(e.target.value)}
               onKeyDown={(e) => handleCommentKey(e, onPostComment, onPostCommentSeen, onCancelComposer)}
               placeholder="Comment on selection…  (⇧↵ for a new line)"
-              className="block max-h-32 w-60 resize-none overflow-y-auto rounded border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
+              className="block max-h-32 w-44 resize-none overflow-y-auto rounded border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)] sm:w-60"
             />
             {!composerAnchored && (
               /* The selection can't be wrapped as a {==span==} (it cuts markup or
@@ -174,14 +176,14 @@ export default function Header(props: HeaderProps) {
           </button>
         ) : null}
 
-        <span className="text-[11px] tabular-nums text-[var(--faint)]" title="Word count (accepted prose)">
+        <span className="hidden text-[11px] tabular-nums text-[var(--faint)] sm:inline" title="Word count (accepted prose)">
           {wordCount.toLocaleString()} words
         </span>
 
         <SaveBadge state={saveState} lastSavedAt={lastSavedAt} />
 
         <span
-          className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]"
+          className="hidden items-center gap-1.5 text-[11px] text-[var(--muted)] sm:flex"
           title={connected ? "Live — watching the file" : "Disconnected"}
         >
           <span

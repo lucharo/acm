@@ -318,6 +318,19 @@ export const acmTheme: Extension = EditorView.theme(
       verticalAlign: "baseline",
       transform: "none",
     },
+
+    // ── Phone-width reading ─────────────────────────────────────────────────────
+    // On a ~390px screen the desktop 3rem side gutters trap prose in a thin column.
+    // Pull the gutters in (and the top in a touch) so text uses the width. Lives
+    // inside the theme — style-mod still scopes these to the editor's generated
+    // class, so they tie specificity with the base rule and win by source order
+    // (no fight with index.css). Comes LAST in the spec so it overrides .cm-content.
+    "@media (max-width: 640px)": {
+      "&": { fontSize: "16px" },
+      ".cm-content": {
+        padding: "1.25rem 1.1rem 5rem 1.1rem",
+      },
+    },
   },
   { dark: false },
 );
@@ -341,5 +354,23 @@ export const pageTheme: Extension = EditorView.theme({
     borderRadius: "2px",
     boxShadow: "0 1px 2px rgba(0, 0, 0, 0.07), 0 14px 40px rgba(0, 0, 0, 0.09)",
     minHeight: "70vh", // a fresh/short doc still reads as a sheet
+  },
+
+  // ── Phone-width reading ───────────────────────────────────────────────────────
+  // The A4-sheet metaphor doesn't fit a phone: a bordered sheet centred on a desk
+  // just leaves a cramped column with slivers of desk either side. Drop the desk
+  // margin to a sliver and run the sheet edge-to-edge — no side border/radius/shadow
+  // (only the hairline top/bottom border survives, a faint "page" cue). The inner
+  // prose padding is governed by acmTheme's own phone rule (the base theme wins
+  // shared props like padding over this one), so we DON'T re-declare it here — we
+  // only strip the chrome that's unique to the sheet.
+  "@media (max-width: 640px)": {
+    ".cm-scroller": { padding: "0.5rem 0 4rem" },
+    ".cm-content": {
+      borderLeft: "none",
+      borderRight: "none",
+      borderRadius: "0",
+      boxShadow: "none",
+    },
   },
 });
