@@ -18,6 +18,7 @@ import type { SaveState } from "./client/useDocSync";
 import { useCodeMirror } from "./editor/useCodeMirror";
 import type { CritCallbacks } from "./editor/criticMarkupView";
 import CommentSidebar, { MOD } from "./components/CommentSidebar";
+import MobileCommentSheet from "./components/MobileCommentSheet";
 import HealReview from "./components/HealReview";
 import Toc from "./components/Toc";
 import NavPanel from "./components/NavPanel";
@@ -53,6 +54,7 @@ import type {
   SuggestionToken,
   CommentToken,
   CommentThread,
+  SidebarCard,
   FilterMode,
 } from "./lib/types";
 
@@ -838,6 +840,25 @@ function Workspace({
   // (Inline SUGGEST rendering needs no push: the editor derives the anchored
   // pairs from the document itself — see inlineSuggestionsField.)
 
+  // ── Mobile comment surface ────────────────────────────────────────────────────
+  // On a phone the right-margin column is hidden (commentsVisible=false), so the
+  // active thread/suggestion is shown in a bottom sheet instead. Compute the active
+  // card + the next still-open comment (for the sheet's inbox-style "Next") + the
+  // first open one (for the floating entry button when nothing's focused).
+  const activeCard = useMemo<SidebarCard | null>(
+    () => cards.find((c) => c.id === activeId || c.comments.some((cc) => cc.id === activeId)) ?? null,
+    [cards, activeId],
+  );
+  const openComments = useMemo(
+    () => cards.filter((c) => c.kind === "comment" && !seenThreadIds.has(c.id)).sort((a, b) => a.from - b.from),
+    [cards, seenThreadIds],
+  );
+  const nextOpenComment = useMemo(() => {
+    if (!openComments.length) return null;
+    const after = activeCard ? openComments.find((c) => c.from > activeCard.from && c.id !== activeCard.id) : null;
+    return after ?? openComments.find((c) => c.id !== activeCard?.id) ?? null;
+  }, [openComments, activeCard]);
+
   return (
     <div className="flex h-full flex-col bg-[var(--bg)]">
       <Header
@@ -985,6 +1006,42 @@ function Workspace({
       ) : null}
 
       {paletteOpen ? <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} /> : null}
+
+      {/* Mobile: the right-margin column is hidden (too narrow), so the active
+          thread/suggestion lives in a bottom sheet, with a floating entry button
+          to open the first unseen comment when nothing's focused. */}
+      {!commentsVisible ? (
+        <>
+          <MobileCommentSheet
+            active={activeCard}
+            unseenCount={unseenCount}
+            nextOpen={nextOpenComment}
+            onClose={() => setActiveId(null)}
+            onGoTo={focusThread}
+            onReply={replyToThread}
+            onReplyAndSeen={replyAndSeen}
+            onResolveThread={resolveThread}
+            onSuggestEdit={(t) => replyAndSeen(t, SUGGEST_EDIT_TEXT)}
+            onToggleSeen={toggleSeen}
+            onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
+            onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
+            applicableSuggestionIds={applicableSuggestionIds}
+            onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
+            onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
+          />
+          {!activeCard && unseenCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => nextOpenComment && focusThread(nextOpenComment)}
+              className="fixed bottom-3 left-3 z-30 flex items-center gap-1.5 rounded-full bg-[var(--accent)] py-2 pl-3 pr-3.5 text-[13px] font-medium text-[var(--panel)] shadow-lg"
+              title="Open comments"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+              {unseenCount} open
+            </button>
+          ) : null}
+        </>
+      ) : null}
 
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
