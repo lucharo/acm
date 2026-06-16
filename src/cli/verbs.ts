@@ -244,29 +244,48 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   // No live editor → write the file directly (single writer, no race).
   const live = await liveServerFor(docPath);
   let final = after;
+  let viaEditorPort: number | null = null;
   if (live) {
     const res = await fetch(`http://localhost:${live.port}/api/agent-write`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ base: before, content: after }),
     }).catch(() => null);
+
     if (!res) {
-      // The editor went away between the liveness probe and this POST. Fall back to a
-      // direct write — last-write-wins, but with no live server there is no second
-      // writer to race (and the pre-edit snapshot above is the recovery net).
+      // No response at all (connection refused): the editor died between the liveness
+      // probe and this POST. With no live server there's no second writer to race, so
+      // a direct write is safe (the pre-edit snapshot above is the recovery net).
       await Bun.write(docPath, after);
-    } else if (res.status === 409) {
-      const { conflict } = (await res.json().catch(() => ({}))) as { conflict?: string };
-      const why =
-        conflict === "cursor"
-          ? "the human's cursor is in that span in the open editor"
-          : "the document changed under this edit in the open editor";
-      console.error(`acm ${cmd}: NOT applied — ${why}. Retry in a moment.`);
-      if (snap) console.error(`  (nothing written; pre-edit backup → ${snap})`);
-      process.exit(1);
     } else {
-      const body = (await res.json().catch(() => ({}))) as { content?: string };
+      const body = (await res.json().catch(() => null)) as
+        | { version?: number; content?: string; conflict?: string }
+        | null;
+      if (res.status === 409 && body) {
+        // A real conflict from THIS ACM (cursor guard or same-span overlap): not applied.
+        const why =
+          body.conflict === "cursor"
+            ? "the human's cursor is in that span in the open editor"
+            : "the document changed under this edit in the open editor";
+        console.error(`acm ${cmd}: NOT applied — ${why}. Retry in a moment.`);
+        if (snap) console.error(`  (nothing written; pre-edit backup → ${snap})`);
+        process.exit(1);
+      }
+      if (!res.ok || !body || typeof body.version !== "number") {
+        // The server answered, but NOT with the agent-write protocol — almost certainly
+        // an OLDER ACM on this port whose SPA fallback served HTML (or a 5xx). Do NOT
+        // fall back to a direct write: that editor is ALIVE and may hold unsaved human
+        // edits a blind write would clobber. Fail loudly so it gets rebuilt + retried.
+        console.error(
+          `acm ${cmd}: the ACM editor on :${live.port} did not accept the write ` +
+            `(HTTP ${res.status}; not an agent-write response) — it's likely running an ` +
+            `older build. Rebuild/restart it (\`just install\`) and retry. Nothing written.`,
+        );
+        if (snap) console.error(`  (pre-edit backup → ${snap})`);
+        process.exit(1);
+      }
       if (body.content !== undefined) final = body.content; // the merged bytes now on disk
+      viaEditorPort = live.port;
     }
   } else {
     await Bun.write(docPath, after);
@@ -276,7 +295,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   const comments = toks.filter((t) => t.type === "comment").length;
   console.log(`acm ${cmd}: ${note}`);
   if (snap) console.log(`  backup → ${snap}`);
-  if (live) console.log(`  written via the live editor on :${live.port} (merged with any concurrent human edits)`);
+  if (viaEditorPort !== null)
+    console.log(`  written via the live editor on :${viaEditorPort} (merged with any concurrent human edits)`);
   console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}`);
 }
 

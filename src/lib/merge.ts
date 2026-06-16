@@ -209,9 +209,10 @@ export function merge3(mine: string, base: string, theirs: string): MergeResult 
 
 /**
  * The single contiguous span by which `content` differs from `base`, as a
- * shared-prefix/suffix trim. For ACM's agent verbs this is exactly the inserted
- * CriticMarkup (`{==span==}{>>…<<}` or a comment marker) — additive edits are one
- * region. `inserted` is the new text; `from`/`to` are the touched range in `base`.
+ * shared-prefix/suffix trim. `from`/`to` are the touched range in `base` — used for
+ * the cursor-overlap guard. NOTE: for an agent edit that touches SEVERAL separated
+ * regions (e.g. accepting a suggestion group), this span spans the untouched text
+ * between them too; use `changedFragments` for a containment check, not `inserted`.
  */
 export function changedSpan(base: string, content: string): { from: number; to: number; inserted: string } {
   let p = 0;
@@ -220,4 +221,23 @@ export function changedSpan(base: string, content: string): { from: number; to: 
   let s = 0;
   while (s < max - p && base.charCodeAt(base.length - 1 - s) === content.charCodeAt(content.length - 1 - s)) s++;
   return { from: p, to: base.length - s, inserted: content.slice(p, content.length - s) };
+}
+
+/**
+ * The content-side text of each line-hunk by which `content` differs from `base` —
+ * one entry per contiguous changed region, pure deletions (no new lines) omitted.
+ *
+ * This is the containment guard for agent writes: after a clean merge EACH fragment
+ * must still be present. Using per-hunk fragments (not one contiguous span) means a
+ * multi-region agent edit isn't falsely rejected just because the human concurrently
+ * edited the untouched text BETWEEN the agent's regions — `merge3` keeps all three,
+ * and each agent fragment still appears, so the guard passes as it should.
+ */
+export function changedFragments(base: string, content: string): string[] {
+  if (base === content) return [];
+  const o = lines(base);
+  const x = lines(content);
+  return diffHunks(o, x, "a")
+    .filter((h) => h.sideLen > 0)
+    .map((h) => x.slice(h.sideStart, h.sideStart + h.sideLen).join("\n"));
 }

@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
-import { merge3, changedSpan } from "./src/lib/merge";
+import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, writeConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
@@ -117,16 +117,18 @@ export function startServer(opts: StartServerOptions): AcmServer {
   //   mine   — the writer's full proposed document.
   //   base   — the content the writer started from (a version snapshot, or the
   //            agent's pre-edit read), i.e. the common ancestor for the 3-way merge.
-  //   guard  — optional substring that MUST be present after a merge (the agent's
-  //            inserted marker). If a "clean" merge somehow dropped it, refuse to
-  //            write — a belt-and-braces check against ever losing an agent card.
+  //   guards — per-hunk fragments that MUST each survive a merge (the agent's changed
+  //            line-runs). If a "clean" merge somehow dropped one, refuse to write — a
+  //            belt-and-braces check against ever losing an agent edit. Per-hunk (not
+  //            one contiguous span) so a multi-region agent edit isn't falsely rejected
+  //            when the human concurrently edits the untouched text between its regions.
   // On divergence it 3-way merges so disjoint edits from both writers survive; only a
   // genuine same-line overlap is a conflict (nothing written). Caller holds withLock.
   type CommitResult =
     | { ok: true; content: string; version: number }
     | { ok: false; reason: "overlap" | "containment"; content: string; version: number };
 
-  async function commitWrite(mine: string, base: string, guard?: string): Promise<CommitResult> {
+  async function commitWrite(mine: string, base: string, guards?: string[]): Promise<CommitResult> {
     const theirs = await Bun.file(docPath).text(); // disk is the authoritative "theirs"
     let toWrite: string;
     if (theirs === base || mine === theirs) {
@@ -134,7 +136,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
     } else {
       const m = merge3(mine, base, theirs);
       if (!m.clean) return { ok: false, reason: "overlap", content: theirs, version };
-      if (guard && !m.result.includes(guard)) return { ok: false, reason: "containment", content: theirs, version };
+      if (guards && !guards.every((g) => m.result.includes(g)))
+        return { ok: false, reason: "containment", content: theirs, version };
       toWrite = m.result;
     }
     if (toWrite === theirs) return { ok: true, content: theirs, version }; // no-op
@@ -224,7 +227,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
               return Response.json({ conflict: "cursor" }, { status: 409 });
             }
           }
-          const r = await commitWrite(content, base, span.inserted || undefined);
+          const r = await commitWrite(content, base, changedFragments(base, content));
           if (!r.ok) return Response.json({ conflict: r.reason }, { status: 409 });
           return Response.json({ version: r.version, content: r.content });
         });

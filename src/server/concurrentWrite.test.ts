@@ -5,7 +5,7 @@
 // an honest conflict rather than a silent overwrite.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../../server";
@@ -109,6 +109,61 @@ describe("#38 — the agent-avoids-cursor guard", () => {
     await presence(url, 0, 3); // caret in para one; agent targets para two
     expect((await agentWrite(url, SEED, CARD)).status).toBe(200);
     expect(await disk(docPath)).toContain("SUGGEST: present");
+  });
+});
+
+describe("#38 — multi-region agent edit doesn't falsely 409 on a human edit between regions", () => {
+  test("agent changes two separated lines while the human edits the middle → clean merge", async () => {
+    const seed = "L0\nL1\nL2\nL3\nL4\n";
+    const { url, docPath } = await boot(seed);
+    // Human saves an edit to the MIDDLE line first → disk has it.
+    expect((await put(url, "L0\nL1\nHUMAN2\nL3\nL4\n", 0)).status).toBe(200);
+    // Agent edits two SEPARATED regions (L0 and L4) from the original base.
+    const aw = await agentWrite(url, seed, "A0\nL1\nL2\nL3\nA4\n");
+    expect(aw.status).toBe(200); // NOT a false `containment` 409 (the Codex finding)
+    expect(await disk(docPath)).toBe("A0\nL1\nHUMAN2\nL3\nA4\n"); // all three survive
+  });
+});
+
+describe("#38 — CLI never fakes success against a non-agent-write server (version skew)", () => {
+  test("an older editor (serves HTML for /api/agent-write) → CLI hard-fails, no direct write", async () => {
+    const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
+    const seed = "The quick brown fox jumps over the lazy dog.\n";
+    await Bun.write(docPath, seed);
+
+    // Stand-in for an OLD ACM: answers /api/doc (liveness probe passes) but serves its
+    // SPA fallback (HTML, no agent-write route) for the POST.
+    const oldAcm = Bun.serve({
+      port: 0,
+      fetch(req) {
+        if (new URL(req.url).pathname === "/api/doc") return Response.json({ content: seed, version: 0 });
+        return new Response("<!doctype html><title>old acm</title>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      },
+    });
+    // Register it as the live instance owning this doc (temp XDG set in beforeAll).
+    const cfg = join(process.env.XDG_CONFIG_HOME!, "acm");
+    mkdirSync(cfg, { recursive: true });
+    await Bun.write(
+      join(cfg, "instances.json"),
+      JSON.stringify({
+        [String(oldAcm.port)]: { port: oldAcm.port, doc: docPath, pid: process.pid, startedAt: "2026-06-16T00:00:00Z" },
+      }),
+    );
+
+    const proc = Bun.spawn(["bun", "cli.ts", "suggest", "lazy", "sleepy", "--doc", docPath], {
+      cwd: process.cwd(),
+      env: { ...process.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exit = await proc.exited;
+    oldAcm.stop();
+
+    expect(exit).not.toBe(0); // hard failure, not a fabricated success
+    expect(await disk(docPath)).toBe(seed); // and the doc was NOT blindly direct-written
   });
 });
 

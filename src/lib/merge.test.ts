@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { merge3, changedSpan } from "./merge";
+import { merge3, changedSpan, changedFragments } from "./merge";
 
 // Byte-preservation is the whole point. This helper asserts a clean merge AND that
 // the round-trip is lossless: both sides' changes are present in the result.
@@ -122,6 +122,28 @@ describe("merge3 — a clean result always contains both sides' changes", () => 
     expect(m.clean).toBe(true);
     expect(m.result.includes("BETA-EDIT")).toBe(true);
     expect(m.result.includes(marker)).toBe(true);
+  });
+});
+
+describe("changedFragments — per-hunk guards survive a human edit between agent regions", () => {
+  test("two separated agent edits → two fragments", () => {
+    const base = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
+    const content = "ALPHA!\nbeta\ngamma\ndelta\nEPSILON!\n";
+    expect(changedFragments(base, content)).toEqual(["ALPHA!", "EPSILON!"]);
+  });
+
+  test("multi-region agent edit + human edit BETWEEN the regions still passes containment", () => {
+    // The Codex finding: a single contiguous guard ("A0..L1..L2..L3..A4") would NOT
+    // survive the human's L2 edit and would falsely reject. Per-hunk guards do survive.
+    const base = "L0\nL1\nL2\nL3\nL4\n";
+    const agent = "A0\nL1\nL2\nL3\nA4\n"; // agent changes L0 and L4
+    const human = "L0\nL1\nHUMAN2\nL3\nL4\n"; // human changes the middle (L2)
+    const m = merge3(agent, base, human);
+    expect(m.clean).toBe(true);
+    expect(m.result).toBe("A0\nL1\nHUMAN2\nL3\nA4\n");
+    for (const frag of changedFragments(base, agent)) expect(m.result.includes(frag)).toBe(true);
+    // The old contiguous span would have been absent → the regression this guards.
+    expect(m.result.includes(changedSpan(base, agent).inserted)).toBe(false);
   });
 });
 
