@@ -11,7 +11,7 @@
 // full comment text (no clamp), one thread at a time with prev/next-open nav so
 // review still flows like the desktop inbox.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import { authorColor } from "./authorColor";
@@ -66,6 +66,14 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
   const open = active != null;
   const headAuthor = active?.comments[0]?.author ?? null;
 
+  // Reset the reply draft whenever the focused thread changes (e.g. "Next ›"), so a
+  // half-typed reply never bleeds onto a different thread. Keyed on the thread id,
+  // not the card object — `active` is rebuilt on unrelated doc edits, and resetting
+  // on those would wipe a reply mid-type.
+  useEffect(() => {
+    setDraft("");
+  }, [active?.id]);
+
   function submit(markSeen: boolean) {
     const text = draft.trim();
     if (text && active) (markSeen ? onReplyAndSeen : onReply)(active, text);
@@ -80,6 +88,7 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
       role="dialog"
       aria-label="Comment"
       aria-hidden={!open}
+      inert={!open}
     >
       <div className="mx-auto flex max-h-[62vh] w-full flex-col rounded-t-2xl border-t border-[var(--line)] bg-[var(--panel)] shadow-[0_-8px_30px_rgba(0,0,0,0.18)]">
         {/* Header: grab handle, who/what, open-count, close */}
