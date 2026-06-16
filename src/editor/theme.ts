@@ -330,6 +330,21 @@ export const acmTheme: Extension = EditorView.theme(
       ".cm-content": {
         padding: "1.25rem 1.1rem 5rem 1.1rem",
       },
+      // Fatten the touch targets a phone needs: the inline accept/reject pills
+      // (desktop 1.15em ≈ 19px is a hard tap) and the comment anchor dot (6px).
+      // Inline elements can't be 44px without breaking the text line, so this is a
+      // pragmatic bump, not the full HIG size — the whole highlighted span is also
+      // tappable (focusCommentAtPoint), so comments have a large target regardless.
+      ".cm-crit-accept, .cm-crit-reject": {
+        width: "1.65em",
+        height: "1.65em",
+        fontSize: "0.85em",
+      },
+      ".cm-crit-comment-anchor": {
+        width: "9px",
+        height: "9px",
+        marginLeft: "3px",
+      },
     },
   },
   { dark: false },
