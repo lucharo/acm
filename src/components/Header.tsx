@@ -102,9 +102,9 @@ export default function Header(props: HeaderProps) {
         ACM <span className="hidden text-[var(--faint)] sm:inline">· Agent CriticMarkup</span>
       </span>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-2 gap-y-1">
         {composing ? (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-1.5 gap-y-1">
             <textarea
               autoFocus
               rows={1}
