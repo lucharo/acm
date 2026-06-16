@@ -2,7 +2,6 @@
 // Purely presentational — every action and all state arrive as props from the
 // Workspace; the only local state is whether the settings menu is open.
 
-import { useState } from "react";
 import { MOD, handleCommentKey } from "./CommentSidebar";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
@@ -32,6 +31,11 @@ export interface HeaderProps {
   onToggleToc: () => void;
   settings: ViewSettings;
   onChangeSettings: (patch: Partial<ViewSettings>) => void;
+  /** Settings menu open-state is lifted to the Workspace so ⌘, can toggle it. */
+  settingsOpen: boolean;
+  onSetSettingsOpen: (open: boolean) => void;
+  /** Open the keyboard-shortcuts cheat sheet. */
+  onShowShortcuts: () => void;
 }
 
 const iconBtn =
@@ -60,9 +64,10 @@ export default function Header(props: HeaderProps) {
     onToggleToc,
     settings,
     onChangeSettings,
+    settingsOpen,
+    onSetSettingsOpen,
+    onShowShortcuts,
   } = props;
-
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <header className="relative flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
@@ -194,9 +199,9 @@ export default function Header(props: HeaderProps) {
         {/* Settings (a proper cog) */}
         <button
           type="button"
-          onClick={() => setSettingsOpen((v) => !v)}
+          onClick={() => onSetSettingsOpen(!settingsOpen)}
           className={`${iconBtn} ${settingsOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
-          title="Settings"
+          title={`Settings (${MOD},)`}
           aria-haspopup="menu"
           aria-expanded={settingsOpen}
         >
@@ -208,7 +213,7 @@ export default function Header(props: HeaderProps) {
 
         {settingsOpen ? (
           <>
-            <div className="fixed inset-0 z-20" onClick={() => setSettingsOpen(false)} />
+            <div className="fixed inset-0 z-20" onClick={() => onSetSettingsOpen(false)} />
             <div className="absolute right-3 top-11 z-30 w-60 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-1.5 shadow-lg">
               <FontPicker value={settings.font} onChange={(font) => onChangeSettings({ font })} />
               <Segmented<Theme>
@@ -264,13 +269,24 @@ export default function Header(props: HeaderProps) {
               <button
                 type="button"
                 onClick={() => {
-                  setSettingsOpen(false);
+                  onSetSettingsOpen(false);
                   onWrap();
                 }}
                 title="Reflow prose to 88 columns. Markup-safe (never splits a comment or suggestion) and undoable. Also in the ⌘K palette, or `acm wrap` from the shell."
                 className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-[var(--ink)] hover:bg-[var(--line)]"
               >
                 Hard-wrap prose <span className="text-[11px] text-[var(--faint)]">88 cols · ⌘K</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onSetSettingsOpen(false);
+                  onShowShortcuts();
+                }}
+                title="Show the keyboard shortcuts (formatting, navigation, comments, review)."
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-[var(--ink)] hover:bg-[var(--line)]"
+              >
+                Keyboard shortcuts <span className="text-[11px] text-[var(--faint)]">{MOD}B · {MOD}I · …</span>
               </button>
               <div className="my-1 border-t border-[var(--line)]" />
               <div className="px-2 py-1.5">

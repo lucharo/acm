@@ -20,6 +20,7 @@ import { keymap } from "@codemirror/view";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
+import { acmFormattingKeymap } from "./formatting";
 import { CriticMarkup } from "./criticMarkupParser";
 import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
@@ -114,6 +115,9 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
       doc: optsRef.current.initialDoc,
       extensions: [
         history(),
+        // Formatting keymap goes FIRST so ⌘I overrides the default keymap's
+        // selectParentSyntax (and ⌘B, which the default keymap leaves unbound).
+        keymap.of(acmFormattingKeymap),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
         // NB: we deliberately do NOT use drawSelection(). It paints the selection on a

@@ -18,6 +18,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { EditorView } from "@codemirror/view";
+import { MOD } from "../lib/platform";
 import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import { authorColor } from "./authorColor";
@@ -72,9 +73,9 @@ interface CommentSidebarProps {
 const BUBBLE_GAP = 16;
 const CARD_LEFT = 18; // px from the column's left edge to the card
 
-// Platform-appropriate modifier glyph for keyboard hints (⌘ on mac, Ctrl elsewhere).
-export const MOD =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+// Re-exported so existing `import { MOD } from "./CommentSidebar"` callers keep
+// working; the glyph itself now lives in lib/platform.
+export { MOD };
 
 // Keyboard model shared by the reply box AND the header composer, so both behave
 // identically. Bound to a multi-line <textarea>:
