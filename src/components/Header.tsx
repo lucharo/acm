@@ -286,7 +286,7 @@ export default function Header(props: HeaderProps) {
                 title="Show the keyboard shortcuts (formatting, navigation, comments, review)."
                 className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-[var(--ink)] hover:bg-[var(--line)]"
               >
-                Keyboard shortcuts <span className="text-[11px] text-[var(--faint)]">{MOD}B · {MOD}I · …</span>
+                Keyboard shortcuts <span className="text-[11px] text-[var(--faint)]">{MOD}/</span>
               </button>
               <div className="my-1 border-t border-[var(--line)]" />
               <div className="px-2 py-1.5">

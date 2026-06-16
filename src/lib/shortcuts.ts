@@ -37,6 +37,7 @@ export function shortcutGroups(): ShortcutGroup[] {
       items: [
         { keys: `${MOD}K`, label: "Command palette" },
         { keys: `${MOD},`, label: "Settings" },
+        { keys: `${MOD}/`, label: "Show this cheat sheet" },
         { keys: `${MOD}S`, label: "Save now" },
         { keys: `${MOD}A`, label: "Select all" },
         { keys: `${MOD}Z`, label: "Undo" },

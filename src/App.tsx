@@ -241,6 +241,11 @@ function Workspace({
     }
   }, []);
 
+  // The keyboard-shortcuts cheat sheet — opened from the palette, settings, and
+  // ⌘/. Declared here (ahead of useCodeMirror) so the editor's ⌘/ keybinding can
+  // toggle it via onShowShortcuts.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   const editor = useCodeMirror({
     initialDoc,
     callbacks: stableCallbacks,
@@ -249,6 +254,7 @@ function Workspace({
       save(content);
     },
     onUpdate,
+    onShowShortcuts: () => setShortcutsOpen((o) => !o),
     lineNumbers: settings.lineNumbers,
     page: settings.page,
     bionic: settings.bionic,
@@ -491,8 +497,6 @@ function Workspace({
   // Settings menu lives in the header but its open-state is lifted here so ⌘,
   // can toggle it (a keyboard handler can't reach the header's local state).
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // The keyboard-shortcuts cheat sheet — opened from the palette and settings.
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -505,6 +509,14 @@ function Workspace({
         // the cog and the ⌘K palette remain as fallbacks.
         e.preventDefault();
         setSettingsOpen((o) => !o);
+      } else if (mod && !e.shiftKey && !e.altKey && e.key === "/") {
+        // ⌘/ → keyboard-shortcuts cheat sheet (Google-Docs convention). When the
+        // editor is focused its own keymap owns ⌘/ (and suppresses CodeMirror's
+        // toggle-comment); this window branch covers focus being elsewhere.
+        if (!editor.viewRef.current?.hasFocus) {
+          e.preventDefault();
+          setShortcutsOpen((o) => !o);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -672,7 +684,7 @@ function Workspace({
     return [
       { id: "bold", label: "Bold selection", hint: `${MOD}B`, disabled: !hasSelection, run: format(toggleStrong) },
       { id: "italic", label: "Italic selection", hint: `${MOD}I`, disabled: !hasSelection, run: format(toggleEmphasis) },
-      { id: "shortcuts", label: "Keyboard shortcuts", hint: "reference", run: () => setShortcutsOpen(true) },
+      { id: "shortcuts", label: "Keyboard shortcuts", hint: `${MOD}/`, run: () => setShortcutsOpen(true) },
       { id: "wrap", label: "Hard-wrap prose to 88 columns", hint: "acm wrap", run: wrapDoc },
       { id: "comment", label: "Comment on selection", hint: `${MOD}↵ to post`, disabled: !hasSelection, run: openComposer },
       { id: "last-thread", label: "Go to the last comment", disabled: threads.length === 0, run: goToLastThread },
