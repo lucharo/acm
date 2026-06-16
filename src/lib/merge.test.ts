@@ -87,6 +87,37 @@ describe("merge3 — ADJACENT (touching, non-overlapping) line edits merge clean
   });
 });
 
+describe("merge3 — never emit a clean merge that DUPLICATES a line (safety net)", () => {
+  // Same-anchor uneven insertions / transpositions that the region algebra could
+  // otherwise resolve to a duplicated line. These must be conflicts, never clean+dup.
+  test("transposition that would duplicate 'a' → conflict, not clean", () => {
+    const m = merge3("\n\na", "a\n", "\na");
+    expect(m.clean).toBe(false);
+  });
+  test("uneven blank-insertions duplicating 'x' → conflict", () => {
+    expect(merge3("\nx", "x\n", "\nx\nx").clean).toBe(false);
+  });
+  test("a clean merge result never contains a line beyond base + both sides' additions", () => {
+    // Property spot-check: when clean, no line exceeds its additive union bound.
+    const cases: Array<[string, string, string]> = [
+      ["a\nB\nc\nd\n", "a\nb\nc\nd\n", "a\nb\nC\nd\n"],
+      ["x\ny\n", "y\n", "z\ny\n"],
+    ];
+    for (const [mine, base, theirs] of cases) {
+      const m = merge3(mine, base, theirs);
+      if (!m.clean) continue;
+      const count = (s: string, line: string) => s.split("\n").filter((l) => l === line).length;
+      for (const line of new Set(m.result.split("\n"))) {
+        const bnd =
+          count(base, line) +
+          Math.max(0, count(mine, line) - count(base, line)) +
+          Math.max(0, count(theirs, line) - count(base, line));
+        expect(count(m.result, line)).toBeLessThanOrEqual(bnd);
+      }
+    }
+  });
+});
+
 describe("merge3 — true overlap is an honest conflict (never silently merged)", () => {
   test("both edit the SAME line differently", () => {
     const m = merge3("a\nHUMAN\nc\n", "a\nb\nc\n", "a\nAGENT\nc\n");
