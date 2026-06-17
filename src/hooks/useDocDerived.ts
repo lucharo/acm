@@ -26,9 +26,16 @@ export function useDocDerived(doc: string) {
   // from the displayed text; `from` is the heading line's doc offset (jump target).
   const headings = useMemo(() => {
     const out: { level: number; text: string; from: number }[] = [];
+    // A `# heading` line living INSIDE a multi-line CriticMarkup add/del/sub block is
+    // tracked-change content, not a document heading — keep it out of the outline.
+    const markupSpans = tokens.filter(
+      (t) => t.type === "insert" || t.type === "delete" || t.type === "substitute",
+    );
+    const insideMarkup = (i: number) => markupSpans.some((t) => i >= t.from && i < t.to);
     const re = /^(#{1,6})[ \t]+(.+)$/gm;
     let m: RegExpExecArray | null;
     while ((m = re.exec(doc)) !== null) {
+      if (insideMarkup(m.index)) continue;
       const text = m[2]
         .replace(/\{>>[\s\S]*?<<\}/g, "")
         .replace(/\{(\+\+|--|~~|==)|(\+\+|--|~~|==)\}|~>/g, "")
@@ -36,7 +43,7 @@ export function useDocDerived(doc: string) {
       out.push({ level: m[1].length, text, from: m.index });
     }
     return out;
-  }, [doc]);
+  }, [doc, tokens]);
   const comments = useMemo(() => tokens.filter(isComment), [tokens]);
   // Adjacent comments grouped into threaded cards (root + replies).
   const threads = useMemo(() => groupThreads(comments, doc), [comments, doc]);

@@ -13,7 +13,7 @@ Attention is arguably our most {~~valueable~>valuable~~} resource, and the one w
 
 ## Case C — anchored SUGGEST with a stray space (ANCHOR_GAP tolerance)
 
-The argument is systematic in the way it builds.
+The argument is {==systematic==} {>>@claude: SUGGEST: methodical<<} in the way it builds.
 
 ## Case D — SUGGEST that deletes a span (empty replacement)
 

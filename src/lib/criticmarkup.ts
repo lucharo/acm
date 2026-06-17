@@ -1068,7 +1068,7 @@ export function groupCards(tokens: CritToken[], text: string): SidebarCard[] {
 // `SUGGEST: new wording` — optionally tagged with a group id, `SUGGEST[g:7a]: …`,
 // so a SET of suggestions can be accepted/rejected as one unit (#21). The tag
 // lives inside the comment body, so the substrate stays plain CriticMarkup.
-const SUGGESTION_PREFIX = /^\s*SUGGEST(?:\[g:([^\]\s]+)\])?:\s?([\s\S]*)$/;
+const SUGGESTION_PREFIX = /^\s*SUGGEST(?:\[g:([^\]\s]+)\])?:\s*([\s\S]*)$/;
 
 /** If `body` is a structured suggestion, the proposed replacement text (may be ""
  *  → suggest deleting the span); otherwise null. A group tag is NOT part of the
@@ -1087,12 +1087,14 @@ export function suggestionGroupId(body: string): string | null {
 
 /**
  * The highlight that ANCHORS a comment: the closest highlight whose close is
- * separated from the comment's open by only THREAD_GAP noise (whitespace +
- * orphaned `{==` / `==}` delimiters) — the SAME adjacency rule groupCards uses to
- * thread. Using the identical rule everywhere means "this comment is anchored to a
- * span" can't disagree between the sidebar (which shows the Suggested-edit card)
- * and applySuggestionEdit (which performs it). Returns the innermost/closest such
- * highlight, or null (e.g. a point comment or a reply — not anchored to a span).
+ * separated from the comment's open by only ANCHOR_GAP noise (whitespace +
+ * orphaned `{==` / `==}` delimiters, in any mix) — a SUPERSET of the THREAD_GAP rule
+ * groupCards threads by (ANCHOR_GAP also tolerates a bare stray space; see its
+ * definition below). Exporting this as the ONE anchor lookup means "this comment is
+ * anchored to a span" can't disagree between the sidebar (which shows the
+ * Suggested-edit card) and applySuggestionEdit (which performs it). Returns the
+ * innermost/closest such highlight, or null (e.g. a point comment or a reply — not
+ * anchored to a span).
  *
  * Tokens may be passed in to avoid re-scanning when the caller already has them.
  *

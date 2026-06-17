@@ -957,6 +957,7 @@ describe("structured suggestions (SUGGEST: …)", () => {
   test("suggestionReplacement parses the body, ignores plain comments", () => {
     expect(suggestionReplacement("SUGGEST: the new wording")).toBe("the new wording");
     expect(suggestionReplacement("SUGGEST:no space")).toBe("no space");
+    expect(suggestionReplacement("SUGGEST:   extra spaces")).toBe("extra spaces"); // all leading ws eaten, none leaks
     expect(suggestionReplacement("SUGGEST: ")).toBe(""); // suggest deleting the span
     expect(suggestionReplacement("just a normal comment")).toBeNull();
     expect(suggestionReplacement("please suggest an edit")).toBeNull(); // not a directive

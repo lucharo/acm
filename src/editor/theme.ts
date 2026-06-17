@@ -63,9 +63,6 @@ export const acmTheme: Extension = EditorView.theme(
       borderLeftColor: "var(--ink)",
       borderLeftWidth: "2px",
     },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-      backgroundColor: "var(--cm-selection)",
-    },
     "::selection": {
       backgroundColor: "var(--cm-selection)",
     },
@@ -107,9 +104,6 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-md-quote-line": {
       borderLeft: "3px solid var(--line-strong)",
       paddingLeft: "1rem",
-    },
-    ".cm-md-list": {
-      color: "var(--muted)",
     },
     // Rendered list bullet (replaces a `-`/`*`/`+` marker). A touch of right space so
     // "• item" reads as a list, slightly muted so the prose stays the focus.
@@ -202,6 +196,13 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-crit-hl--busy": {
       backgroundColor: "var(--crit-hl-bg-strong)",
       boxShadow: "inset 0 0 0 1px var(--crit-hl-ink)",
+    },
+    // …but an ACTIVE busy span keeps its bottom accent: equal-specificity --active
+    // and --busy both set boxShadow, so without this the later --busy ring would win
+    // and the focused span would lose its underline. A compound (two-class) rule wins
+    // on specificity regardless of source order.
+    ".cm-crit-hl--active.cm-crit-hl--busy": {
+      boxShadow: "inset 0 -2px 0 var(--crit-comment)",
     },
     // Seen comment's anchor — colourblind-safe: muted neutral fill + a dotted
     // underline (lightness + texture, NOT hue), so reviewed spans read as "done".

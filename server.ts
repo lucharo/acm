@@ -150,6 +150,17 @@ export function startServer(opts: StartServerOptions): AcmServer {
     return { ok: true, content: toWrite, version };
   }
 
+  // Parse a JSON request body, or null when it's malformed/empty — so a bad body
+  // becomes a clean 400 at the call site instead of an unhandled 500.
+  async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
+    try {
+      return (await req.json()) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  const badJson = () => new Response("Bad request: invalid JSON", { status: 400 });
+
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
   const server = Bun.serve({
     port,
@@ -174,10 +185,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // rather than clobbered. Returns the final (possibly merged) content for the
       // editor to adopt; commitWrite broadcasts it to any other clients.
       if (pathname === "/api/doc" && req.method === "PUT") {
-        const { content, baseVersion } = (await req.json()) as {
-          content: string;
-          baseVersion: number;
-        };
+        const body = await jsonBody(req);
+        if (!body) return badJson();
+        const { content, baseVersion } = body as { content: string; baseVersion: number };
         return withLock(async () => {
           const base = contentByVersion.get(baseVersion);
           if (base === undefined) {
@@ -196,11 +206,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // lock, so its base == disk → commitWrite takes the fast path; routed through
       // it anyway for one consistent hash/broadcast path.
       if (pathname === "/api/comment" && req.method === "POST") {
-        const { anchor, text, author } = (await req.json()) as {
-          anchor: number;
-          text: string;
-          author: string;
-        };
+        const body = await jsonBody(req);
+        if (!body) return badJson();
+        const { anchor, text, author } = body as { anchor: number; text: string; author: string };
         return withLock(async () => {
           const before = await Bun.file(docPath).text();
           const next = insertComment(before, anchor, text, author);
@@ -217,7 +225,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // declines a write that lands on the human's live caret; (2) commitWrite's
       // containment check refuses any merge that dropped the agent's inserted marker.
       if (pathname === "/api/agent-write" && req.method === "POST") {
-        const { base, content } = (await req.json()) as { base: string; content: string };
+        const body = await jsonBody(req);
+        if (!body) return badJson();
+        const { base, content } = body as { base: string; content: string };
         return withLock(async () => {
           const span = changedSpan(base, content);
           if (humanSel && Date.now() - humanSel.at < PRESENCE_TTL_MS) {
@@ -236,7 +246,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // PUT /api/presence → the editor reports its live caret/selection so agent
       // writes can steer clear of it. Advisory only — the merge is the guarantee.
       if (pathname === "/api/presence" && req.method === "PUT") {
-        const { from, to } = (await req.json()) as { from: number; to: number };
+        const body = await jsonBody(req);
+        if (!body) return badJson();
+        const { from, to } = body as { from: number; to: number };
         humanSel = { from, to, at: Date.now() };
         return Response.json({ ok: true });
       }
@@ -253,7 +265,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // settings (App) and seen (Workspace) — never clobber each other's key.
       // Serialized via withLock so concurrent patches can't lose a read-modify-write.
       if (pathname === "/api/settings" && req.method === "PUT") {
-        const patch = (await req.json()) as Record<string, unknown>;
+        const patch = await jsonBody(req);
+        if (!patch) return badJson();
         return withLock(async () => {
           const current = await readConfig<Record<string, unknown>>(SETTINGS_FILE, {});
           await writeConfig(SETTINGS_FILE, { ...current, ...patch });

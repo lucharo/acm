@@ -186,6 +186,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   const connTrackRef = useRef<SVGSVGElement | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const layoutRef = useRef<Map<string, CardLayout>>(new Map());
+  const measureRetriesRef = useRef(0);
   const [layout, setLayout] = useState<Map<string, CardLayout>>(() => new Map());
   // X (sidebar-local) of the page's right edge — where connectors originate.
   // Negative when the page sits left of this column (the usual case).
@@ -243,11 +244,15 @@ export default function CommentSidebar(props: CommentSidebarProps) {
       },
       write(data) {
         if (!data.valid) {
-          // Geometry wasn't ready — retry after the browser settles, WITHOUT
-          // clobbering the last-good layout (so cards never jump to the top).
-          requestAnimationFrame(() => recomputeRef.current());
+          // Geometry wasn't ready (mid-mount, font/page-view swap) — retry after the
+          // browser settles, WITHOUT clobbering the last-good layout (so cards never
+          // jump to the top). Cap the retries: a hidden panel reads height 0 EVERY
+          // frame, which would otherwise spin rAF at ~60Hz forever. Once it's shown
+          // again the ResizeObserver re-fires recompute, so giving up here is safe.
+          if (measureRetriesRef.current++ < 12) requestAnimationFrame(() => recomputeRef.current());
           return;
         }
+        measureRetriesRef.current = 0;
         const { measured, origin, lastLineBottom } = data;
         const sorted = [...measured].sort((a, b) => a.anchorY - b.anchorY);
         const next = new Map<string, CardLayout>();
@@ -684,7 +689,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           rows={1}
                           value={replyDraft}
                           onChange={(e) => setReplyDraft(e.target.value)}
-                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, true), () => { setReplyingId(null); setReplyDraft(""); })}
+                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, card.kind === "comment"), () => { setReplyingId(null); setReplyDraft(""); })}
                           placeholder="Reply…  (⇧↵ for a new line)"
                           className="block max-h-40 w-full resize-none overflow-y-auto rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1.5 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
                         />
