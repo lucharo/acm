@@ -12,9 +12,9 @@ human sees it rendered live.
 
 ## The file is the API
 
-The document path is whatever the human opened (`acm <file>`). Read it, edit it, save
-it — the running ACM UI reflects your changes within ~1s. No database, no special
-format beyond CriticMarkup.
+The document path is whatever the human opened (`acm <file>`). The file is the source
+of truth — read it freely, and write through the `acm` verbs (below). The running ACM
+UI reflects your changes within ~1s. No database, no special format beyond CriticMarkup.
 
 ## CriticMarkup you'll write
 
@@ -174,7 +174,8 @@ trigger false positives), and skip any section the human is still actively rewri
 3. For each: insert a threaded reply after its `thread.to`; propose an edit to FREE
    prose with `{++…++}` / `{--…--}` / `{~~old~>new~~}`; or, to edit COMMENT-ANCHORED
    text, attach a `SUGGEST:` comment (see "the ONE hard rule" above).
-4. Write the file back (or POST to the server API). Keep edits minimal and signed.
+4. Apply with the `acm` verbs (or `POST /api/agent-write`) so the write merges with the
+   human's concurrent edits rather than clobbering them. Keep edits minimal and signed.
 
 ## The `acm` verbs (the blessed surface — prefer these)
 
@@ -184,8 +185,11 @@ target matches), **snapshot the doc before every write** (`<docDir>/.acm/snapsho
 and **re-parse + report** after. **No `--doc` needed when ONE ACM editor is running**
 — the verbs resolve the doc the human has open (announced on stderr). Resolution
 order: `--doc <file.md>` > `ACM_DOC` > the running editor's doc; with several editors
-running the verbs refuse and list them rather than guess. Writes go to the file, so
-the editor reflects them within ~1s.
+running the verbs refuse and list them rather than guess. **They're write-safe by
+construction:** when an editor is live they route the write through the server so it
+3-way merges with the human's concurrent typing and respects the human's cursor (#38);
+with no editor up they write the file directly. Either way the editor reflects the
+result within ~1s — and they refuse rather than clobber on conflict.
 
 ```
 acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST]
@@ -211,10 +215,21 @@ suggestions. `--author <name>` stamps the voice (default `claude`).
 
 ## HTTP API / direct file (fallbacks)
 
-When a server is running: `GET /api/doc` → `{content, version}`; `POST /api/comment`
-`{anchor,text,author}`; `PUT /api/doc` `{content, baseVersion}` (409 on conflict).
-Direct file read/write is always available and simplest for one-offs. Prefer the `acm`
-verbs for review work — they snapshot and validate; raw edits don't.
+When a server is running:
+- `GET /api/doc` → `{content, version}` — read the live doc.
+- `POST /api/comment` `{anchor, text, author}` — drop a comment via the shared grammar.
+- `POST /api/agent-write` `{base, content}` — the **agent write path**: the server
+  3-way merges your `content` against disk (so the human's concurrent edits survive)
+  and runs a **cursor guard** — `409 {conflict:"cursor"}` if the human's caret sits in
+  your edited span, `409` on a same-span overlap too. This is what the `acm` verbs POST.
+- `PUT /api/doc` `{content, baseVersion}` (409 on conflict) — the **human editor's**
+  save, reconciled against the base it started from. Not the agent path.
+
+Reading the file directly is always fine. **Writing the file directly is only safe when
+no server is running** — a blind write while an editor is live skips the merge + cursor
+guard and can clobber the human's unsaved typing (the exact failure #38 prevents). So
+for review work prefer the `acm` verbs: they pick the safe path automatically, snapshot,
+and validate; raw writes don't.
 
 ## Voice
 
