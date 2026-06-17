@@ -104,6 +104,7 @@ export default function App() {
       initialDoc={sync.initialDoc}
       save={sync.save}
       flushNow={sync.flushNow}
+      reportSelection={sync.reportSelection}
       connected={sync.connected}
       saveState={sync.saveState}
       lastSavedAt={sync.lastSavedAt}
@@ -127,6 +128,7 @@ interface WorkspaceProps {
   initialDoc: string;
   save: (content: string) => void;
   flushNow: () => void;
+  reportSelection: (from: number, to: number) => void;
   connected: boolean;
   saveState: SaveState;
   lastSavedAt: number | null;
@@ -142,6 +144,7 @@ function Workspace({
   initialDoc,
   save,
   flushNow,
+  reportSelection,
   connected,
   saveState,
   lastSavedAt,
@@ -239,9 +242,12 @@ function Workspace({
     // imperatively inside the sidebar, so we never bump on viewportChanged.
     if (u.geometryChanged && !u.docChanged) setRepositionKey((k) => k + 1);
     if (u.selectionSet || u.docChanged) {
-      setHasSelection(!u.state.selection.main.empty);
+      const sel = u.state.selection.main;
+      setHasSelection(!sel.empty);
+      // Tell the server where the caret is so agent writes avoid this span (#38).
+      reportSelection(sel.from, sel.to);
     }
-  }, []);
+  }, [reportSelection]);
 
   // The keyboard-shortcuts cheat sheet — opened from the palette, settings, and
   // ⌘/. Declared here (ahead of useCodeMirror) so the editor's ⌘/ keybinding can

@@ -20,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
+import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, writeConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
@@ -58,7 +59,28 @@ export function startServer(opts: StartServerOptions): AcmServer {
 
   // ── Source-of-truth state ───────────────────────────────────────────────────
   let version = 0;
-  let lastKnownHash = Bun.hash(safeReadText(docPath));
+  const initialContent = safeReadText(docPath);
+  let lastKnownHash = Bun.hash(initialContent);
+
+  // Content the server held at each recent version. A writer that started from an
+  // OLDER version (the editor's baseVersion, or an agent's pre-edit read) needs that
+  // version's content as the merge base — so we retain a generous window. A save's
+  // baseVersion is only a version or two behind the server in practice, but a burst
+  // of interleaved human+agent writes can bump several versions while a save is in
+  // flight, so keep plenty (prose docs are small; a few dozen copies is cheap). Past
+  // the window we 409 "stale" and the editor recovers by adopting disk. The git
+  // journal (60s debounce) is far too coarse to serve as the merge base.
+  const KEEP_VERSIONS = 32;
+  const contentByVersion = new Map<number, string>([[0, initialContent]]);
+  function recordVersion(content: string) {
+    contentByVersion.set(version, content);
+    for (const v of contentByVersion.keys()) if (v <= version - KEEP_VERSIONS) contentByVersion.delete(v);
+  }
+
+  // Latest human caret/selection reported by the editor (its buffer coords), for the
+  // agent-avoids-cursor guard. Treated as stale after a few seconds of editor quiet.
+  let humanSel: { from: number; to: number; at: number } | null = null;
+  const PRESENCE_TTL_MS = 4000;
 
   // Doc history (#11): a git shadow journal in <docDir>/.acm/history.git.
   // Baseline at boot, then a commit after each QUIET PERIOD of writes (saves
@@ -89,6 +111,45 @@ export function startServer(opts: StartServerOptions): AcmServer {
     server.publish(DOC_TOPIC, JSON.stringify(msg));
   }
 
+  // The SINGLE write path. Every writer — human PUT, agent CLI, in-app comment —
+  // funnels through here so the conflict check fires for ALL of them; that is what
+  // makes #38 (a stale writer silently clobbering another) structurally impossible.
+  //   mine   — the writer's full proposed document.
+  //   base   — the content the writer started from (a version snapshot, or the
+  //            agent's pre-edit read), i.e. the common ancestor for the 3-way merge.
+  //   guards — per-hunk fragments that MUST each survive a merge (the agent's changed
+  //            line-runs). If a "clean" merge somehow dropped one, refuse to write — a
+  //            belt-and-braces check against ever losing an agent edit. Per-hunk (not
+  //            one contiguous span) so a multi-region agent edit isn't falsely rejected
+  //            when the human concurrently edits the untouched text between its regions.
+  // On divergence it 3-way merges so disjoint edits from both writers survive; only a
+  // genuine same-line overlap is a conflict (nothing written). Caller holds withLock.
+  type CommitResult =
+    | { ok: true; content: string; version: number }
+    | { ok: false; reason: "overlap" | "containment"; content: string; version: number };
+
+  async function commitWrite(mine: string, base: string, guards?: string[]): Promise<CommitResult> {
+    const theirs = await Bun.file(docPath).text(); // disk is the authoritative "theirs"
+    let toWrite: string;
+    if (theirs === base || mine === theirs) {
+      toWrite = mine; // nobody moved under us (or we'd write exactly what's there)
+    } else {
+      const m = merge3(mine, base, theirs);
+      if (!m.clean) return { ok: false, reason: "overlap", content: theirs, version };
+      if (guards && !guards.every((g) => m.result.includes(g)))
+        return { ok: false, reason: "containment", content: theirs, version };
+      toWrite = m.result;
+    }
+    if (toWrite === theirs) return { ok: true, content: theirs, version }; // no-op
+    await Bun.write(docPath, toWrite);
+    lastKnownHash = Bun.hash(toWrite); // hash the BYTES WRITTEN so the watcher drops our echo
+    version++;
+    recordVersion(toWrite);
+    pushUpdate(toWrite); // broadcast the FINAL (possibly merged) bytes to every client
+    recordHistorySoon("edit");
+    return { ok: true, content: toWrite, version };
+  }
+
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
   const server = Bun.serve({
     port,
@@ -108,27 +169,32 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return Response.json({ content, version });
       }
 
-      // PUT /api/doc → version-checked human write. NO broadcast (the writer already
-      // has the content; the hash gate suppresses the watcher echo).
+      // PUT /api/doc → the human editor's save. Reconciles against the base the
+      // editor started from (baseVersion), so a concurrent agent write is MERGED in
+      // rather than clobbered. Returns the final (possibly merged) content for the
+      // editor to adopt; commitWrite broadcasts it to any other clients.
       if (pathname === "/api/doc" && req.method === "PUT") {
         const { content, baseVersion } = (await req.json()) as {
           content: string;
           baseVersion: number;
         };
         return withLock(async () => {
-          if (baseVersion !== version) {
-            const currentFileContent = await Bun.file(docPath).text();
-            return Response.json({ content: currentFileContent, version }, { status: 409 });
+          const base = contentByVersion.get(baseVersion);
+          if (base === undefined) {
+            // Too far behind to reconstruct a merge base (rare given 500ms saves).
+            // Refuse rather than guess; the editor adopts disk and the user re-applies.
+            const disk = await Bun.file(docPath).text();
+            return Response.json({ content: disk, version, conflict: "stale" }, { status: 409 });
           }
-          await Bun.write(docPath, content);
-          lastKnownHash = Bun.hash(content);
-          version++;
-          recordHistorySoon("edit");
-          return Response.json({ version });
+          const r = await commitWrite(content, base);
+          if (!r.ok) return Response.json({ content: r.content, version: r.version, conflict: r.reason }, { status: 409 });
+          return Response.json({ version: r.version, content: r.content });
         });
       }
 
-      // POST /api/comment → agent drops a comment via the shared grammar.
+      // POST /api/comment → in-app comment via the shared grammar. Reads under the
+      // lock, so its base == disk → commitWrite takes the fast path; routed through
+      // it anyway for one consistent hash/broadcast path.
       if (pathname === "/api/comment" && req.method === "POST") {
         const { anchor, text, author } = (await req.json()) as {
           anchor: number;
@@ -136,15 +202,43 @@ export function startServer(opts: StartServerOptions): AcmServer {
           author: string;
         };
         return withLock(async () => {
-          const content = await Bun.file(docPath).text();
-          const next = insertComment(content, anchor, text, author);
-          await Bun.write(docPath, next);
-          lastKnownHash = Bun.hash(next);
-          version++;
-          pushUpdate(next);
-          recordHistorySoon("comment");
-          return Response.json({ version });
+          const before = await Bun.file(docPath).text();
+          const next = insertComment(before, anchor, text, author);
+          const r = await commitWrite(next, before);
+          if (!r.ok) return Response.json({ conflict: r.reason }, { status: 409 });
+          return Response.json({ version: r.version });
         });
+      }
+
+      // POST /api/agent-write → the `acm` CLI routes its rewrite here when this doc
+      // is open in an editor (issue #38). `base` is the CLI's pre-edit read; the
+      // server 3-way merges it against disk so the human's concurrent edits and the
+      // agent's card both survive. Two guards before writing: (1) the cursor guard
+      // declines a write that lands on the human's live caret; (2) commitWrite's
+      // containment check refuses any merge that dropped the agent's inserted marker.
+      if (pathname === "/api/agent-write" && req.method === "POST") {
+        const { base, content } = (await req.json()) as { base: string; content: string };
+        return withLock(async () => {
+          const span = changedSpan(base, content);
+          if (humanSel && Date.now() - humanSel.at < PRESENCE_TTL_MS) {
+            const lo = Math.min(humanSel.from, humanSel.to);
+            const hi = Math.max(humanSel.from, humanSel.to);
+            if (span.from <= hi && lo <= span.to) {
+              return Response.json({ conflict: "cursor" }, { status: 409 });
+            }
+          }
+          const r = await commitWrite(content, base, changedFragments(base, content));
+          if (!r.ok) return Response.json({ conflict: r.reason }, { status: 409 });
+          return Response.json({ version: r.version, content: r.content });
+        });
+      }
+
+      // PUT /api/presence → the editor reports its live caret/selection so agent
+      // writes can steer clear of it. Advisory only — the merge is the guarantee.
+      if (pathname === "/api/presence" && req.method === "PUT") {
+        const { from, to } = (await req.json()) as { from: number; to: number };
+        humanSel = { from, to, at: Date.now() };
+        return Response.json({ ok: true });
       }
 
       // GET /api/settings → persisted view settings + "seen" state (or {} on a
@@ -209,6 +303,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         if (hash === lastKnownHash) return; // our own write — drop the echo
         lastKnownHash = hash;
         version++;
+        recordVersion(content); // so a later in-flight save can merge against it
         pushUpdate(content);
         recordHistorySoon("agent edit");
       });
