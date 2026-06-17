@@ -36,6 +36,10 @@ export function reconcileSave(args: {
   buffer: string | null; // pendingContent at response time (null once a save is confirmed)
 }): SaveDecision {
   const { status, serverContent, sent, buffer } = args;
+  // Only 200 (saved/merged) and 409 (conflict) are protocol responses. Treat anything
+  // else (5xx, a reverse-proxy error, etc.) as a failed save — keep pending, never
+  // advance the base — even if the error body happens to carry a numeric `version`.
+  if (status !== 200 && status !== 409) return { kind: "failed" };
   if (typeof args.version !== "number") return { kind: "failed" };
   const version = args.version;
 
