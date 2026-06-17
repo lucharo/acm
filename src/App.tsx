@@ -762,8 +762,10 @@ function Workspace({
             items.push({ header: true, label: "Suggestions" });
             for (const s of hit.suggestions) {
               // Mirror the original word's case: ALL-CAPS → all-caps, Title → Title,
-              // else as-is. So "TEH"→"THE", "Teh"→"The", "teh"→"the".
-              const insert = /^\p{Lu}+$/u.test(hit.word)
+              // else as-is. So "TEH"→"THE", "Teh"→"The", "teh"→"the". The all-caps
+              // test compares against toUpperCase() (not a \p{Lu}+ regex) so words
+              // with apostrophes — "WE'ER"→"WE'RE" — still count as all-caps.
+              const insert = hit.word === hit.word.toUpperCase()
                 ? s.toUpperCase()
                 : /^\p{Lu}/u.test(hit.word)
                   ? s.charAt(0).toUpperCase() + s.slice(1)
