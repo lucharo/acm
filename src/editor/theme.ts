@@ -141,6 +141,16 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-bionic": {
       fontWeight: "700",
     },
+    // Spell check: a red wavy underline under a misspelled word (editor/spellcheck.ts).
+    // Decoration-only, so it layers cleanly over any prose — including green
+    // insertions or yellow highlights. skip-ink off keeps the wave continuous.
+    ".cm-spell-error": {
+      textDecoration: "underline",
+      textDecorationStyle: "wavy",
+      textDecorationColor: "var(--spell)",
+      textDecorationSkipInk: "none",
+      textUnderlineOffset: "2px",
+    },
     // Substitution arrow rendered in place of `~>`.
     ".cm-md-sub-arrow": {
       color: "var(--muted)",

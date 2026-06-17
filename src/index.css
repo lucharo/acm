@@ -27,6 +27,8 @@
   /* Warning (recoverable issues — heal banner): amber, NOT the destructive red. */
   --warn: #b45309;
   --warn-bg: #fef3c7;
+  /* Spell-check wavy underline — a vivid red, distinct from the struck deletion red. */
+  --spell: #e5484d;
 
   /* editor text selection — native (browser) selection, so it must read clearly
      OVER the yellow {==..==} highlights too; a soft blue is distinct from them. */
@@ -71,6 +73,7 @@
   --crit-comment: #a371f7;
   --warn: #f59e0b;
   --warn-bg: rgba(245, 158, 11, 0.16);
+  --spell: #ff6b6b; /* brighter red so the wavy underline reads on the dark canvas */
 
   --cm-selection: rgba(120, 165, 255, 0.34);
 

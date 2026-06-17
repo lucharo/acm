@@ -13,6 +13,7 @@ export interface ViewSettings {
   bionic: boolean; // bionic-reading: bold the lead of each word (rendered only)
   pageBreaks: boolean; // A4 page-break markers + page tally (a sense of print length)
   showSeen: boolean; // reveal comments marked "seen" (off = they're hidden, zero-inbox)
+  spellcheck: boolean; // wiggly-underline misspelled words (editor/spellcheck.ts)
   author: string; // name stamped on comments YOU add through the UI
 }
 export const FONT_STACKS: Record<Font, string> = {
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   bionic: false,
   pageBreaks: false,
   showSeen: false,
+  spellcheck: true, // on by default — the Google-Docs expectation for a prose editor
   author: "You",
 };
 export function loadSettings(): ViewSettings {

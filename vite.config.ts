@@ -1,7 +1,37 @@
 import { defineConfig } from "vite";
+import type { Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { resolve } from "node:path";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+// Inline the bundled Hunspell dictionary (the `dictionary-en` dep) at BUILD time as
+// virtual modules, so the spellchecker can import the raw .aff/.dic without the
+// 540KB / ~50k-line files living in git. Read by filesystem PATH from node_modules
+// — the package's single-string `exports` blocks subpath `?raw` imports, but a path
+// read sidesteps that. The text is inlined into the (lazy) client chunk, so it's
+// still embedded in the build + the compiled binary; the dep (pinned in bun.lock)
+// is the single source of truth, restored by `bun install`. See editor/spellcheck.ts.
+function dictionaryEnRaw(): Plugin {
+  const files: Record<string, string> = {
+    "virtual:dict-en/aff": "index.aff",
+    "virtual:dict-en/dic": "index.dic",
+  };
+  let dir: string | null = null;
+  return {
+    name: "acm:dictionary-en-raw",
+    resolveId(id) {
+      return id in files ? "\0" + id : null;
+    },
+    load(id) {
+      if (!id.startsWith("\0virtual:dict-en/")) return null;
+      if (!dir) dir = dirname(createRequire(import.meta.url).resolve("dictionary-en"));
+      const text = readFileSync(join(dir, files[id.slice(1)]), "utf8");
+      return `export default ${JSON.stringify(text)};`;
+    },
+  };
+}
 
 // The .md document is DATA the app writes to on every save — not a source module.
 // If it lives inside the Vite root, chokidar sees each write and FULL-PAGE-RELOADS
@@ -22,7 +52,7 @@ const apiPort = Number(process.env.ACM_PORT ?? 12000);
 const devPort = Number(process.env.ACM_DEV_PORT ?? 12173);
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), dictionaryEnRaw()],
   server: {
     port: devPort,
     proxy: {

@@ -46,6 +46,19 @@ function loadSeen(): Set<string> {
   }
 }
 
+// ── Personal spelling dictionary (words the user added) ────────────────────────
+// Same localStorage-cache + server-truth shape as the seen set. Stored lowercased
+// and de-duplicated; the spellchecker (editor/spellcheck.ts) mirrors it into the
+// live engine so both flagging and suggestions honour it.
+function loadDictionary(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem("acm-dictionary") ?? "[]");
+    return Array.isArray(raw) ? (raw as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** View settings: localStorage-seeded state + theme/font application to the
  *  document root + server reconciliation. Lives at the App level so theme/font
  *  apply to the loading screen too. */
@@ -125,4 +138,44 @@ export function useSeenState() {
     return () => clearTimeout(t);
   }, [seen]);
   return { seen, setSeen };
+}
+
+/** The personal spelling dictionary: localStorage-seeded, server-reconciled, with
+ *  add/remove helpers. Words are normalised to lowercase + deduped on write. */
+export function useDictionary() {
+  const [dictionary, setDictionary] = useState<string[]>(loadDictionary);
+  useEffect(() => {
+    localStorage.setItem("acm-dictionary", JSON.stringify(dictionary));
+  }, [dictionary]);
+  // On mount: adopt the server's list, or migrate localStorage up on first run.
+  const hydrated = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchConfig().then((cfg) => {
+      if (cancelled) return;
+      if (cfg && Array.isArray(cfg.dictionary)) setDictionary(cfg.dictionary as string[]);
+      else putConfig({ dictionary: loadDictionary() });
+      hydrated.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!hydrated.current) return;
+    const t = setTimeout(() => putConfig({ dictionary }), 300);
+    return () => clearTimeout(t);
+  }, [dictionary]);
+
+  const addWord = useCallback((word: string) => {
+    const w = word.trim().toLowerCase();
+    if (!w) return;
+    setDictionary((list) => (list.includes(w) ? list : [...list, w].sort()));
+  }, []);
+  const removeWord = useCallback((word: string) => {
+    const w = word.toLowerCase();
+    setDictionary((list) => list.filter((x) => x !== w));
+  }, []);
+
+  return { dictionary, addWord, removeWord };
 }

@@ -28,6 +28,7 @@ import { markdownPreview } from "./markdownPreview";
 import { footnotes } from "./footnotes";
 import { bionicReading } from "./bionicView";
 import { pageBreaks } from "./pageBreaks";
+import { spellcheck } from "./spellcheck";
 import { acmTheme, pageTheme } from "./theme";
 
 export interface UseCodeMirrorOptions {
@@ -41,6 +42,7 @@ export interface UseCodeMirrorOptions {
   page?: boolean;
   bionic?: boolean;
   pageBreaks?: boolean;
+  spellcheck?: boolean;
 }
 
 export interface UseCodeMirrorResult {
@@ -96,6 +98,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   const bionicCompartment = useRef(new Compartment());
   // Compartment for the optional A4 page-break markers (toggled from settings).
   const pageBreaksCompartment = useRef(new Compartment());
+  // Compartment for the optional spell-check underline (toggled from settings).
+  const spellcheckCompartment = useRef(new Compartment());
 
   // Create the view exactly once.
   useEffect(() => {
@@ -154,6 +158,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         pageCompartment.current.of(optsRef.current.page ? pageTheme : []),
         bionicCompartment.current.of(optsRef.current.bionic ? bionicReading : []),
         pageBreaksCompartment.current.of(optsRef.current.pageBreaks ? pageBreaks : []),
+        spellcheckCompartment.current.of(optsRef.current.spellcheck ? spellcheck : []),
         updateListener,
       ],
     });
@@ -220,6 +225,17 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
       effects: pageBreaksCompartment.current.reconfigure(opts.pageBreaks ? pageBreaks : []),
     });
   }, [opts.pageBreaks]);
+
+  // Toggle the spell-check underline in place when the setting changes.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: spellcheckCompartment.current.reconfigure(
+        opts.spellcheck ? spellcheck : [],
+      ),
+    });
+  }, [opts.spellcheck]);
 
   // Apply a full remote snapshot as a minimal ranged edit (prefix/suffix diff).
   // Stable identity (reads only the stable viewRef) so consumers' effects that
