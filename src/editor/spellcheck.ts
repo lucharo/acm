@@ -93,7 +93,7 @@ export function setCustomWords(words: Iterable<string>): void {
 
 /** Stop flagging `word` for the rest of this session (the "Ignore" action). */
 export function ignoreWord(word: string): void {
-  ignoredWords.add(word.toLowerCase());
+  ignoredWords.add(word.trim().toLowerCase());
   notify();
 }
 
@@ -104,7 +104,10 @@ export function ignoreWord(word: string): void {
 // suggestions. Hyphens are word boundaries, so "well-known" checks as "well" +
 // "known" (the Hunspell dict has neither hyphenated compound) and digit-bearing
 // tokens (v2, h2o, sha256) split into sub-runs we then drop by the length floor.
-const WORD_RE = /\p{Script=Latin}(?:[\p{Script=Latin}'’]*\p{Script=Latin})?/gu;
+// Fresh per call site: a `/g` regex carries mutable `lastIndex`, so a single
+// shared instance is a footgun if two scans ever interleave. The factory keeps
+// the pattern in one place without the shared state.
+const wordRe = () => /\p{Script=Latin}(?:[\p{Script=Latin}'’]*\p{Script=Latin})?/gu;
 // Below this length a "word" is almost always an abbreviation/initial (a, ok, mr)
 // or a digit-token fragment — too noisy to flag, and the dictionary's coverage of
 // 1–2 letter tokens is poor. Matches the conservative floor desktop editors use.
@@ -187,9 +190,9 @@ function buildSpellDecorations(view: EditorView): DecorationSet {
   for (const { from, to } of view.visibleRanges) {
     const skip = collectSkipRanges(view, from, to);
     const text = view.state.sliceDoc(from, to);
-    WORD_RE.lastIndex = 0;
+    const re = wordRe();
     let m: RegExpExecArray | null;
-    while ((m = WORD_RE.exec(text)) !== null) {
+    while ((m = re.exec(text)) !== null) {
       const word = m[0];
       if (word.length < MIN_LEN) continue;
       const wFrom = from + m.index;
@@ -253,9 +256,9 @@ export function misspelledWordAt(view: EditorView, pos: number): SpellHit | null
   const line = view.state.doc.lineAt(pos);
   const text = line.text;
   const rel = pos - line.from;
-  WORD_RE.lastIndex = 0;
+  const re = wordRe();
   let m: RegExpExecArray | null;
-  while ((m = WORD_RE.exec(text)) !== null) {
+  while ((m = re.exec(text)) !== null) {
     const start = m.index;
     const end = start + m[0].length;
     // Right-click typically lands just before/inside the word; accept a hit when

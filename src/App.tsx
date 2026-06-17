@@ -718,8 +718,13 @@ function Workspace({
           if (hit.suggestions.length) {
             items.push({ header: true, label: "Suggestions" });
             for (const s of hit.suggestions) {
-              // Mirror the original word's leading case so fixing "Teh" → "The".
-              const insert = /^\p{Lu}/u.test(hit.word) ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+              // Mirror the original word's case: ALL-CAPS → all-caps, Title → Title,
+              // else as-is. So "TEH"→"THE", "Teh"→"The", "teh"→"the".
+              const insert = /^\p{Lu}+$/u.test(hit.word)
+                ? s.toUpperCase()
+                : /^\p{Lu}/u.test(hit.word)
+                  ? s.charAt(0).toUpperCase() + s.slice(1)
+                  : s;
               items.push({ label: insert, onClick: () => v.dispatch({ changes: { from: hit.from, to: hit.to, insert } }) });
             }
           } else {
