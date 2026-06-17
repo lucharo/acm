@@ -3,6 +3,7 @@
 // Workspace; the only local state is whether the settings menu is open.
 
 import { useState } from "react";
+import type { FormEvent } from "react";
 import { MOD, handleCommentKey } from "./CommentSidebar";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
@@ -32,6 +33,10 @@ export interface HeaderProps {
   onToggleToc: () => void;
   settings: ViewSettings;
   onChangeSettings: (patch: Partial<ViewSettings>) => void;
+  /** The user's personal spelling dictionary + add/remove (Spelling tab). */
+  dictionary: string[];
+  onAddWord: (word: string) => void;
+  onRemoveWord: (word: string) => void;
 }
 
 const iconBtn =
@@ -60,9 +65,13 @@ export default function Header(props: HeaderProps) {
     onToggleToc,
     settings,
     onChangeSettings,
+    dictionary,
+    onAddWord,
+    onRemoveWord,
   } = props;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"display" | "spelling">("display");
 
   return (
     <header className="relative flex min-h-12 shrink-0 items-center gap-2 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
@@ -210,6 +219,26 @@ export default function Header(props: HeaderProps) {
           <>
             <div className="fixed inset-0 z-20" onClick={() => setSettingsOpen(false)} />
             <div className="absolute right-3 top-11 z-30 w-60 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-1.5 shadow-lg">
+              {/* Display | Spelling tabs — keeps the (now busy) panel scannable and
+                  gives the dictionary its own home, as requested. */}
+              <div className="mb-1.5 flex gap-1 rounded-md bg-[var(--line)] p-0.5">
+                {(["display", "spelling"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setSettingsTab(t)}
+                    className={`flex-1 rounded px-2 py-1 text-[12px] font-medium capitalize transition-colors ${
+                      settingsTab === t
+                        ? "bg-[var(--panel)] text-[var(--ink)] shadow-sm"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+              {settingsTab === "display" ? (
+              <>
               <FontPicker value={settings.font} onChange={(font) => onChangeSettings({ font })} />
               <Segmented<Theme>
                 label="Theme"
@@ -284,6 +313,16 @@ export default function Header(props: HeaderProps) {
                   to customize how agents review.
                 </p>
               </div>
+              </>
+              ) : (
+                <SpellingTab
+                  settings={settings}
+                  onChangeSettings={onChangeSettings}
+                  dictionary={dictionary}
+                  onAddWord={onAddWord}
+                  onRemoveWord={onRemoveWord}
+                />
+              )}
             </div>
           </>
         ) : null}
@@ -375,6 +414,87 @@ function SettingRow({
         />
       </span>
     </button>
+  );
+}
+
+/** The Spelling settings tab: the on/off toggle + a manager for the personal
+ *  dictionary (the words the user has taught the spellchecker). */
+function SpellingTab({
+  settings,
+  onChangeSettings,
+  dictionary,
+  onAddWord,
+  onRemoveWord,
+}: {
+  settings: ViewSettings;
+  onChangeSettings: (patch: Partial<ViewSettings>) => void;
+  dictionary: string[];
+  onAddWord: (word: string) => void;
+  onRemoveWord: (word: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const w = draft.trim();
+    if (!w) return;
+    onAddWord(w);
+    setDraft("");
+  };
+  return (
+    <div>
+      <SettingRow
+        label="Spell check"
+        checked={settings.spellcheck}
+        onToggle={() => onChangeSettings({ spellcheck: !settings.spellcheck })}
+      />
+      <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted)]">
+        Misspelled words get a red wavy underline. Right-click one to fix it, add it
+        to your dictionary, or ignore it.
+      </p>
+      <div className="my-1 border-t border-[var(--line)]" />
+      <div className="px-2 py-1.5">
+        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
+          Personal dictionary{dictionary.length ? ` · ${dictionary.length}` : ""}
+        </div>
+        <form onSubmit={submit} className="flex gap-1">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Add a word…"
+            className="min-w-0 flex-1 rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1 text-[13px] text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+          />
+          <button
+            type="submit"
+            disabled={!draft.trim()}
+            className="rounded-md bg-[var(--accent)] px-2 py-1 text-[12px] font-medium text-[var(--panel)] disabled:opacity-40"
+          >
+            Add
+          </button>
+        </form>
+        {dictionary.length === 0 ? (
+          <p className="mt-1.5 text-[11px] italic text-[var(--faint)]">No custom words yet.</p>
+        ) : (
+          <ul className="mt-1.5 max-h-40 overflow-y-auto">
+            {dictionary.map((w) => (
+              <li
+                key={w}
+                className="group flex items-center justify-between rounded px-1.5 py-1 text-[13px] text-[var(--ink)] hover:bg-[var(--line)]"
+              >
+                <span className="truncate">{w}</span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveWord(w)}
+                  title={`Remove “${w}” from your dictionary`}
+                  className="ml-2 shrink-0 rounded px-1 text-[var(--faint)] hover:text-[var(--crit-del)]"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 

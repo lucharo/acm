@@ -25,7 +25,8 @@ import Header from "./components/Header";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
-import { useViewSettings, useSeenState, commentKey } from "./hooks/useConfigState";
+import { useViewSettings, useSeenState, useDictionary, commentKey } from "./hooks/useConfigState";
+import { setCustomWords, ignoreWord, misspelledWordAt } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
 import { useComposer, SUGGEST_EDIT_TEXT } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
@@ -204,6 +205,13 @@ function Workspace({
   // "Seen" tracking — content-keyed, non-destructive (state + persistence in
   // useConfigState).
   const { seen, setSeen } = useSeenState();
+
+  // Personal spelling dictionary (persisted). Mirror it into the spellcheck engine
+  // whenever it changes so the underline + suggestions honour the user's words.
+  const { dictionary, addWord, removeWord } = useDictionary();
+  useEffect(() => {
+    setCustomWords(dictionary);
+  }, [dictionary]);
   const { seenThreadIds, unseenCount } = useSeenDerived(commentCards, seen);
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that
@@ -251,6 +259,7 @@ function Workspace({
     page: settings.page,
     bionic: settings.bionic,
     pageBreaks: settings.pageBreaks,
+    spellcheck: settings.spellcheck,
   });
 
   // Selection state powers the "Add comment" affordance.
@@ -662,6 +671,7 @@ function Workspace({
       { id: "bionic", label: settings.bionic ? "Disable bionic reading" : "Enable bionic reading", run: () => onChangeSettings({ bionic: !settings.bionic }) },
       { id: "pagebreaks", label: settings.pageBreaks ? "Hide A4 page breaks" : "Show A4 page breaks", run: () => onChangeSettings({ pageBreaks: !settings.pageBreaks }) },
       { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },
+      { id: "spellcheck", label: settings.spellcheck ? "Turn off spell check" : "Turn on spell check", run: () => onChangeSettings({ spellcheck: !settings.spellcheck }) },
       { id: "nav", label: navOpen ? "Hide overview panel" : "Show overview panel", run: () => setNavOpen((o) => !o) },
       { id: "toc", label: tocOpen ? "Hide outline" : "Show outline", run: () => setTocOpen((o) => !o) },
     ];
@@ -700,15 +710,36 @@ function Workspace({
           items.push({ label: "Reply", onClick: () => requestReply(thread) });
           items.push({ label: "Resolve thread", danger: true, onClick: () => resolveThread(thread) });
         }
-      } else if (!sel.empty) {
-        items.push({ label: "Add comment", onClick: () => openComposer() });
+      } else {
+        // Not on CriticMarkup — offer spelling fixes when the click lands on a
+        // misspelled word, then the comment affordance if there's a selection.
+        const hit = settings.spellcheck && pos != null ? misspelledWordAt(v, pos) : null;
+        if (hit) {
+          if (hit.suggestions.length) {
+            items.push({ header: true, label: "Suggestions" });
+            for (const s of hit.suggestions) {
+              // Mirror the original word's leading case so fixing "Teh" → "The".
+              const insert = /^\p{Lu}/u.test(hit.word) ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+              items.push({ label: insert, onClick: () => v.dispatch({ changes: { from: hit.from, to: hit.to, insert } }) });
+            }
+          } else {
+            items.push({ header: true, label: "No suggestions" });
+          }
+          items.push({ separator: true });
+          items.push({ label: "Add to dictionary", onClick: () => addWord(hit.word) });
+          items.push({ label: "Ignore", onClick: () => ignoreWord(hit.word) });
+        }
+        if (!sel.empty) {
+          if (items.length) items.push({ separator: true });
+          items.push({ label: "Add comment", onClick: () => openComposer() });
+        }
       }
       if (items.length === 0) return; // nothing actionable — let the native menu show
       e.preventDefault();
       e.stopPropagation(); // don't let the open-menu's window closer eat this one
       setMenu({ x: e.clientX, y: e.clientY, items });
     },
-    [editor.viewRef, tokens, threads, acceptToken, rejectToken, resolveThread, requestReply, openComposer],
+    [editor.viewRef, tokens, threads, acceptToken, rejectToken, resolveThread, requestReply, openComposer, settings.spellcheck, addWord],
   );
 
   const openCommentMenu = useCallback(
@@ -862,6 +893,9 @@ function Workspace({
         onToggleToc={() => setTocOpen((v) => !v)}
         settings={settings}
         onChangeSettings={onChangeSettings}
+        dictionary={dictionary}
+        onAddWord={addWord}
+        onRemoveWord={removeWord}
       />
 
       <div className="flex min-h-0 flex-1">
