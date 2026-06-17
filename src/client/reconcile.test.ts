@@ -84,4 +84,10 @@ describe("reconcileSave — malformed response never advances the base", () => {
       "failed",
     );
   });
+
+  test("non-2xx/non-409 status (e.g. 5xx) → failed even if the body carries a numeric version", () => {
+    // A reverse-proxy 502 or server 500 must NEVER advance the base, regardless of body.
+    expect(reconcileSave({ status: 502, version: 99, serverContent: "x", sent: "x", buffer: "x" }).kind).toBe("failed");
+    expect(reconcileSave({ status: 500, version: 7, serverContent: "y", sent: "x", buffer: "x" }).kind).toBe("failed");
+  });
 });
