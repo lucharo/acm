@@ -343,6 +343,35 @@ function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Reading-progress bar: how far the reader has scrolled through the document,
+  // 0→1. Measured off the editor's own scroller (the buffer is the scroll
+  // container). rAF-coalesced so a burst of scroll events repaints once per
+  // frame, and re-measured when the content height changes (typing, reflow,
+  // font swap, a remote edit) so the bar stays honest without a scroll event.
+  const [readProgress, setReadProgress] = useState(0);
+  useEffect(() => {
+    if (!view) return;
+    const scroller = view.scrollDOM;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const max = scroller.scrollHeight - scroller.clientHeight;
+      setReadProgress(max > 0 ? Math.min(1, Math.max(0, scroller.scrollTop / max)) : 0);
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    };
+    measure();
+    scroller.addEventListener("scroll", schedule, { passive: true });
+    const ro = new ResizeObserver(schedule);
+    ro.observe(view.contentDOM);
+    return () => {
+      scroller.removeEventListener("scroll", schedule);
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [view]);
+
   // On load, land where the conversation is (#20): scroll to the LAST open
   // (unseen) thread's anchor — or the last thread overall when everything's
   // seen — instead of the top. One-shot on mount: threads/seen are both derived
@@ -1029,6 +1058,16 @@ function Workspace({
           openSpellReview();
         }}
       />
+
+      {/* Reading-progress bar — sits flush under the header, grows left→right as
+          you scroll the document. Transparent track (nothing shows at the top of
+          a doc that doesn't scroll); the accent fill is the indicator. */}
+      <div className="h-[3px] shrink-0 overflow-hidden" aria-hidden="true">
+        <div
+          className="h-full bg-[var(--accent)]"
+          style={{ width: `${readProgress * 100}%` }}
+        />
+      </div>
 
       <div className="flex min-h-0 flex-1">
         {/* Overview panel — hidden by default; toggled from the header / settings. */}
