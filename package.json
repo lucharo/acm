@@ -29,6 +29,7 @@
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.6.4",
     "dictionary-en": "^4.0.0",
+    "dictionary-en-gb": "^3.0.0",
     "nspell": "^2.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

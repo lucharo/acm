@@ -5,6 +5,7 @@
 
 export type Theme = "light" | "dark" | "system";
 export type Font = "serif" | "sans" | "mono";
+export type SpellVariant = "uk" | "us"; // British vs American spelling dictionary
 export interface ViewSettings {
   theme: Theme;
   font: Font;
@@ -14,6 +15,7 @@ export interface ViewSettings {
   pageBreaks: boolean; // A4 page-break markers + page tally (a sense of print length)
   showSeen: boolean; // reveal comments marked "seen" (off = they're hidden, zero-inbox)
   spellcheck: boolean; // wiggly-underline misspelled words (editor/spellcheck.ts)
+  spellVariant: SpellVariant; // which dictionary spell check runs against
   author: string; // name stamped on comments YOU add through the UI
 }
 export const FONT_STACKS: Record<Font, string> = {
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   pageBreaks: false,
   showSeen: false,
   spellcheck: true, // on by default — the Google-Docs expectation for a prose editor
+  spellVariant: "uk", // British English by default
   author: "You",
 };
 export function loadSettings(): ViewSettings {

@@ -7,7 +7,7 @@ import type { FormEvent } from "react";
 import { MOD, handleCommentKey } from "./CommentSidebar";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
-import type { Font, Theme, ViewSettings } from "../lib/viewSettings";
+import type { Font, Theme, SpellVariant, ViewSettings } from "../lib/viewSettings";
 
 export interface HeaderProps {
   connected: boolean;
@@ -473,6 +473,17 @@ function SpellingTab({
         Misspelled words get a red wavy underline. Right-click one to fix it, add it
         to your dictionary, or ignore it.
       </p>
+      {settings.spellcheck && (
+        <Segmented<SpellVariant>
+          label="Dictionary"
+          value={settings.spellVariant}
+          options={[
+            { value: "uk", label: "British" },
+            { value: "us", label: "American" },
+          ]}
+          onChange={(spellVariant) => onChangeSettings({ spellVariant })}
+        />
+      )}
       <div className="my-1 border-t border-[var(--line)]" />
       <div className="px-2 py-1.5">
         <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">

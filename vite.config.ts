@@ -6,28 +6,33 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-// Inline the bundled Hunspell dictionary (the `dictionary-en` dep) at BUILD time as
-// virtual modules, so the spellchecker can import the raw .aff/.dic without the
-// 540KB / ~50k-line files living in git. Read by filesystem PATH from node_modules
-// — the package's single-string `exports` blocks subpath `?raw` imports, but a path
-// read sidesteps that. The text is inlined into the (lazy) client chunk, so it's
-// still embedded in the build + the compiled binary; the dep (pinned in bun.lock)
-// is the single source of truth, restored by `bun install`. See editor/spellcheck.ts.
-function dictionaryEnRaw(): Plugin {
-  const files: Record<string, string> = {
-    "virtual:dict-en/aff": "index.aff",
-    "virtual:dict-en/dic": "index.dic",
+// Inline the bundled Hunspell dictionaries (the `dictionary-en` US + `dictionary-en-gb`
+// UK deps) at BUILD time as virtual modules, so the spellchecker can import the raw
+// .aff/.dic without the 540KB / ~50k-line files living in git. Read by filesystem PATH
+// from node_modules — the package's single-string `exports` blocks subpath `?raw`
+// imports, but a path read sidesteps that. The text is inlined into the (lazy) client
+// chunk per variant, so it's still embedded in the build + the compiled binary; the
+// deps (pinned in bun.lock) are the single source of truth, restored by `bun install`.
+// See editor/spellcheck.ts.
+function dictionaryRaw(): Plugin {
+  const files: Record<string, { pkg: string; file: string }> = {
+    "virtual:dict-en/aff": { pkg: "dictionary-en", file: "index.aff" },
+    "virtual:dict-en/dic": { pkg: "dictionary-en", file: "index.dic" },
+    "virtual:dict-en-gb/aff": { pkg: "dictionary-en-gb", file: "index.aff" },
+    "virtual:dict-en-gb/dic": { pkg: "dictionary-en-gb", file: "index.dic" },
   };
-  let dir: string | null = null;
+  const dirs: Record<string, string> = {};
+  const req = createRequire(import.meta.url);
   return {
-    name: "acm:dictionary-en-raw",
+    name: "acm:dictionary-raw",
     resolveId(id) {
       return id in files ? "\0" + id : null;
     },
     load(id) {
-      if (!id.startsWith("\0virtual:dict-en/")) return null;
-      if (!dir) dir = dirname(createRequire(import.meta.url).resolve("dictionary-en"));
-      const text = readFileSync(join(dir, files[id.slice(1)]), "utf8");
+      const entry = files[id.slice(1)];
+      if (!id.startsWith("\0") || !entry) return null;
+      dirs[entry.pkg] ??= dirname(req.resolve(entry.pkg));
+      const text = readFileSync(join(dirs[entry.pkg], entry.file), "utf8");
       return `export default ${JSON.stringify(text)};`;
     },
   };
@@ -52,7 +57,7 @@ const apiPort = Number(process.env.ACM_PORT ?? 12000);
 const devPort = Number(process.env.ACM_DEV_PORT ?? 12173);
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), dictionaryEnRaw()],
+  plugins: [react(), tailwindcss(), dictionaryRaw()],
   server: {
     port: devPort,
     proxy: {

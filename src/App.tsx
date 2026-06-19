@@ -27,7 +27,7 @@ import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
 import { useViewSettings, useSeenState, useDictionary, commentKey } from "./hooks/useConfigState";
-import { setCustomWords, ignoreWord, misspelledWordAt } from "./editor/spellcheck";
+import { setCustomWords, setSpellVariant, ignoreWord, misspelledWordAt } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
 import { useComposer, SUGGEST_EDIT_TEXT } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
@@ -219,6 +219,11 @@ function Workspace({
   useEffect(() => {
     setCustomWords(dictionary);
   }, [dictionary]);
+  // Keep the spellchecker on the selected dictionary (UK/US). Switching rebuilds the
+  // engine; the underline repaints once the new variant is ready.
+  useEffect(() => {
+    setSpellVariant(settings.spellVariant);
+  }, [settings.spellVariant]);
   const { seenThreadIds, unseenCount } = useSeenDerived(commentCards, seen);
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that

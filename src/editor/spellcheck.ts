@@ -22,11 +22,15 @@ import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import type { NSpell } from "nspell";
+import type { SpellVariant } from "../lib/viewSettings";
 
 // ── Engine singleton ──────────────────────────────────────────────────────────
 
 let speller: NSpell | null = null;
 let loading = false;
+// Active spelling variant (UK/US). App mirrors the persisted setting into this via
+// setSpellVariant; "uk" matches DEFAULT_SETTINGS so the first build is British.
+let variant: SpellVariant = "uk";
 
 // The user's personal dictionary (lowercased), persisted by App via useDictionary.
 // Mirrored into the speller (via .add) so both `correct` and `suggest` honour it.
@@ -50,30 +54,58 @@ export function subscribeSpell(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
-/** Kick off the one-time dictionary load + speller build (idempotent). Spell
- *  results are empty until this resolves; subscribers fire when it does. */
+/** Dynamic-import the raw .aff/.dic for a variant. Each variant's dictionary is
+ *  inlined at build time by the Vite plugin (vite.config.ts) — the deps are the
+ *  source of truth, the files are NOT committed — and lands in its own lazy chunk;
+ *  the offline binary embeds them, so there's no runtime fetch. */
+function loadDict(v: SpellVariant): Promise<[string, string]> {
+  return v === "us"
+    ? Promise.all([
+        import("virtual:dict-en/aff").then((m) => m.default),
+        import("virtual:dict-en/dic").then((m) => m.default),
+      ])
+    : Promise.all([
+        import("virtual:dict-en-gb/aff").then((m) => m.default),
+        import("virtual:dict-en-gb/dic").then((m) => m.default),
+      ]);
+}
+
+/** Kick off the dictionary load + speller build for the active variant (idempotent).
+ *  Spell results are empty until this resolves; subscribers fire when it does. */
 export function ensureSpeller(): void {
   if (speller || loading) return;
   loading = true;
+  const target = variant; // snapshot — the variant may switch before this resolves
   void (async () => {
     try {
-      const [nspell, aff, dic] = await Promise.all([
+      const [nspell, [aff, dic], supplement] = await Promise.all([
         import("nspell").then((m) => m.default),
-        // Raw dictionary strings, inlined at build time from the `dictionary-en` dep
-        // by the Vite plugin in vite.config.ts (the dep is the source of truth — the
-        // files are NOT committed). Lands in its own lazy chunk; the offline binary
-        // embeds it — no runtime fetch.
-        import("virtual:dict-en/aff").then((m) => m.default),
-        import("virtual:dict-en/dic").then((m) => m.default),
+        loadDict(target),
+        // Common words both SCOWL dictionaries miss (transformative, gameplay…).
+        import("./spell-supplement").then((m) => m.SPELL_SUPPLEMENT),
       ]);
       const s = nspell(aff, dic);
+      for (const w of supplement) s.add(w); // fill the coverage gaps
       for (const w of customWords) s.add(w); // re-apply the personal dictionary
-      speller = s;
+      if (target === variant) speller = s; // ignore a build for a now-stale variant
     } finally {
       loading = false;
+      // If the variant switched mid-load, the build above was discarded — kick off
+      // a fresh one for the variant that's now active.
+      if (variant !== target && !speller) ensureSpeller();
       notify();
     }
   })();
+}
+
+/** Switch spelling dictionaries (UK ⇄ US). Drops the current engine and rebuilds;
+ *  the view plugin repaints via notify(), clearing underlines until it's ready. */
+export function setSpellVariant(v: SpellVariant): void {
+  if (v === variant) return;
+  variant = v;
+  speller = null;
+  ensureSpeller();
+  notify();
 }
 
 /** Replace the personal dictionary (App calls this when the persisted list loads
