@@ -42,6 +42,9 @@ export interface HeaderProps {
   dictionary: string[];
   onAddWord: (word: string) => void;
   onRemoveWord: (word: string) => void;
+  /** Count of flagged words in the document + opener for the review modal. */
+  flaggedCount: number;
+  onOpenReview: () => void;
 }
 
 const iconBtn =
@@ -76,6 +79,8 @@ export default function Header(props: HeaderProps) {
     dictionary,
     onAddWord,
     onRemoveWord,
+    flaggedCount,
+    onOpenReview,
   } = props;
 
   // settingsOpen is lifted to the Workspace (prop) so ⌘, can toggle it; only the
@@ -343,6 +348,8 @@ export default function Header(props: HeaderProps) {
                   dictionary={dictionary}
                   onAddWord={onAddWord}
                   onRemoveWord={onRemoveWord}
+                  flaggedCount={flaggedCount}
+                  onOpenReview={onOpenReview}
                 />
               )}
             </div>
@@ -447,12 +454,16 @@ function SpellingTab({
   dictionary,
   onAddWord,
   onRemoveWord,
+  flaggedCount,
+  onOpenReview,
 }: {
   settings: ViewSettings;
   onChangeSettings: (patch: Partial<ViewSettings>) => void;
   dictionary: string[];
   onAddWord: (word: string) => void;
   onRemoveWord: (word: string) => void;
+  flaggedCount: number;
+  onOpenReview: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const submit = (e: FormEvent) => {
@@ -483,6 +494,18 @@ function SpellingTab({
           ]}
           onChange={(spellVariant) => onChangeSettings({ spellVariant })}
         />
+      )}
+      {settings.spellcheck && (
+        <button
+          type="button"
+          onClick={onOpenReview}
+          disabled={flaggedCount === 0}
+          title="Review every flagged word in one place"
+          className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-[var(--ink)] hover:bg-[var(--line)] disabled:opacity-50 disabled:hover:bg-transparent"
+        >
+          Review flagged words
+          <span className="text-[11px] text-[var(--faint)]">{flaggedCount || "none"}</span>
+        </button>
       )}
       <div className="my-1 border-t border-[var(--line)]" />
       <div className="px-2 py-1.5">

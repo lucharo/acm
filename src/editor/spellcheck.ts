@@ -16,7 +16,7 @@
 //
 // Pure decoration — like bionicView, the buffer/.md on disk is never touched.
 
-import { syntaxTree } from "@codemirror/language";
+import { syntaxTree, ensureSyntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder, StateEffect } from "@codemirror/state";
@@ -306,4 +306,89 @@ export function misspelledWordAt(view: EditorView, pos: number): SpellHit | null
     return { from, to, word, suggestions: suggestFor(word) };
   }
   return null;
+}
+
+// ── Whole-document review (for the Spelling-review modal) ─────────────────────
+// The right-click handler and the underline only look at the viewport; the review
+// needs EVERY flagged word in the document, deduplicated. It reuses the exact same
+// tokenizer + skip rules so the review and the squiggles always agree — and forces
+// a full parse first (the syntax tree is otherwise lazy past the viewport, which
+// would leave code/URL/comment skip-regions unparsed and mis-flag their contents).
+
+export interface FlaggedWord {
+  /** A representative surface form (the first occurrence's exact text). */
+  word: string;
+  /** Lowercased dedup key. */
+  lower: string;
+  /** How many flagged occurrences in the document. */
+  count: number;
+  /** Offset of the first occurrence — the document-order sort key. */
+  from: number;
+}
+
+/** Force the syntax tree to cover the whole document, so skip-region detection is
+ *  correct past the viewport. Falls back to the partial tree if parsing times out. */
+function ensureParsed(view: EditorView): void {
+  ensureSyntaxTree(view.state, view.state.doc.length, 5000);
+}
+
+/** Every flagged (misspelled, not custom/ignored) word in the document, deduped
+ *  case-insensitively, in document order (first appearance). Empty before load. */
+export function collectFlagged(view: EditorView): FlaggedWord[] {
+  if (!speller) return [];
+  ensureParsed(view);
+  const text = view.state.doc.toString();
+  const skip = collectSkipRanges(view, 0, text.length);
+  const re = wordRe();
+  const seen = new Map<string, FlaggedWord>(); // insertion order == document order
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const word = m[0];
+    if (word.length < MIN_LEN) continue;
+    const from = m.index;
+    if (overlapsSkip(skip, from, from + word.length)) continue;
+    if (!isMisspelledWord(word)) continue;
+    const hit = seen.get(word.toLowerCase());
+    if (hit) hit.count++;
+    else seen.set(word.toLowerCase(), { word, lower: word.toLowerCase(), count: 1, from });
+  }
+  return [...seen.values()];
+}
+
+/** Re-case `word` to match the shape of `sample`: UPPER → all caps, Titlecase →
+ *  capitalised, anything else → left as-is. Keeps a sentence-start "Recieve" →
+ *  "Receive" while a mid-sentence "recieve" → "receive". */
+function matchCase(sample: string, word: string): string {
+  if (sample === sample.toUpperCase() && sample !== sample.toLowerCase()) return word.toUpperCase();
+  if (sample[0] === sample[0].toUpperCase() && sample[0] !== sample[0].toLowerCase())
+    return word[0].toUpperCase() + word.slice(1);
+  return word;
+}
+
+/** Edits that replace EVERY flagged occurrence of `lower` with `replacement`,
+ *  preserving each occurrence's case. Whole-word, skip-aware, and re-checks each
+ *  occurrence against the engine — so a correctly-cased homograph that shares the
+ *  lemma (e.g. a proper-noun "Polish" vs the flagged "polish") is left untouched.
+ *  Returned in ascending order, ready for a single `view.dispatch({ changes })`. */
+export function fixAllEdits(
+  view: EditorView,
+  lower: string,
+  replacement: string,
+): { from: number; to: number; insert: string }[] {
+  if (!speller) return [];
+  ensureParsed(view);
+  const text = view.state.doc.toString();
+  const skip = collectSkipRanges(view, 0, text.length);
+  const re = wordRe();
+  const edits: { from: number; to: number; insert: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const word = m[0];
+    if (word.length < MIN_LEN || word.toLowerCase() !== lower) continue;
+    const from = m.index;
+    if (overlapsSkip(skip, from, from + word.length)) continue;
+    if (!isMisspelledWord(word)) continue;
+    edits.push({ from, to: from + word.length, insert: matchCase(word, replacement) });
+  }
+  return edits;
 }

@@ -27,12 +27,23 @@ import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
 import { useViewSettings, useSeenState, useDictionary, commentKey } from "./hooks/useConfigState";
-import { setCustomWords, setSpellVariant, ignoreWord, misspelledWordAt } from "./editor/spellcheck";
+import {
+  setCustomWords,
+  setSpellVariant,
+  ignoreWord,
+  misspelledWordAt,
+  ensureSpeller,
+  collectFlagged,
+  fixAllEdits,
+  suggestFor,
+} from "./editor/spellcheck";
+import type { FlaggedWord } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
 import { useComposer, SUGGEST_EDIT_TEXT } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import ShortcutsOverlay from "./components/ShortcutsOverlay";
+import SpellingReview from "./components/SpellingReview";
 import { toggleStrong, toggleEmphasis } from "./editor/formatting";
 import {
   scanTokens,
@@ -286,6 +297,31 @@ function Workspace({
   // Selection state powers the "Add comment" affordance.
   const [hasSelection, setHasSelection] = useState(false);
 
+  // Spelling review modal: a deduped list of every flagged word in the document.
+  // `flagged` is recomputed fresh whenever the list is shown (settings popover or the
+  // modal) — a whole-doc scan, cheap without suggestions; never per-keystroke.
+  const [spellReviewOpen, setSpellReviewOpen] = useState(false);
+  const [flagged, setFlagged] = useState<FlaggedWord[]>([]);
+  const refreshFlagged = useCallback(() => {
+    const v = editor.viewRef.current;
+    ensureSpeller(); // idempotent — covers spell check having just been switched on
+    setFlagged(v ? collectFlagged(v) : []);
+  }, [editor.viewRef]);
+  const openSpellReview = useCallback(() => {
+    refreshFlagged();
+    setSpellReviewOpen(true);
+  }, [refreshFlagged]);
+  // Fix every occurrence of a flagged word in one undoable, case-preserving edit.
+  const fixSpelling = useCallback(
+    (lower: string, replacement: string) => {
+      const v = editor.viewRef.current;
+      if (!v) return;
+      const edits = fixAllEdits(v, lower, replacement);
+      if (edits.length) v.dispatch({ changes: edits });
+    },
+    [editor.viewRef],
+  );
+
   // The comment composer (state + post/suggest-edit actions) — see hooks/useComposer.
   const {
     composing,
@@ -519,6 +555,11 @@ function Workspace({
   // Settings menu lives in the header but its open-state is lifted here so ⌘,
   // can toggle it (a keyboard handler can't reach the header's local state).
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Refresh the flagged-word count when the settings popover opens, so the Spelling
+  // tab's "Review N flagged words" button is current without scanning every keystroke.
+  useEffect(() => {
+    if (settingsOpen && settings.spellcheck) refreshFlagged();
+  }, [settingsOpen, settings.spellcheck, refreshFlagged]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -720,10 +761,11 @@ function Workspace({
       { id: "pagebreaks", label: settings.pageBreaks ? "Hide A4 page breaks" : "Show A4 page breaks", run: () => onChangeSettings({ pageBreaks: !settings.pageBreaks }) },
       { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },
       { id: "spellcheck", label: settings.spellcheck ? "Turn off spell check" : "Turn on spell check", run: () => onChangeSettings({ spellcheck: !settings.spellcheck }) },
+      { id: "spell-review", label: "Review spelling", disabled: !settings.spellcheck, run: openSpellReview },
       { id: "nav", label: navOpen ? "Hide overview panel" : "Show overview panel", run: () => setNavOpen((o) => !o) },
       { id: "toc", label: tocOpen ? "Hide outline" : "Show outline", run: () => setTocOpen((o) => !o) },
     ];
-  }, [editor.viewRef, threads, wrapDoc, hasSelection, openComposer, diagnostics.length, goToFirstIssue, settings, onChangeSettings, navOpen, tocOpen]);
+  }, [editor.viewRef, threads, wrapDoc, hasSelection, openComposer, diagnostics.length, goToFirstIssue, settings, onChangeSettings, navOpen, tocOpen, openSpellReview]);
 
 
   // ── Right-click context menu ──────────────────────────────────────────────────
@@ -973,6 +1015,11 @@ function Workspace({
         dictionary={dictionary}
         onAddWord={addWord}
         onRemoveWord={removeWord}
+        flaggedCount={flagged.length}
+        onOpenReview={() => {
+          setSettingsOpen(false);
+          openSpellReview();
+        }}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -1134,6 +1181,16 @@ function Workspace({
       ) : null}
 
       {shortcutsOpen ? <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} /> : null}
+      {spellReviewOpen ? (
+        <SpellingReview
+          words={flagged}
+          suggest={suggestFor}
+          onFix={fixSpelling}
+          onAdd={addWord}
+          onIgnore={ignoreWord}
+          onClose={() => setSpellReviewOpen(false)}
+        />
+      ) : null}
 
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
     </div>
