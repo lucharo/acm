@@ -81,10 +81,12 @@ const out = `// ── Spell-check supplement: common words the base Hunspell di
 // The bundled \`dictionary-en\` (US) / \`dictionary-en-gb\` (UK) — SCOWL/aspell, ~50k
 // stems each — omit a long tail of perfectly ordinary words ("transformative",
 // "gameplay", "rebranded") and flag them as misspelled. This is a curated list of
-// those gaps, merged into whichever variant is active. It is spelling-neutral: every
-// word here is flagged by BOTH dictionaries, so it never leaks one region's spelling
-// into the other. nspell handles casing, so the lowercase entry also covers
-// Transformative / TRANSFORMATIVE.
+// those gaps, merged into whichever variant is active. Every word here is flagged by
+// BOTH dictionaries, so it is MOSTLY region-neutral — but "missing from both" is not
+// the same as "region-neutral": a few regional spellings neither SCOWL build happens
+// to contain (e.g. "annexe", "apnea") slip in and get accepted in both variants. That
+// known minor leak is documented in docs/adr/0001. nspell handles casing, so the
+// lowercase entry also covers Transformative / TRANSFORMATIVE.
 //
 // GENERATED — do not edit by hand. Regenerate with:
 //   bun scripts/build-spell-supplement.mjs

@@ -3,14 +3,18 @@
 // deduplicated to one row per distinct misspelling (with an occurrence count), in
 // document order. Per row: pick a suggestion or type your own to FIX every
 // occurrence (one undoable, case-preserving edit), ADD the word to the personal
-// dictionary, or IGNORE it for the session. Each action drops the row optimistically;
-// the underline and counts update through the engine's own repaint. Suggestions are
-// computed lazily per row (nspell.suggest can be ~100ms) so the modal opens instantly.
+// dictionary, or IGNORE it for the session. Handled words drop out via a local set;
+// the underline and counts update through the engine's own repaint.
+//
+// The displayed list is derived from `words` (not copied once), so when the engine
+// finishes loading after the modal opens, the freshly-scanned list flows straight in.
+// Suggestions are computed through a single throttled queue (nspell.suggest can be
+// ~100ms) so a document with many misspellings can't tie up the main thread.
 //
 // The list/fix logic lives in editor/spellcheck.ts (collectFlagged / fixAllEdits) so
 // the review and the on-screen squiggles always agree. This file is presentation.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { FlaggedWord } from "../editor/spellcheck";
 
@@ -29,10 +33,39 @@ export default function SpellingReview({
   onIgnore: (word: string) => void;
   onClose: () => void;
 }) {
-  // Local copy so handled words leave the list immediately, without waiting for the
-  // engine to repaint (Add/Ignore silence a word that's still in the document).
-  const [list, setList] = useState<FlaggedWord[]>(words);
-  const drop = (lower: string) => setList((l) => l.filter((w) => w.lower !== lower));
+  // Words the user has handled this session — filtered out immediately, without
+  // waiting for the engine to repaint. Deriving the list (rather than copying it)
+  // means a later `words` update — e.g. the dictionary finishing its load — shows up.
+  const [handled, setHandled] = useState<Set<string>>(() => new Set());
+  const drop = (lower: string) =>
+    setHandled((h) => {
+      const next = new Set(h);
+      next.add(lower);
+      return next;
+    });
+  const list = words.filter((w) => !handled.has(w.lower));
+
+  // One-at-a-time, idle-scheduled queue for the (synchronous, ~100ms) suggest()
+  // calls, so opening the modal on a misspelling-heavy doc doesn't block the thread.
+  const queueRef = useRef<Array<() => void>>([]);
+  const pumpingRef = useRef(false);
+  const enqueue = useCallback((task: () => void) => {
+    queueRef.current.push(task);
+    if (pumpingRef.current) return;
+    pumpingRef.current = true;
+    const idle = (cb: () => void) =>
+      window.requestIdleCallback ? window.requestIdleCallback(() => cb()) : setTimeout(cb, 1);
+    const pump = () => {
+      const t = queueRef.current.shift();
+      if (!t) {
+        pumpingRef.current = false;
+        return;
+      }
+      t();
+      idle(pump);
+    };
+    idle(pump);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -82,6 +115,7 @@ export default function SpellingReview({
                 key={w.lower}
                 word={w}
                 suggest={suggest}
+                enqueue={enqueue}
                 onFix={(replacement) => {
                   onFix(w.lower, replacement);
                   drop(w.lower);
@@ -106,24 +140,31 @@ export default function SpellingReview({
 function Row({
   word,
   suggest,
+  enqueue,
   onFix,
   onAdd,
   onIgnore,
 }: {
   word: FlaggedWord;
   suggest: (word: string) => string[];
+  enqueue: (task: () => void) => void;
   onFix: (replacement: string) => void;
   onAdd: () => void;
   onIgnore: () => void;
 }) {
-  // Lazy: compute suggestions AFTER paint so the modal opens instantly even when
-  // many rows each cost ~100ms. `null` = still computing, `[]` = none found.
+  // `null` = still queued/computing, `[]` = none found. The compute runs through the
+  // shared queue and is skipped if the row unmounts first (modal closed, word handled).
   const [suggestions, setSuggestions] = useState<string[] | null>(null);
   const [custom, setCustom] = useState("");
   useEffect(() => {
-    const id = setTimeout(() => setSuggestions(suggest(word.word)), 0);
-    return () => clearTimeout(id);
-  }, [suggest, word.word]);
+    let alive = true;
+    enqueue(() => {
+      if (alive) setSuggestions(suggest(word.word));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [enqueue, suggest, word.word]);
 
   const submitCustom = (e: FormEvent) => {
     e.preventDefault();

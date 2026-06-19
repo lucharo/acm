@@ -36,6 +36,7 @@ import {
   collectFlagged,
   fixAllEdits,
   suggestFor,
+  subscribeSpell,
 } from "./editor/spellcheck";
 import type { FlaggedWord } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
@@ -560,6 +561,13 @@ function Workspace({
   useEffect(() => {
     if (settingsOpen && settings.spellcheck) refreshFlagged();
   }, [settingsOpen, settings.spellcheck, refreshFlagged]);
+  // While the review/settings is open, re-scan when the engine notifies (it may
+  // finish loading, or the variant/dictionary may change, after we first scanned) —
+  // otherwise the count/modal can sit stale on an empty "all clear".
+  useEffect(() => {
+    if (!spellReviewOpen && !settingsOpen) return;
+    return subscribeSpell(refreshFlagged);
+  }, [spellReviewOpen, settingsOpen, refreshFlagged]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;

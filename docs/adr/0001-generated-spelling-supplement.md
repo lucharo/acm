@@ -42,3 +42,9 @@ junk; proper nouns the base dict already knows capitalised are dropped.
   checker should accept "Marseille", and frequency alone cannot separate names from
   vocabulary. The only cost — a typo that coincides with a surname slips through —
   is inherent to any large dictionary.
+- **Known limitation — minor regional leak.** "Flagged by both dictionaries" means
+  "missing from both", which is *not* the same as "region-neutral": a regional
+  spelling neither SCOWL build happens to contain (e.g. "annexe", "apnea",
+  "focussed") gets added to both variants, so the UK/US toggle doesn't strictly
+  reject it. The set is small and the words uncommon, so this is accepted rather than
+  fixed; a robust fix would need US/GB variant detection (e.g. SCOWL's VarCon data).

@@ -35,6 +35,11 @@ let variant: SpellVariant = "uk";
 // The user's personal dictionary (lowercased), persisted by App via useDictionary.
 // Mirrored into the speller (via .add) so both `correct` and `suggest` honour it.
 const customWords = new Set<string>();
+// The bundled supplement words (lowercased), applied to every speller build. Kept
+// as a set so de-adding a personal word that's ALSO in the supplement doesn't
+// `speller.remove()` it out of the live engine (it would stop being recognised
+// until the next rebuild). See spell-supplement.ts.
+const supplementWords = new Set<string>();
 // Session-only "ignore this word" set (lowercased) — cleared on reload, like the
 // Ignore action in Word/Pages. Never persisted.
 const ignoredWords = new Set<string>();
@@ -85,7 +90,10 @@ export function ensureSpeller(): void {
         import("./spell-supplement").then((m) => m.SPELL_SUPPLEMENT),
       ]);
       const s = nspell(aff, dic);
-      for (const w of supplement) s.add(w); // fill the coverage gaps
+      for (const w of supplement) {
+        s.add(w); // fill the coverage gaps
+        supplementWords.add(w);
+      }
       for (const w of customWords) s.add(w); // re-apply the personal dictionary
       if (target === variant) speller = s; // ignore a build for a now-stale variant
     } finally {
@@ -116,7 +124,9 @@ export function setCustomWords(words: Iterable<string>): void {
   // Diff against the speller so we don't re-add the whole list every keystroke.
   if (speller) {
     for (const w of next) if (!customWords.has(w)) speller.add(w);
-    for (const w of customWords) if (!next.has(w)) speller.remove(w);
+    // Don't remove a de-added word that the supplement still provides — that would
+    // un-teach it from the live engine until the next rebuild.
+    for (const w of customWords) if (!next.has(w) && !supplementWords.has(w)) speller.remove(w);
   }
   customWords.clear();
   for (const w of next) customWords.add(w);
