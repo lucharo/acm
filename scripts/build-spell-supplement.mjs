@@ -19,8 +19,30 @@ import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const WIKI_CUT = 50_000; // frequency-rank ceiling in the Wikipedia corpus
-const WEB_CUT = 80_000; //  …and in the web corpus; a word must clear BOTH
+const WIKI_CUT = 55_000; // frequency-rank ceiling in the Wikipedia corpus
+const WEB_CUT = 88_000; //  …and in the web corpus; a word must clear BOTH
+
+// Curated seed: common, region-neutral words the corpus method structurally CANNOT
+// reach. The main loop only keeps words already in SCOWL's ~275k list, so recent
+// coinages (brainrot, doomscrolling) are invisible to it however high the cutoffs go;
+// a few specialist terms sit just under the cutoffs. Each is folded in below ONLY
+// when BOTH base dicts still flag it (the same region-neutral gate the corpus words
+// pass), so nothing already-known or one-region-only leaks in. Keep this list tight
+// and unambiguous — anything rarer belongs in the personal dictionary.
+const SEED = [
+  // modern / web vocabulary (absent from SCOWL)
+  "brainrot", "doomscroll", "doomscrolling", "blogpost", "slidedeck", "deepfake", "deepfakes", "chatbot", "chatbots",
+  // biology / neuroscience
+  "downregulate", "downregulated", "downregulates", "downregulating", "downregulation",
+  "upregulate", "upregulated", "upregulates", "upregulating", "upregulation",
+  "nociceptor", "nociceptors", "nociception", "nociceptive",
+  "interoception", "interoceptive", "exteroception", "proprioception", "proprioceptive",
+  "connectome", "optogenetics", "neuroplasticity", "neuromodulation",
+  // general but routinely flagged
+  "entrainment", "aperiodic", "ethicist", "ethicists",
+  "whistleblower", "whistleblowers", "outcompete", "outcompetes", "outcompeted", "outcompeting",
+];
+
 const SCOWL_URL = "https://unpkg.com/an-array-of-english-words/index.json";
 const WIKI_URL =
   "https://raw.githubusercontent.com/IlyaSemenov/wikipedia-word-frequency/master/results/enwiki-2023-04-13.txt";
@@ -71,11 +93,17 @@ for (const w of scowl) {
   if (known(w) || known(cap(w))) continue; // already valid, or a known proper noun
   words.push(w);
 }
-words.sort();
+
+// Fold in the curated seed — same "flagged by BOTH dicts" gate as the corpus words.
+const corpusCount = words.length;
+for (const w of SEED) if (!known(w) && !known(cap(w))) words.push(w);
+const all = [...new Set(words)].sort();
+const seedAdded = all.length - corpusCount;
+console.error(`corpus: ${corpusCount}, seed added: ${seedAdded}, total: ${all.length}`);
 
 const rows = [];
-for (let i = 0; i < words.length; i += 12)
-  rows.push("  " + words.slice(i, i + 12).map((w) => JSON.stringify(w)).join(", ") + ",");
+for (let i = 0; i < all.length; i += 12)
+  rows.push("  " + all.slice(i, i + 12).map((w) => JSON.stringify(w)).join(", ") + ",");
 
 const out = `// ── Spell-check supplement: common words the base Hunspell dictionaries miss ─────
 // The bundled \`dictionary-en\` (US) / \`dictionary-en-gb\` (UK) — SCOWL/aspell, ~50k
@@ -86,11 +114,13 @@ const out = `// ── Spell-check supplement: common words the base Hunspell di
 // the same as "region-neutral": a few regional spellings neither SCOWL build happens
 // to contain (e.g. "annexe", "apnea") slip in and get accepted in both variants. That
 // known minor leak is documented in docs/adr/0001. nspell handles casing, so the
-// lowercase entry also covers Transformative / TRANSFORMATIVE.
+// lowercase entry also covers Transformative / TRANSFORMATIVE. A small CURATED SEED
+// is folded in for common words the corpus method can't reach — coinages absent from
+// SCOWL (brainrot, doomscrolling) and specialist terms below the frequency cutoffs.
 //
 // GENERATED — do not edit by hand. Regenerate with:
 //   bun scripts/build-spell-supplement.mjs
-// ${words.length} words. Anything rarer is left to the personal dictionary ("Add to
+// ${all.length} words. Anything rarer is left to the personal dictionary ("Add to
 // dictionary"). See the script header for the exact derivation.
 
 export const SPELL_SUPPLEMENT: readonly string[] = [
@@ -99,4 +129,4 @@ ${rows.join("\n")}
 `;
 
 writeFileSync(new URL("../src/editor/spell-supplement.ts", import.meta.url), out);
-console.error(`wrote src/editor/spell-supplement.ts (${words.length} words)`);
+console.error(`wrote src/editor/spell-supplement.ts (${all.length} words)`);
