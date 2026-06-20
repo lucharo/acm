@@ -300,6 +300,11 @@ export default function Header(props: HeaderProps) {
                 onToggle={() => onChangeSettings({ pageBreaks: !settings.pageBreaks })}
               />
               <SettingRow
+                label="Reading progress bar"
+                checked={settings.progressBar}
+                onToggle={() => onChangeSettings({ progressBar: !settings.progressBar })}
+              />
+              <SettingRow
                 label="Show seen comments"
                 checked={settings.showSeen}
                 onToggle={() => onChangeSettings({ showSeen: !settings.showSeen })}

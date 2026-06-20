@@ -350,7 +350,7 @@ function Workspace({
   // font swap, a remote edit) so the bar stays honest without a scroll event.
   const [readProgress, setReadProgress] = useState(0);
   useEffect(() => {
-    if (!view) return;
+    if (!view || !settings.progressBar) return;
     const scroller = view.scrollDOM;
     let raf = 0;
     const measure = () => {
@@ -370,7 +370,7 @@ function Workspace({
       ro.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [view]);
+  }, [view, settings.progressBar]);
 
   // On load, land where the conversation is (#20): scroll to the LAST open
   // (unseen) thread's anchor — or the last thread overall when everything's
@@ -796,6 +796,7 @@ function Workspace({
       { id: "lines", label: settings.lineNumbers ? "Hide line numbers" : "Show line numbers", run: () => onChangeSettings({ lineNumbers: !settings.lineNumbers }) },
       { id: "bionic", label: settings.bionic ? "Disable bionic reading" : "Enable bionic reading", run: () => onChangeSettings({ bionic: !settings.bionic }) },
       { id: "pagebreaks", label: settings.pageBreaks ? "Hide A4 page breaks" : "Show A4 page breaks", run: () => onChangeSettings({ pageBreaks: !settings.pageBreaks }) },
+      { id: "progressbar", label: settings.progressBar ? "Hide reading progress bar" : "Show reading progress bar", run: () => onChangeSettings({ progressBar: !settings.progressBar }) },
       { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },
       { id: "spellcheck", label: settings.spellcheck ? "Turn off spell check" : "Turn on spell check", run: () => onChangeSettings({ spellcheck: !settings.spellcheck }) },
       { id: "spell-review", label: "Review spelling", disabled: !settings.spellcheck, run: openSpellReview },
@@ -1061,13 +1062,16 @@ function Workspace({
 
       {/* Reading-progress bar — sits flush under the header, grows left→right as
           you scroll the document. Transparent track (nothing shows at the top of
-          a doc that doesn't scroll); the accent fill is the indicator. */}
-      <div className="h-[3px] shrink-0 overflow-hidden" aria-hidden="true">
-        <div
-          className="h-full bg-[var(--accent)]"
-          style={{ width: `${readProgress * 100}%` }}
-        />
-      </div>
+          a doc that doesn't scroll); the accent fill is the indicator. Toggle in
+          Settings → Display / the ⌘K palette. */}
+      {settings.progressBar ? (
+        <div className="h-[3px] shrink-0 overflow-hidden" aria-hidden="true">
+          <div
+            className="h-full bg-[var(--accent)]"
+            style={{ width: `${readProgress * 100}%` }}
+          />
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1">
         {/* Overview panel — hidden by default; toggled from the header / settings. */}

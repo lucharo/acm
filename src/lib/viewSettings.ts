@@ -13,6 +13,7 @@ export interface ViewSettings {
   lineNumbers: boolean;
   bionic: boolean; // bionic-reading: bold the lead of each word (rendered only)
   pageBreaks: boolean; // A4 page-break markers + page tally (a sense of print length)
+  progressBar: boolean; // thin reading-progress bar under the header (fills as you scroll)
   showSeen: boolean; // reveal comments marked "seen" (off = they're hidden, zero-inbox)
   spellcheck: boolean; // wiggly-underline misspelled words (editor/spellcheck.ts)
   spellVariant: SpellVariant; // which dictionary spell check runs against
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   lineNumbers: false,
   bionic: false,
   pageBreaks: false,
+  progressBar: true, // on by default — a quiet, familiar reading affordance
   showSeen: false,
   spellcheck: true, // on by default — the Google-Docs expectation for a prose editor
   spellVariant: "uk", // British English by default
