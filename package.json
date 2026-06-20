@@ -17,7 +17,7 @@
     "start": "bun run server.ts",
     "preview": "bun run server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/lib src/editor"
+    "test": "bun test src/lib src/editor src/cli"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
