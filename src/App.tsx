@@ -346,8 +346,10 @@ function Workspace({
   // Reading-progress bar: how far the reader has scrolled through the document,
   // 0→1. Measured off the editor's own scroller (the buffer is the scroll
   // container). rAF-coalesced so a burst of scroll events repaints once per
-  // frame, and re-measured when the content height changes (typing, reflow,
-  // font swap, a remote edit) so the bar stays honest without a scroll event.
+  // frame, and re-measured when EITHER the content height (typing, reflow, font
+  // swap, a remote edit) OR the viewport height changes (window resize while
+  // scrolled — that shifts clientHeight, the denominator) so the bar stays
+  // honest without a scroll event.
   const [readProgress, setReadProgress] = useState(0);
   useEffect(() => {
     if (!view || !settings.progressBar) return;
@@ -364,7 +366,8 @@ function Workspace({
     measure();
     scroller.addEventListener("scroll", schedule, { passive: true });
     const ro = new ResizeObserver(schedule);
-    ro.observe(view.contentDOM);
+    ro.observe(view.contentDOM); // content height (scrollHeight)
+    ro.observe(scroller); // viewport height (clientHeight — the denominator)
     return () => {
       scroller.removeEventListener("scroll", schedule);
       ro.disconnect();
