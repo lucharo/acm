@@ -162,6 +162,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const badJson = () => new Response("Bad request: invalid JSON", { status: 400 });
 
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
+  // A busy port surfaces here as a thrown EADDRINUSE — we let it propagate so
+  // library/CLI callers can react (the `acm` CLI catches it to auto-increment to
+  // the next free port). The friendly "die with a message" treatment is applied
+  // only at the direct-run entry point below (serveOrDie), not to every caller.
   const server = Bun.serve({
     port,
 
@@ -354,11 +358,54 @@ function safeReadText(path: string): string {
   }
 }
 
+/**
+ * Run a server-start thunk, turning a startup EADDRINUSE into a friendly message +
+ * clean exit instead of a raw stack trace. Any OTHER error is rethrown unchanged
+ * so genuinely unexpected failures still surface their stack. We don't assume WHO
+ * holds the port (another ACM, a stale background process, or an unrelated app) —
+ * best-effort `lsof` the pid to show, then suggest the two generic fixes. Used
+ * only at the direct-run entry point — callers that want to recover from a busy
+ * port (e.g. the CLI's port auto-increment) call startServer() and catch instead.
+ */
+function serveOrDie<T>(port: number, serve: () => T): T {
+  try {
+    return serve();
+  } catch (err) {
+    if ((err as { code?: string })?.code !== "EADDRINUSE") throw err;
+    process.stderr.write(`\n✗ Port ${port} is already in use.\n`);
+    const pid = pidOnPort(port);
+    if (pid) process.stderr.write(`  Held by process ${pid}.\n`);
+    process.stderr.write(
+      `\nEither stop whatever is on that port:\n` +
+        `  lsof -ti:${port} | xargs kill\n` +
+        `or run ACM on a different port:\n` +
+        `  ACM_PORT=${port + 1} bun run start   (or: just prod)\n\n`,
+    );
+    process.exit(1);
+  }
+}
+
+/** Best-effort pid of the process listening on `port` via `lsof`, or null if
+ *  lsof is missing / errors / nothing is listening. Never throws. */
+function pidOnPort(port: number): string | null {
+  try {
+    const { stdout, exitCode } = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`]);
+    if (exitCode !== 0) return null;
+    const pid = stdout.toString().trim().split("\n")[0]?.trim();
+    return pid || null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Dev / `bun run start` entry: boot from env (back-compat with bun run dev) ──
 // Only runs when this file is executed directly, not when imported by cli.ts.
 if (import.meta.main) {
-  startServer({
-    docPath: process.env.ACM_DOC ?? "seed/sample-essay.md",
-    port: Number(process.env.ACM_PORT ?? 12000),
-  });
+  const port = Number(process.env.ACM_PORT ?? 12000);
+  serveOrDie(port, () =>
+    startServer({
+      docPath: process.env.ACM_DOC ?? "seed/sample-essay.md",
+      port,
+    }),
+  );
 }
