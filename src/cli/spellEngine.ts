@@ -52,12 +52,29 @@ function dictDir(pkg: string): string {
   return dirname(require.resolve(pkg));
 }
 
+// Embedded-dict source for the COMPILED BINARY. `bun build --compile` does not embed
+// the runtime `node_modules` reads above, so the standalone `dist/acm` would have no
+// dictionaries beside it. cli.ts (which is outside the tsc `include`, like the SPA's
+// embedded.generated) sets this from a generated module whose `with { type: "file" }`
+// imports ARE embedded — readFileSync reads them on disk (source/built) and inside the
+// binary alike. Unset in plain source mode → the node_modules path above is used.
+type DictPaths = { aff: string; dic: string };
+let embeddedDicts: Partial<Record<SpellVariant, DictPaths>> | null = null;
+export function setEmbeddedDicts(map: Partial<Record<SpellVariant, DictPaths>>): void {
+  embeddedDicts = map;
+}
+
 /** Build the speller for `variant`, pre-loaded with the supplement and the given
  *  personal-dictionary words. Synchronous (~50ms) — fine for a one-shot CLI. */
 export function loadSpellEngine(variant: SpellVariant, personal: Iterable<string> = []): SpellEngine {
-  const pkg = variant === "us" ? "dictionary-en" : "dictionary-en-gb";
-  const dir = dictDir(pkg);
-  const speller: NSpell = nspell(readFileSync(join(dir, "index.aff")), readFileSync(join(dir, "index.dic")));
+  // Prefer the embedded dicts (compiled binary); else resolve them from node_modules.
+  const emb = embeddedDicts?.[variant];
+  const paths =
+    emb ?? (() => {
+      const dir = dictDir(variant === "us" ? "dictionary-en" : "dictionary-en-gb");
+      return { aff: join(dir, "index.aff"), dic: join(dir, "index.dic") };
+    })();
+  const speller: NSpell = nspell(readFileSync(paths.aff), readFileSync(paths.dic));
   for (const w of SPELL_SUPPLEMENT) speller.add(w);
   // Lowercased personal set: nspell honours it via .add, but an explicit set is the
   // same backstop the browser keeps (custom-word casing through nspell is imperfect).

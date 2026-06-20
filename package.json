@@ -12,7 +12,7 @@
     "vite": "vite",
     "server": "bun --watch server.ts",
     "build": "vite build",
-    "build:embed": "vite build && bun run scripts/gen-embedded.ts",
+    "build:embed": "vite build && bun run scripts/gen-embedded.ts && bun run scripts/gen-embedded-dicts.ts",
     "build:bin": "bun run build:embed && bun build --compile --outfile dist/acm ./cli.ts",
     "start": "bun run server.ts",
     "preview": "bun run server.ts",
