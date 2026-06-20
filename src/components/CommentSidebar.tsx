@@ -204,19 +204,21 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
-  // Which suggestion GROUP's "see the whole set" surface is open (popover / inline
-  // expand), keyed by group id. One at a time — opening another closes the last.
-  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  // Which group CONTROL's "see the whole set" surface is open (popover / inline
+  // expand), keyed by the member comment whose chip was clicked — so opening it on
+  // one member card doesn't fan the popover out across every sibling card. One at a
+  // time — opening another closes the last.
+  const [openControl, setOpenControl] = useState<string | null>(null);
   // Click anywhere outside a group surface closes it (popover feel). The toggle +
   // popover carry data-group-ui so a click on them doesn't self-close.
   useEffect(() => {
-    if (!openGroup) return;
+    if (!openControl) return;
     const onDown = (e: globalThis.MouseEvent) => {
-      if (!(e.target as HTMLElement | null)?.closest("[data-group-ui]")) setOpenGroup(null);
+      if (!(e.target as HTMLElement | null)?.closest("[data-group-ui]")) setOpenControl(null);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
-  }, [openGroup]);
+  }, [openControl]);
 
   // A right-click "Reply" elsewhere opens this thread's reply box (nonce re-fires
   // the effect even for the same thread).
@@ -682,8 +684,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                     size={g.size}
                                     members={groupMembersOf.get(g.id) ?? []}
                                     view={groupView}
-                                    isOpen={openGroup === g.id}
-                                    onToggle={() => setOpenGroup(openGroup === g.id ? null : g.id)}
+                                    isOpen={openControl === c.id}
+                                    onToggle={() => setOpenControl(openControl === c.id ? null : c.id)}
                                     onGroupEdit={onGroupEdit}
                                   />
                                 );
