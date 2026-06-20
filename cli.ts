@@ -58,6 +58,9 @@ running ACM editor; snapshot before every write):
   acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
   acm heal                          Repair markup that renders raw; snapshot-first
   acm import <file.docx> [out.md]   Word → CriticMarkup .md (needs the converter)
+  acm spell [list] [--json]         List flagged words: count, suggestions, line
+  acm spell add <word…>             Keep words in your personal dictionary
+  acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
   acm history [n]                   The doc's version journal (auto-recorded)
   acm restore <sha>                 Restore a journal version (snapshots first)
     (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
