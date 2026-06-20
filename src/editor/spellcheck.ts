@@ -113,6 +113,7 @@ export function setSpellVariant(v: SpellVariant): void {
 export function setCustomWords(words: Iterable<string>): void {
   const next = new Set<string>();
   for (const w of words) next.add(w.toLowerCase());
+  let needsRebuild = false;
   if (speller) {
     // A removal is the tricky case: nspell.remove() deletes the word from the
     // WHOLE engine, base dictionary included — so de-adding a word the active
@@ -123,14 +124,21 @@ export function setCustomWords(words: Iterable<string>): void {
     // a word), so the brief underline-clear during the async rebuild is fine.
     let removed = false;
     for (const w of customWords) if (!next.has(w)) { removed = true; break; }
-    if (removed) speller = null;
-    // Pure additions: mirror them in incrementally so we don't re-add the whole
-    // list every keystroke. (Skipped above when we're about to rebuild anyway.)
-    else for (const w of next) if (!customWords.has(w)) speller.add(w);
+    if (removed) {
+      speller = null;
+      needsRebuild = true;
+    } else {
+      // Pure additions: mirror them in incrementally so we don't re-add the
+      // whole list every keystroke.
+      for (const w of next) if (!customWords.has(w)) speller.add(w);
+    }
   }
   customWords.clear();
   for (const w of next) customWords.add(w);
-  if (!speller) ensureSpeller(); // rebuild re-applies the new customWords + supplement
+  // Only rebuild the live engine we just invalidated. When speller is already
+  // null because spellcheck hasn't started yet, leave it lazy — the next enable/
+  // load will apply the updated customWords; don't eagerly build from a sync.
+  if (needsRebuild) ensureSpeller();
   notify();
 }
 
