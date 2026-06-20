@@ -35,11 +35,6 @@ let variant: SpellVariant = "uk";
 // The user's personal dictionary (lowercased), persisted by App via useDictionary.
 // Mirrored into the speller (via .add) so both `correct` and `suggest` honour it.
 const customWords = new Set<string>();
-// The bundled supplement words (lowercased), applied to every speller build. Kept
-// as a set so de-adding a personal word that's ALSO in the supplement doesn't
-// `speller.remove()` it out of the live engine (it would stop being recognised
-// until the next rebuild). See spell-supplement.ts.
-const supplementWords = new Set<string>();
 // Session-only "ignore this word" set (lowercased) — cleared on reload, like the
 // Ignore action in Word/Pages. Never persisted.
 const ignoredWords = new Set<string>();
@@ -90,10 +85,7 @@ export function ensureSpeller(): void {
         import("./spell-supplement").then((m) => m.SPELL_SUPPLEMENT),
       ]);
       const s = nspell(aff, dic);
-      for (const w of supplement) {
-        s.add(w); // fill the coverage gaps
-        supplementWords.add(w);
-      }
+      for (const w of supplement) s.add(w); // fill the coverage gaps
       for (const w of customWords) s.add(w); // re-apply the personal dictionary
       if (target === variant) speller = s; // ignore a build for a now-stale variant
     } finally {
@@ -121,15 +113,24 @@ export function setSpellVariant(v: SpellVariant): void {
 export function setCustomWords(words: Iterable<string>): void {
   const next = new Set<string>();
   for (const w of words) next.add(w.toLowerCase());
-  // Diff against the speller so we don't re-add the whole list every keystroke.
   if (speller) {
-    for (const w of next) if (!customWords.has(w)) speller.add(w);
-    // Don't remove a de-added word that the supplement still provides — that would
-    // un-teach it from the live engine until the next rebuild.
-    for (const w of customWords) if (!next.has(w) && !supplementWords.has(w)) speller.remove(w);
+    // A removal is the tricky case: nspell.remove() deletes the word from the
+    // WHOLE engine, base dictionary included — so de-adding a word the active
+    // base dict (or supplement) ALSO provides un-teaches it until the next
+    // rebuild (add `color` in UK mode, switch to US, then de-add it → US loses
+    // `color`). Rather than guess which words the base dict owns, rebuild from
+    // scratch whenever anything was removed; removals are rare (a user de-adding
+    // a word), so the brief underline-clear during the async rebuild is fine.
+    let removed = false;
+    for (const w of customWords) if (!next.has(w)) { removed = true; break; }
+    if (removed) speller = null;
+    // Pure additions: mirror them in incrementally so we don't re-add the whole
+    // list every keystroke. (Skipped above when we're about to rebuild anyway.)
+    else for (const w of next) if (!customWords.has(w)) speller.add(w);
   }
   customWords.clear();
   for (const w of next) customWords.add(w);
+  if (!speller) ensureSpeller(); // rebuild re-applies the new customWords + supplement
   notify();
 }
 
