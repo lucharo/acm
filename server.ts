@@ -162,7 +162,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const badJson = () => new Response("Bad request: invalid JSON", { status: 400 });
 
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
-  const server = Bun.serve({
+  // The serve() call is wrapped in a thunk (not the options object) so Bun still
+  // infers the WebSocket-data / route generics inline; serveOrDie turns a startup
+  // EADDRINUSE into a friendly message + clean exit instead of a raw stack trace.
+  const server = serveOrDie(port, () =>
+    Bun.serve({
     port,
 
     async fetch(req) {
@@ -297,7 +301,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
         // Clients are receive-only; writes go through the HTTP API.
       },
     },
-  });
+    }),
+  );
 
   // ── File watching (the correctness core) ────────────────────────────────────
   // Watch the CONTAINING DIRECTORY non-recursively: atomic temp-then-rename saves
@@ -351,6 +356,44 @@ function safeReadText(path: string): string {
     return readFileSync(path, "utf8");
   } catch {
     return "";
+  }
+}
+
+/**
+ * Run a Bun.serve() thunk, turning a startup EADDRINUSE into a friendly message +
+ * clean exit instead of a raw stack trace. Any OTHER error is rethrown unchanged
+ * so genuinely unexpected failures still surface their stack. We don't assume WHO
+ * holds the port (another ACM, a stale background process, or an unrelated app) —
+ * best-effort `lsof` the pid to show, then suggest the two generic fixes.
+ */
+function serveOrDie<T>(port: number, serve: () => T): T {
+  try {
+    return serve();
+  } catch (err) {
+    if ((err as { code?: string })?.code !== "EADDRINUSE") throw err;
+    process.stderr.write(`\n✗ Port ${port} is already in use.\n`);
+    const pid = pidOnPort(port);
+    if (pid) process.stderr.write(`  Held by process ${pid}.\n`);
+    process.stderr.write(
+      `\nEither stop whatever is on that port:\n` +
+        `  lsof -ti:${port} | xargs kill\n` +
+        `or run ACM on a different port:\n` +
+        `  ACM_PORT=${port + 1} bun run start   (or: just prod)\n\n`,
+    );
+    process.exit(1);
+  }
+}
+
+/** Best-effort pid of the process listening on `port` via `lsof`, or null if
+ *  lsof is missing / errors / nothing is listening. Never throws. */
+function pidOnPort(port: number): string | null {
+  try {
+    const { stdout, exitCode } = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`]);
+    if (exitCode !== 0) return null;
+    const pid = stdout.toString().trim().split("\n")[0]?.trim();
+    return pid || null;
+  } catch {
+    return null;
   }
 }
 
