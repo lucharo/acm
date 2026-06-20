@@ -162,11 +162,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const badJson = () => new Response("Bad request: invalid JSON", { status: 400 });
 
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
-  // The serve() call is wrapped in a thunk (not the options object) so Bun still
-  // infers the WebSocket-data / route generics inline; serveOrDie turns a startup
-  // EADDRINUSE into a friendly message + clean exit instead of a raw stack trace.
-  const server = serveOrDie(port, () =>
-    Bun.serve({
+  // A busy port surfaces here as a thrown EADDRINUSE — we let it propagate so
+  // library/CLI callers can react (the `acm` CLI catches it to auto-increment to
+  // the next free port). The friendly "die with a message" treatment is applied
+  // only at the direct-run entry point below (serveOrDie), not to every caller.
+  const server = Bun.serve({
     port,
 
     async fetch(req) {
@@ -301,8 +301,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         // Clients are receive-only; writes go through the HTTP API.
       },
     },
-    }),
-  );
+  });
 
   // ── File watching (the correctness core) ────────────────────────────────────
   // Watch the CONTAINING DIRECTORY non-recursively: atomic temp-then-rename saves
@@ -360,11 +359,13 @@ function safeReadText(path: string): string {
 }
 
 /**
- * Run a Bun.serve() thunk, turning a startup EADDRINUSE into a friendly message +
+ * Run a server-start thunk, turning a startup EADDRINUSE into a friendly message +
  * clean exit instead of a raw stack trace. Any OTHER error is rethrown unchanged
  * so genuinely unexpected failures still surface their stack. We don't assume WHO
  * holds the port (another ACM, a stale background process, or an unrelated app) —
- * best-effort `lsof` the pid to show, then suggest the two generic fixes.
+ * best-effort `lsof` the pid to show, then suggest the two generic fixes. Used
+ * only at the direct-run entry point — callers that want to recover from a busy
+ * port (e.g. the CLI's port auto-increment) call startServer() and catch instead.
  */
 function serveOrDie<T>(port: number, serve: () => T): T {
   try {
@@ -400,8 +401,11 @@ function pidOnPort(port: number): string | null {
 // ── Dev / `bun run start` entry: boot from env (back-compat with bun run dev) ──
 // Only runs when this file is executed directly, not when imported by cli.ts.
 if (import.meta.main) {
-  startServer({
-    docPath: process.env.ACM_DOC ?? "seed/sample-essay.md",
-    port: Number(process.env.ACM_PORT ?? 12000),
-  });
+  const port = Number(process.env.ACM_PORT ?? 12000);
+  serveOrDie(port, () =>
+    startServer({
+      docPath: process.env.ACM_DOC ?? "seed/sample-essay.md",
+      port,
+    }),
+  );
 }
