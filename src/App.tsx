@@ -207,6 +207,7 @@ function Workspace({
     diagnostics,
     fixableCount,
     suggestionGroupOf,
+    groupMembersOf,
   } = useDocDerived(doc);
 
   // "Seen" tracking — content-keyed, non-destructive (state + persistence in
@@ -983,6 +984,13 @@ function Workspace({
               onAccept={acceptToken}
               onReject={rejectToken}
               onResolve={resolveComment}
+              groupView={settings.groupView}
+              groupMembersOf={groupMembersOf}
+              onGroupEdit={runGroupEdit}
+              onJumpToOffset={(from) => {
+                const tok = tokens.find((t) => t.from === from);
+                if (tok) gotoToken(tok);
+              }}
             />
           </aside>
         ) : null}
@@ -1029,6 +1037,8 @@ function Workspace({
                   onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
                   applicableSuggestionIds={applicableSuggestionIds}
                   suggestionGroupOf={suggestionGroupOf}
+                  groupMembersOf={groupMembersOf}
+                  groupView={settings.groupView}
                   onGroupEdit={runGroupEdit}
                   onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
                   onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}

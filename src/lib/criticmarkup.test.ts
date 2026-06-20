@@ -18,6 +18,7 @@ import {
   applySuggestionEdit,
   rejectSuggestionEdit,
   inlineSuggestions,
+  suggestionGroupMembers,
   applicableSuggestionIds,
   validateMarkup,
   hardWrap,
@@ -1066,6 +1067,32 @@ describe("structured suggestions (SUGGEST: …)", () => {
     expect(ids.has(byBody("r3").id)).toBe(false); // SUGGEST: but no highlight anchor
     expect(ids.has(byBody("plain").id)).toBe(false); // anchored but not a SUGGEST:
     expect(ids.size).toBe(2);
+  });
+});
+
+describe("suggestionGroupMembers — flatten a group for a 'see the whole set' view", () => {
+  const text =
+    "A {==network==}{>>@c: SUGGEST[g:bn]: network[^bn]<<} here, " +
+    "and {==mind==}{>>@c: SUGGEST[g:bn]: mind[^bn-meta]<<} too, " +
+    "plus {==cut==}{>>@c: SUGGEST[g:bn]:<<} gone. " +
+    "Other {==thing==}{>>@c: SUGGEST[g:zz]: thing!<<} elsewhere.";
+  test("returns every member of the group in document order, old → new", () => {
+    const m = suggestionGroupMembers(text, "bn");
+    expect(m.map((x) => x.anchorText)).toEqual(["network", "mind", "cut"]);
+    expect(m.map((x) => x.replacement)).toEqual(["network[^bn]", "mind[^bn-meta]", ""]);
+    expect(m.map((x) => x.isDelete)).toEqual([false, false, true]);
+    // ordered by document offset
+    expect(m.map((x) => x.from)).toEqual([...m].map((x) => x.from).sort((a, b) => a - b));
+  });
+  test("filters to the asked group; reads each span from its own highlight (stacked-safe)", () => {
+    expect(suggestionGroupMembers(text, "zz").map((x) => x.anchorText)).toEqual(["thing"]);
+    const stacked = "x {=={==old span==}{>>@a: SUGGEST[g:s1]: new span<<}==}{>>@b: SUGGEST[g:s1]: two<<} y";
+    const m = suggestionGroupMembers(stacked, "s1");
+    expect(m[0].anchorText).toBe("old span"); // the inner highlight's true span, not "{==old span==}"
+    expect(m.map((x) => x.replacement)).toEqual(["new span", "two"]);
+  });
+  test("an unknown group id yields no members", () => {
+    expect(suggestionGroupMembers(text, "nope")).toHaveLength(0);
   });
 });
 

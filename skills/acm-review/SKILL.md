@@ -96,15 +96,36 @@ so you can propose a concrete edit in the middle of a discussion, not just at th
 Here `@claude`'s suggestion replaces `currency we spend` (the span the thread is about),
 and `@luis`'s question stays attached to the edited span when it's accepted.
 
-## Suggestion groups — edits that only make sense together
+## Suggestion groups — edits that only make sense together (reach for these)
 
-Some edits are one logical change in several places (move a clause = delete here +
-re-word there; rename a term across a section). Tag each member with the same group
-id — `SUGGEST[g:<id>]: …` — and ACM treats the set as a unit: members render with a
-⛓ chip, and the human (or you, via `acm accept --group <id>`) applies or rejects
-ALL of them in one atomic step. Author members with `acm suggest … --group <id>`
-(pick any short id, e.g. `mv1`). Members can still be accepted individually; the
-group controls are the convenience, not a lock.
+When one logical change lands in **more than one place**, group it — don't scatter
+the pieces as loose cards the human has to find and approve one by one. Tag each
+member with the same group id — `SUGGEST[g:<id>]: …`, authored with
+`acm suggest … --group <id>` (pick any short id, e.g. `mv1`). ACM then treats the set
+as a unit: members carry a ⛓ chip, the human can **review the whole set in one place**,
+and applies or rejects ALL of them atomically (`acm accept --group <id>`, or the card's
+"Apply all"). Members can still be accepted individually; the group is the convenience,
+not a lock.
+
+**Default to a group whenever edits belong together:**
+
+- **Footnotes** — the marker in the body AND the definition at the bottom are ONE
+  change. Group them:
+  ```
+  acm suggest "universal mind" "universal mind[^um]" --group um   # the marker
+  acm suggest "<the last line of the references block>" \
+              "<that same line>
+  [^um]: the idea of a single mind underlying all reality." --group um   # the definition, appended
+  ```
+  (Anchor the definition on the current last `[^id]: …` line and replace it with
+  itself + a newline + your new def — that keeps it a single applyable card. If you
+  also need to fix surrounding punctuation, e.g. a stray `)`, make that a third member
+  of the same group.)
+- **Rename a term across a section** — one member per occurrence, same group id.
+- **Move / re-word a clause** — the deletion here and the re-insertion there, grouped.
+
+If you find yourself listing several related edits as text for the human to paste,
+that's the signal to group them into one Apply-all set instead.
 
 ## Find comments precisely (reuse ACM's own parser)
 

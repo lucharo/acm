@@ -13,6 +13,8 @@ import type {
   FilterMode,
 } from "../lib/types";
 import { isSuggestion, isComment } from "../lib/types";
+import type { SuggestionGroupMember } from "../lib/criticmarkup";
+import type { GroupView } from "../lib/viewSettings";
 import { authorColor } from "./authorColor";
 
 interface NavPanelProps {
@@ -24,6 +26,15 @@ interface NavPanelProps {
   onAccept: (token: SuggestionToken) => void;
   onReject: (token: SuggestionToken) => void;
   onResolve: (token: CommentToken) => void;
+  /** Which "see the group together" layout is active. Only "panel" renders the
+   *  grouped section here; the other modes surface groups in the margin. */
+  groupView: GroupView;
+  /** groupId → its members ({old span, new wording}, document order). */
+  groupMembersOf: Map<string, SuggestionGroupMember[]>;
+  /** Accept/reject EVERY member of a group as one atomic edit. */
+  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+  /** Jump the editor to a document offset (a group member's comment). */
+  onJumpToOffset: (from: number) => void;
 }
 
 const FILTERS: { value: FilterMode; label: string }[] = [
@@ -103,12 +114,27 @@ export default function NavPanel(props: NavPanelProps) {
     onAccept,
     onReject,
     onResolve,
+    groupView,
+    groupMembersOf,
+    onGroupEdit,
+    onJumpToOffset,
   } = props;
 
   const suggestionCount = tokens.filter(isSuggestion).length;
   const commentCount = tokens.filter(isComment).length;
 
   const visible = tokens.filter((t) => matchesFilter(t, filter));
+
+  // Suggestion groups, listed when groupView === "panel" (the other modes show
+  // groups in the margin). Only on the All / Suggestions filters; ordered by where
+  // each group's first member sits in the document.
+  const showGroups =
+    groupView === "panel" && groupMembersOf.size > 0 && (filter === "all" || filter === "suggestions");
+  const groups = showGroups
+    ? [...groupMembersOf.entries()].sort(
+        (a, b) => (a[1][0]?.from ?? 0) - (b[1][0]?.from ?? 0),
+      )
+    : [];
 
   return (
     <div className="flex h-full w-full flex-col bg-[var(--panel)] text-[var(--ink)]">
@@ -154,6 +180,72 @@ export default function NavPanel(props: NavPanelProps) {
           );
         })}
       </div>
+
+      {/* Suggestion groups — the whole set, reviewable in one place + Apply-all
+          (only in groupView "panel"; other modes surface groups in the margin). */}
+      {groups.length > 0 ? (
+        <div className="border-b border-[var(--line)] px-2 py-2">
+          <div className="mb-1.5 px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
+            Suggestion groups
+          </div>
+          <div className="space-y-2">
+            {groups.map(([id, members]) => (
+              <div key={id} className="rounded-md border border-[var(--line)] p-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="truncate text-[11px] font-medium text-[var(--ink)]" title={`Suggestion group “${id}”`}>
+                    ⛓ {id} · {members.length} edits
+                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onGroupEdit(id, "accept")}
+                      title={`Apply all ${members.length} edits in this group (one undo)`}
+                      className="rounded bg-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--panel)]"
+                    >
+                      Apply all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onGroupEdit(id, "reject")}
+                      title="Reject all edits in this group (one undo)"
+                      className="rounded border border-[var(--line-strong)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-del)]"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+                <ul className="space-y-0.5">
+                  {members.map((m, i) => (
+                    <li key={m.commentId}>
+                      <button
+                        type="button"
+                        onClick={() => onJumpToOffset(m.from)}
+                        title="Jump to this edit"
+                        className="flex w-full gap-1.5 rounded px-1 py-0.5 text-left text-[12px] leading-snug hover:bg-[var(--bg)]"
+                      >
+                        <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
+                        <span className="min-w-0 truncate">
+                          {m.anchorText ? (
+                            <>
+                              <span className="text-[var(--crit-del)] line-through">{m.anchorText}</span>
+                              <span className="px-1 text-[var(--faint)]">→</span>
+                            </>
+                          ) : null}
+                          {m.isDelete ? (
+                            <span className="italic text-[var(--crit-del)]">(delete)</span>
+                          ) : (
+                            <span className="text-[var(--crit-ins)]">{m.replacement}</span>
+                          )}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Jump list */}
       <div className="min-h-0 flex-1 overflow-y-auto">

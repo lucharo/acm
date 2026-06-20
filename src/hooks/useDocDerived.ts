@@ -11,10 +11,12 @@ import {
   groupThreads,
   groupCards,
   inlineSuggestions,
+  suggestionGroupMembers,
   nestedCommentIssues,
   validateMarkup,
   healDocument,
 } from "../lib/criticmarkup";
+import type { SuggestionGroupMember } from "../lib/criticmarkup";
 import { isComment } from "../lib/types";
 import type { SidebarCard } from "../lib/types";
 import { commentKey } from "./useConfigState";
@@ -88,6 +90,18 @@ export function useDocDerived(doc: string) {
     return map;
   }, [inlineSuggestionList]);
 
+  // groupId → its members, flattened to {old span, new wording} pairs in document
+  // order — the data every "see the whole group together" view (popover / inline /
+  // panel) renders before an Apply-all. Built once per doc change from the same
+  // inline-suggestion pass, so the preview can't drift from what Apply-all does.
+  const groupMembersOf = useMemo(() => {
+    const map = new Map<string, SuggestionGroupMember[]>();
+    const ids = new Set<string>();
+    for (const s of inlineSuggestionList) if (s.groupId && s.groupSize > 1) ids.add(s.groupId);
+    for (const id of ids) map.set(id, suggestionGroupMembers(doc, id, tokens));
+    return map;
+  }, [inlineSuggestionList, doc, tokens]);
+
   return {
     tokens,
     wordCount,
@@ -102,6 +116,7 @@ export function useDocDerived(doc: string) {
     diagnostics,
     fixableCount,
     suggestionGroupOf,
+    groupMembersOf,
   };
 }
 

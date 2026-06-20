@@ -21,6 +21,8 @@ import type { EditorView } from "@codemirror/view";
 import { MOD } from "../lib/platform";
 import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
+import type { SuggestionGroupMember } from "../lib/criticmarkup";
+import type { GroupView } from "../lib/viewSettings";
 import { authorColor } from "./authorColor";
 
 interface CommentSidebarProps {
@@ -57,6 +59,12 @@ interface CommentSidebarProps {
   /** commentId → its suggestion group (id + member count), for SUGGEST[g:id]
    *  members (#21). Only real groups (≥2 members) appear here. */
   suggestionGroupOf: Map<string, { id: string; size: number }>;
+  /** groupId → its members ({old span, new wording}, in document order) — the data
+   *  the popover / inline-expand views list so the whole set is reviewable before an
+   *  Apply-all. */
+  groupMembersOf: Map<string, SuggestionGroupMember[]>;
+  /** Which "see the group together" layout to render (comparison build). */
+  groupView: GroupView;
   /** Accept/reject EVERY member of a group as one atomic edit. */
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
   /** Accept / reject a suggestion card's suggestion. */
@@ -135,6 +143,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onSuggestEdit,
     onApplySuggestion,
     suggestionGroupOf,
+    groupMembersOf,
+    groupView,
     onGroupEdit,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
@@ -194,6 +204,19 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
+  // Which suggestion GROUP's "see the whole set" surface is open (popover / inline
+  // expand), keyed by group id. One at a time — opening another closes the last.
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  // Click anywhere outside a group surface closes it (popover feel). The toggle +
+  // popover carry data-group-ui so a click on them doesn't self-close.
+  useEffect(() => {
+    if (!openGroup) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest("[data-group-ui]")) setOpenGroup(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [openGroup]);
 
   // A right-click "Reply" elsewhere opens this thread's reply box (nonce re-fires
   // the effect even for the same thread).
@@ -648,32 +671,21 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 </p>
                               )}
                               {(() => {
-                                // Member of a suggestion group (#21): offer the whole-set
+                                // Member of a suggestion group (#21): surface the whole-set
                                 // controls — every member edit lands as ONE undoable apply.
+                                // The LAYOUT of "see the set together" is chosen by groupView.
                                 const g = suggestionGroupOf.get(c.id);
                                 if (!g) return null;
                                 return (
-                                  <div className="mt-1.5 flex items-center gap-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]">
-                                    <span title={`Suggestion group “${g.id}” — ${g.size} edits meant to be applied together`}>
-                                      ⛓ group · {g.size} edits
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => { e.stopPropagation(); onGroupEdit(g.id, "accept"); }}
-                                      title={`Apply all ${g.size} edits in this group (one undo)`}
-                                      className="rounded-md bg-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--panel)]"
-                                    >
-                                      Apply all {g.size}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => { e.stopPropagation(); onGroupEdit(g.id, "reject"); }}
-                                      title={`Reject all ${g.size} edits in this group (one undo)`}
-                                      className="rounded-md border border-[var(--line-strong)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-del)]"
-                                    >
-                                      Reject all
-                                    </button>
-                                  </div>
+                                  <GroupSurface
+                                    groupId={g.id}
+                                    size={g.size}
+                                    members={groupMembersOf.get(g.id) ?? []}
+                                    view={groupView}
+                                    isOpen={openGroup === g.id}
+                                    onToggle={() => setOpenGroup(openGroup === g.id ? null : g.id)}
+                                    onGroupEdit={onGroupEdit}
+                                  />
                                 );
                               })()}
                             </div>
@@ -756,6 +768,168 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ── Suggestion-group "see the whole set" surfaces ─────────────────────────────
+// A group member's card carries controls to review + apply the WHOLE group. Three
+// layouts (comparison build, picked by ViewSettings.groupView): a popover that
+// floats the member list off the chip, an inline expansion in the card, or a
+// compact row (the Suggestions panel owns the list in that mode). All three list
+// the same groupMembersOf data and call the same atomic onGroupEdit.
+
+/** The members of a group as old → new rows, in document order. */
+function GroupMembers({ members }: { members: SuggestionGroupMember[] }) {
+  return (
+    <ul className="space-y-1">
+      {members.map((m, i) => (
+        <li key={m.commentId} className="flex gap-1.5 text-[12px] leading-snug">
+          <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
+          <span className="min-w-0">
+            {m.anchorText ? (
+              <>
+                <span className="text-[var(--crit-del)] line-through">{m.anchorText}</span>
+                <span className="px-1 text-[var(--faint)]">→</span>
+              </>
+            ) : null}
+            {m.isDelete ? (
+              <span className="italic text-[var(--crit-del)]">(delete)</span>
+            ) : (
+              <span className="text-[var(--crit-ins)]">{m.replacement}</span>
+            )}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Apply-all / Reject-all for the whole group (one undoable edit). */
+function GroupActions({
+  groupId,
+  size,
+  onGroupEdit,
+}: {
+  groupId: string;
+  size: number;
+  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+}) {
+  return (
+    <div className="mt-2 flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onGroupEdit(groupId, "accept"); }}
+        title={`Apply all ${size} edits in this group (one undo)`}
+        className="rounded-md bg-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--panel)]"
+      >
+        Apply all {size}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onGroupEdit(groupId, "reject"); }}
+        title={`Reject all ${size} edits in this group (one undo)`}
+        className="rounded-md border border-[var(--line-strong)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-del)]"
+      >
+        Reject all
+      </button>
+    </div>
+  );
+}
+
+function GroupSurface({
+  groupId,
+  size,
+  members,
+  view,
+  isOpen,
+  onToggle,
+  onGroupEdit,
+}: {
+  groupId: string;
+  size: number;
+  members: SuggestionGroupMember[];
+  view: GroupView;
+  isOpen: boolean;
+  onToggle: () => void;
+  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+}) {
+  const chip = `⛓ group · ${size} edits`;
+
+  // Panel mode: the Suggestions overview owns the grouped list, so the card keeps
+  // the compact inline controls (today's behaviour).
+  if (view === "panel") {
+    return (
+      <div className="mt-1.5 flex items-center gap-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]">
+        <span title={`Suggestion group “${groupId}” — listed in the Suggestions panel`}>{chip}</span>
+        <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
+      </div>
+    );
+  }
+
+  // Inline mode: a disclosure ▸/▾ expands the member list within the card.
+  if (view === "inline") {
+    return (
+      <div
+        data-group-ui
+        className="mt-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]"
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          className="flex w-full items-center gap-1 text-left hover:text-[var(--ink)]"
+          aria-expanded={isOpen}
+        >
+          <span aria-hidden="true">{isOpen ? "▾" : "▸"}</span> {chip}
+        </button>
+        {isOpen ? (
+          <div className="mt-1.5">
+            <GroupMembers members={members} />
+            <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  // Popover mode (default): the chip opens a floating list off the card. Opens
+  // UPWARD (the control sits at the card's bottom) so it overlays the visible card
+  // body rather than spilling past the clipped column edge.
+  return (
+    <div
+      data-group-ui
+      className="relative mt-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]"
+    >
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        className="flex items-center gap-1 hover:text-[var(--ink)]"
+        aria-expanded={isOpen}
+      >
+        {chip} <span aria-hidden="true">▾</span>
+      </button>
+      {isOpen ? (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-full left-0 z-50 mb-1 w-72 rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] p-2.5 text-[var(--ink)] shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
+        >
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[11px] font-medium">{chip}</span>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onToggle(); }}
+              aria-label="Close"
+              className="rounded p-0.5 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+            </button>
+          </div>
+          <div className="max-h-60 overflow-y-auto pr-0.5">
+            <GroupMembers members={members} />
+          </div>
+          <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
+        </div>
+      ) : null}
     </div>
   );
 }
