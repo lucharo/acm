@@ -58,6 +58,10 @@ running ACM editor; snapshot before every write):
   acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
   acm heal                          Repair markup that renders raw; snapshot-first
   acm import <file.docx> [out.md]   Word → CriticMarkup .md (needs the converter)
+  acm spell [list] [--json]         List flagged words: count, suggestions, line
+  acm spell add <word…>             Keep words in your personal dictionary
+  acm spell ignore <word…>          Stop flagging words in THIS doc only
+  acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
   acm history [n]                   The doc's version journal (auto-recorded)
   acm restore <sha>                 Restore a journal version (snapshots first)
     (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
@@ -122,8 +126,21 @@ if (process.argv[2] === "skill") {
   installSkill();
   process.exit(0);
 }
-// Agent edit/read verbs (threads/comment/suggest/accept/reject/resolve/apply).
+// Agent edit/read verbs (threads/comment/suggest/accept/reject/resolve/apply/spell).
 if (isAgentVerb(process.argv[2])) {
+  // Give `acm spell` its Hunspell dicts when running as the compiled binary (where
+  // node_modules isn't beside the executable). The generated module's file-imports
+  // are embedded by `bun build --compile`; it's absent in plain source mode, where
+  // the catch is a no-op and the engine reads node_modules instead. Resolved here in
+  // cli.ts (outside the tsc `include`) so the optional generated module never breaks
+  // typecheck — the same arrangement the SPA's embedded.generated uses below.
+  try {
+    const { setEmbeddedDicts } = await import("./src/cli/spellEngine");
+    const dicts = await import("./src/cli/dicts.generated");
+    setEmbeddedDicts(dicts.EMBEDDED_DICTS);
+  } catch {
+    // No generated dicts (source mode) → engine resolves them from node_modules.
+  }
   await runAgentVerb(process.argv[2], process.argv.slice(3));
   process.exit(0);
 }

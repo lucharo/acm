@@ -178,10 +178,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
-      // GET /api/doc → current snapshot.
+      // GET /api/doc → current snapshot. `path` lets the client key per-document
+      // config (the spellIgnore lists) — existing consumers destructure past it.
       if (pathname === "/api/doc" && req.method === "GET") {
         const content = await Bun.file(docPath).text();
-        return Response.json({ content, version });
+        return Response.json({ content, version, path: docPath });
       }
 
       // PUT /api/doc → the human editor's save. Reconciles against the base the

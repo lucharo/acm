@@ -23,6 +23,12 @@ import { RangeSetBuilder, StateEffect } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import type { NSpell } from "nspell";
 import type { SpellVariant } from "../lib/viewSettings";
+// The CM-free word model (tokenizer, length floor, skip-node names, case helper) is
+// shared with the Bun-side `acm spell` engine (cli/spellEngine.ts) so the two never
+// drift. Only the syntax-tree WALK differs (CM `syntaxTree` here, raw Lezer there).
+import { wordRe, MIN_LEN, SKIP_NODES, overlapsSkip, matchCase } from "../lib/spellModel";
+import type { Span, FlaggedWord } from "../lib/spellModel";
+export type { FlaggedWord } from "../lib/spellModel"; // re-export so existing importers (SpellingReview) are unaffected
 
 // ── Engine singleton ──────────────────────────────────────────────────────────
 
@@ -149,20 +155,8 @@ export function ignoreWord(word: string): void {
 }
 
 // ── Word model ──────────────────────────────────────────────────────────────
-// A spellable "word" is a run of Latin letters with optional internal apostrophes
-// (don't, John's). Restricting to the Latin script means non-English text (CJK,
-// Cyrillic, Greek…) is left alone rather than flagged wholesale and given garbage
-// suggestions. Hyphens are word boundaries, so "well-known" checks as "well" +
-// "known" (the Hunspell dict has neither hyphenated compound) and digit-bearing
-// tokens (v2, h2o, sha256) split into sub-runs we then drop by the length floor.
-// Fresh per call site: a `/g` regex carries mutable `lastIndex`, so a single
-// shared instance is a footgun if two scans ever interleave. The factory keeps
-// the pattern in one place without the shared state.
-const wordRe = () => /\p{Script=Latin}(?:[\p{Script=Latin}'’]*\p{Script=Latin})?/gu;
-// Below this length a "word" is almost always an abbreviation/initial (a, ok, mr)
-// or a digit-token fragment — too noisy to flag, and the dictionary's coverage of
-// 1–2 letter tokens is poor. Matches the conservative floor desktop editors use.
-const MIN_LEN = 3;
+// `wordRe` (Latin-script tokenizer) and `MIN_LEN` (length floor) live in
+// lib/spellModel — shared verbatim with the CLI engine. See there for the rationale.
 
 /** Is this (already-tokenised) word misspelled? Custom dictionary + session
  *  ignore set win; otherwise defer to the engine. Safe before load (→ false). */
@@ -187,20 +181,9 @@ export function suggestFor(word: string): string[] {
 // code spans, URLs, and the hidden comment body are not prose: collect their
 // ranges per repaint (one syntax-tree walk over the viewport, same as the other
 // view layers) and drop any word overlapping them.
-const SKIP_NODES = new Set<string>([
-  "InlineCode",
-  "FencedCode",
-  "CodeBlock", // indented code
-  "CodeText",
-  "URL",
-  "CMComment", // {>>…<<} — hidden behind the 💬 dot, never prose to check
-]);
-
-interface Span {
-  from: number;
-  to: number;
-}
-
+// `SKIP_NODES` (the excluded node names) and `Span`/`overlapsSkip` live in
+// lib/spellModel, shared with the CLI engine. Only this CM `syntaxTree` walk is
+// browser-specific.
 function collectSkipRanges(view: EditorView, from: number, to: number): Span[] {
   const out: Span[] = [];
   syntaxTree(view.state).iterate({
@@ -215,16 +198,6 @@ function collectSkipRanges(view: EditorView, from: number, to: number): Span[] {
     },
   });
   return out;
-}
-
-/** True if [from,to) overlaps any skip span. `spans` is in ascending order
- *  (syntaxTree enter() is pre-order left-to-right). */
-function overlapsSkip(spans: Span[], from: number, to: number): boolean {
-  for (const s of spans) {
-    if (s.from >= to) break; // spans sorted by `from`; no later one can overlap
-    if (s.to > from) return true;
-  }
-  return false;
 }
 
 // ── Decoration plugin ─────────────────────────────────────────────────────────
@@ -334,17 +307,6 @@ export function misspelledWordAt(view: EditorView, pos: number): SpellHit | null
 // a full parse first (the syntax tree is otherwise lazy past the viewport, which
 // would leave code/URL/comment skip-regions unparsed and mis-flag their contents).
 
-export interface FlaggedWord {
-  /** A representative surface form (the first occurrence's exact text). */
-  word: string;
-  /** Lowercased dedup key. */
-  lower: string;
-  /** How many flagged occurrences in the document. */
-  count: number;
-  /** Offset of the first occurrence — the document-order sort key. */
-  from: number;
-}
-
 /** Force the syntax tree to cover the whole document, so skip-region detection is
  *  correct past the viewport. Falls back to the partial tree if parsing times out. */
 function ensureParsed(view: EditorView): void {
@@ -372,16 +334,6 @@ export function collectFlagged(view: EditorView): FlaggedWord[] {
     else seen.set(word.toLowerCase(), { word, lower: word.toLowerCase(), count: 1, from });
   }
   return [...seen.values()];
-}
-
-/** Re-case `word` to match the shape of `sample`: UPPER → all caps, Titlecase →
- *  capitalised, anything else → left as-is. Keeps a sentence-start "Recieve" →
- *  "Receive" while a mid-sentence "recieve" → "receive". */
-function matchCase(sample: string, word: string): string {
-  if (sample === sample.toUpperCase() && sample !== sample.toLowerCase()) return word.toUpperCase();
-  if (sample[0] === sample[0].toUpperCase() && sample[0] !== sample[0].toLowerCase())
-    return word[0].toUpperCase() + word.slice(1);
-  return word;
 }
 
 /** Edits that replace EVERY flagged occurrence of `lower` with `replacement`,

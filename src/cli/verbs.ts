@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
 import { liveInstances, probeInstance } from "../server/instances";
 import { listHistory, showVersion, recordHistory } from "../server/history";
+import { readConfig, writeConfig } from "../server/config";
 import {
   AmbiguityError,
   appendToThread,
@@ -21,8 +22,11 @@ import {
   threadsSummary,
 } from "../lib/agentEdits";
 import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup, healDocument } from "../lib/criticmarkup";
+import { loadSpellEngine } from "./spellEngine";
+import type { SpellEngine } from "./spellEngine";
+import type { SpellVariant } from "../lib/viewSettings";
 
-const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore"]);
+const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore", "spell"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -85,6 +89,12 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   // ── Import: docx → CriticMarkup .md — the ONE verb that needs no ACM_DOC ────
   if (cmd === "import") {
     await runImport(f);
+    return;
+  }
+
+  // ── Spell: list / add / replace — its own sub-dispatch (add needs no doc) ────
+  if (cmd === "spell") {
+    await runSpell(f);
     return;
   }
 
@@ -233,6 +243,20 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     process.exit(1);
   }
 
+  await commitWrite(docPath, before, after, cmd, note);
+}
+
+/** Snapshot → write (through a live editor's 3-way merge if one's open, else direct)
+ *  → re-parse + report. The single write authority for every mutating verb (#38), so
+ *  the generic verbs and `spell replace` share one battle-tested path. No-op (with a
+ *  note) when `after === before`. Exits the process on a real conflict / stale editor. */
+async function commitWrite(
+  docPath: string,
+  before: string,
+  after: string,
+  cmd: string,
+  note: string,
+): Promise<void> {
   if (after === before) {
     console.log(`acm ${cmd}: no change. ${note}`);
     return;
@@ -298,6 +322,201 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   if (viaEditorPort !== null)
     console.log(`  written via the live editor on :${viaEditorPort} (merged with any concurrent human edits)`);
   console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}`);
+}
+
+// ── acm spell [list|add|ignore|replace] — review & fix spelling from the shell ─
+// The browser checker (editor/spellcheck.ts) only runs inside the editor; this is
+// the same engine over a raw .md (cli/spellEngine.ts), reading the SAME persisted
+// variant (UK/US) and personal dictionary the GUI uses. Four sub-verbs:
+//   list (default) — every flagged word, counts, suggestions (--json for agents)
+//   add <word…>    — keep words: append to the personal dictionary (shared with GUI)
+//   ignore <word…> — stop flagging words in THIS doc only (settings.json spellIgnore
+//                    keyed by absolute doc path; the GUI seeds its session ignore set
+//                    from it, so squiggles agree). For foreign words/names that are
+//                    valid here but don't belong in the global dictionary.
+//   replace <w> <r>— fix every flagged occurrence of <w> in the doc, case-preserving
+
+/** The persisted spelling variant + personal dictionary + per-doc ignore lists
+ *  (~/.config/acm/settings.json), with fresh-install defaults (British, empty). */
+async function spellConfig(): Promise<{
+  variant: SpellVariant;
+  dictionary: string[];
+  spellIgnore: Record<string, string[]>;
+}> {
+  const cfg = await readConfig<{
+    settings?: { spellVariant?: SpellVariant };
+    dictionary?: unknown;
+    spellIgnore?: unknown;
+  }>("settings.json", {});
+  const ig = cfg.spellIgnore;
+  return {
+    variant: cfg.settings?.spellVariant === "us" ? "us" : "uk",
+    dictionary: Array.isArray(cfg.dictionary) ? (cfg.dictionary as string[]) : [],
+    spellIgnore:
+      ig && typeof ig === "object" && !Array.isArray(ig) ? (ig as Record<string, string[]>) : {},
+  };
+}
+
+/** Any live ACM server (settings are global, not per-doc, so any owner will do). */
+async function anyLiveServer(): Promise<{ port: number } | null> {
+  for (const e of await liveInstances()) if (await probeInstance(e)) return { port: e.port };
+  return null;
+}
+
+/** 1-based line number of `offset` in `text` (for the list view). */
+function lineOf(text: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset && i < text.length; i++) if (text[i] === "\n") line++;
+  return line;
+}
+
+async function runSpell(f: Flags): Promise<void> {
+  const sub = f.positional[0] ?? "list";
+  if (sub === "add") return runSpellAdd(f);
+  if (sub !== "list" && sub !== "ignore" && sub !== "replace") {
+    console.error(`acm spell: unknown subcommand "${sub}" — use: list | add | ignore | replace`);
+    process.exit(1);
+  }
+
+  const docPath = await docPathFrom(f);
+  if (sub === "ignore") return runSpellIgnore(f, docPath);
+  const { variant, dictionary, spellIgnore } = await spellConfig();
+  const ignored = spellIgnore[docPath] ?? [];
+  const engine = loadSpellEngine(variant, dictionary, ignored);
+  const before = await Bun.file(docPath).text();
+
+  if (sub === "list") {
+    printFlagged(engine, before, f.json);
+    if (!f.json && ignored.length)
+      console.log(`  (${ignored.length} word${ignored.length === 1 ? "" : "s"} ignored for this doc — acm spell ignore)`);
+    return;
+  }
+
+  // replace <word> <replacement>
+  const word = f.positional[1];
+  const replacement = f.positional[2];
+  if (!word || replacement === undefined) {
+    console.error('usage: acm spell replace "<word>" "<replacement>" [--doc <file>]');
+    process.exit(1);
+  }
+  const after = engine.applyReplaceAll(before, word.toLowerCase(), replacement);
+  if (after === before) {
+    console.log(`acm spell replace: no flagged "${word}" in the document — nothing to replace`);
+    return;
+  }
+  await commitWrite(docPath, before, after, "spell replace", `replaced every flagged "${word}" → "${replacement}"`);
+}
+
+/** `acm spell add <word…>` — append to the personal dictionary. Routed through a live
+ *  editor's /api/settings (server merges under withLock) when one's open, else written
+ *  to the config file directly. Shared with the GUI's "Add to dictionary". */
+async function runSpellAdd(f: Flags): Promise<void> {
+  const words = f.positional.slice(1).map((w) => w.trim().toLowerCase()).filter(Boolean);
+  if (words.length === 0) {
+    console.error("usage: acm spell add <word> [word…]   (keeps words in your personal dictionary)");
+    process.exit(1);
+  }
+  const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
+  const current = Array.isArray(cfg.dictionary) ? (cfg.dictionary as string[]) : [];
+  const merged = [...new Set([...current, ...words])].sort();
+  const added = merged.filter((w) => !current.includes(w));
+
+  const live = await anyLiveServer();
+  if (live) {
+    const res = await fetch(`http://localhost:${live.port}/api/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dictionary: merged }),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      console.error(`acm spell add: the ACM editor on :${live.port} did not accept the update — nothing written.`);
+      process.exit(1);
+    }
+  } else {
+    await writeConfig("settings.json", { ...cfg, dictionary: merged });
+  }
+
+  if (added.length === 0) {
+    console.log(`acm spell add: nothing new — already in your dictionary (${merged.length} words)`);
+    return;
+  }
+  console.log(`acm spell add: +${added.length} → ${added.join(", ")}`);
+  console.log(`  personal dictionary now ${merged.length} words (~/.config/acm/settings.json)`);
+  if (live) console.log(`  click back into the open editor to clear their squiggles (it re-reads on focus)`);
+}
+
+/** `acm spell ignore <word…>` — stop flagging words in THIS doc only. Stored in
+ *  settings.json under spellIgnore[<abs doc path>]; the GUI seeds its session ignore
+ *  set from the same list, so the CLI and the squiggles agree. Unlike `add`, the
+ *  words are never taught to the speller and never leave this document. */
+async function runSpellIgnore(f: Flags, docPath: string): Promise<void> {
+  const words = f.positional.slice(1).map((w) => w.trim().toLowerCase()).filter(Boolean);
+  if (words.length === 0) {
+    console.error("usage: acm spell ignore <word> [word…]   (stops flagging them in THIS doc only)");
+    process.exit(1);
+  }
+  const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
+  const rawMap = cfg.spellIgnore;
+  const map: Record<string, string[]> =
+    rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)
+      ? { ...(rawMap as Record<string, string[]>) }
+      : {};
+  const current = Array.isArray(map[docPath]) ? map[docPath] : [];
+  const merged = [...new Set([...current, ...words])].sort();
+  const added = merged.filter((w) => !current.includes(w));
+  map[docPath] = merged;
+
+  const live = await anyLiveServer();
+  if (live) {
+    const res = await fetch(`http://localhost:${live.port}/api/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ spellIgnore: map }),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      console.error(`acm spell ignore: the ACM editor on :${live.port} did not accept the update — nothing written.`);
+      process.exit(1);
+    }
+  } else {
+    await writeConfig("settings.json", { ...cfg, spellIgnore: map });
+  }
+
+  if (added.length === 0) {
+    console.log(`acm spell ignore: nothing new — already ignored for this doc (${merged.length} words)`);
+    return;
+  }
+  console.log(`acm spell ignore: +${added.length} → ${added.join(", ")}`);
+  console.log(`  ${merged.length} word${merged.length === 1 ? "" : "s"} ignored for ${docPath}`);
+  if (live) console.log(`  click back into the open editor to clear their squiggles (it re-reads on focus)`);
+}
+
+/** Print the flagged words (one row each) or a JSON array for agent consumption. */
+function printFlagged(engine: SpellEngine, text: string, json: boolean): void {
+  const rows = engine.flagged(text).map((w) => ({
+    word: w.word,
+    lower: w.lower,
+    count: w.count,
+    line: lineOf(text, w.from),
+    suggestions: engine.suggest(w.word),
+  }));
+  if (json) {
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+  if (rows.length === 0) {
+    console.log("acm spell: no misspellings — all clear ✓");
+    return;
+  }
+  for (const r of rows) {
+    const count = r.count > 1 ? ` ×${r.count}` : "";
+    const sugg = r.suggestions.length ? `  →  ${r.suggestions.join(", ")}` : "  (no suggestions)";
+    console.log(`  ${r.word}${count}${sugg}   ·  L${r.line}`);
+  }
+  console.log(
+    `\n${rows.length} word${rows.length === 1 ? "" : "s"} flagged` +
+      `\n  fix:  acm spell replace "<word>" "<correction>"` +
+      `\n  keep: acm spell add "<word>" [word…]`,
+  );
 }
 
 // ── acm import <file.docx> [out.md] — docx → CriticMarkup via the converter ───
