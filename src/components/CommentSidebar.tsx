@@ -23,7 +23,7 @@ import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
 import type { GroupView } from "../lib/viewSettings";
-import { authorColor } from "./authorColor";
+import { authorColor, groupColor } from "./authorColor";
 
 interface CommentSidebarProps {
   view: EditorView | null;
@@ -471,6 +471,10 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                 const isActive = isActiveCard(card);
                 const isSeen = seenIds.has(card.id);
                 const isExiting = exiting.has(card.id);
+                // The suggestion group this card belongs to (if any) — drives a
+                // colored spine + tag so same-group cards cluster visually.
+                const cardGroupId =
+                  card.comments.map((c) => suggestionGroupOf.get(c.id)?.id).find(Boolean) ?? null;
                 return (
                   <div
                     key={card.id}
@@ -500,6 +504,16 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       transition: l ? "opacity 200ms ease, transform 200ms ease" : "none",
                     }}
                   >
+                    {cardGroupId ? (
+                      // Colored spine — every card of one suggestion group shares this
+                      // hue, so the set reads as a cluster even when the cards aren't
+                      // adjacent. Absolute inside the (positioned) card, corners matched.
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-y-0 left-0 w-1 rounded-l-xl"
+                        style={{ background: groupColor(cardGroupId) }}
+                      />
+                    ) : null}
                     {card.kind === "suggestion" ? (
                       // ── Suggestion card: Accept/Reject + the change preview ──
                       (() => {
@@ -856,7 +870,13 @@ function GroupSurface({
   onToggle: () => void;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
 }) {
-  const chip = `⛓ group · ${size} edits`;
+  // Group tag, colour-matched to the card's spine so identity is unmistakable.
+  const color = groupColor(groupId);
+  const chip = (
+    <span style={{ color }}>
+      <span aria-hidden="true">⛓</span> {groupId} · {size} edits
+    </span>
+  );
 
   // Panel mode: the Suggestions overview owns the grouped list, so the card keeps
   // the compact inline controls (today's behaviour).
