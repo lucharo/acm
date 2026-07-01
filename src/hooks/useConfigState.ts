@@ -164,20 +164,24 @@ export function useDictionary() {
   // Re-read on window focus: `acm spell add` PUTs a merged list to /api/settings
   // while this state is stale — without a re-read, the NEXT GUI add would PUT the
   // stale list back and silently drop the CLI-added words. Focus is the natural
-  // moment (terminal → click back into the editor). Guards: skip until hydrated;
-  // skip adoption if a local edit raced the fetch (its debounced PUT is the newer
-  // truth); skip no-op adoptions so idle focus cycles don't churn PUTs.
+  // moment (terminal → click back into the editor). UNION-merge server+local (not
+  // wholesale adoption): a local add whose debounced PUT hasn't landed — browsers
+  // throttle background-tab timers, so blur→CLI→refocus can beat it — survives, in
+  // EVERY interleaving, and the debounced PUT then persists the union. Trade-off:
+  // a GUI removal in its own pre-PUT window can resurrect; removals are rare and
+  // visibly correctable, lost additions are silent. Server-side removals still
+  // propagate on reload (which adopts wholesale). JSON-equal skip keeps idle focus
+  // cycles from churning PUTs.
   const dictRef = useRef(dictionary);
   dictRef.current = dictionary;
   useEffect(() => {
     const sync = () => {
       if (!hydrated.current) return;
-      const before = dictRef.current;
       void fetchConfig().then((cfg) => {
         if (!cfg || !Array.isArray(cfg.dictionary)) return;
-        if (dictRef.current !== before) return; // a local edit won the race
-        const server = cfg.dictionary as string[];
-        if (JSON.stringify(server) !== JSON.stringify(before)) setDictionary(server);
+        const local = dictRef.current;
+        const merged = [...new Set([...local, ...(cfg.dictionary as string[])])].sort();
+        if (JSON.stringify(merged) !== JSON.stringify(local)) setDictionary(merged);
       });
     };
     window.addEventListener("focus", sync);
