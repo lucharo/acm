@@ -25,6 +25,7 @@ import { readConfig, writeConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
 import { saveAsset, resolveUnderDocDir } from "./src/server/asset";
+import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
 
 const SETTINGS_FILE = "settings.json";
 
@@ -259,14 +260,20 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // just assets/ — so hand-written references like ![](figures/plot.png)
       // render; anything resolving above docDir is refused (traversal guard).
       if (pathname === "/api/asset" && req.method === "GET") {
-        const abs = resolveUnderDocDir(docDir, url.searchParams.get("path") ?? "");
+        const rel = url.searchParams.get("path") ?? "";
+        const abs = resolveUnderDocDir(docDir, rel);
         if (!abs) return new Response("Forbidden", { status: 403 });
         const file = Bun.file(abs);
         if (!(await file.exists())) return new Response("Not found", { status: 404 });
         // CSP sandbox: an on-disk SVG (or anything else) opened directly from
         // this route must never run scripts on the app's origin. <img> rendering
-        // is unaffected.
-        return new Response(file, { headers: { "Content-Security-Policy": "sandbox" } });
+        // is unaffected. ACM-managed assets are content-addressed (stem-hash8),
+        // hence immutable — cache them hard so scrolling a doc with big
+        // screenshots doesn't refetch full bodies on every viewport re-entry.
+        const headers: Record<string, string> = { "Content-Security-Policy": "sandbox" };
+        if (/^assets\/[^/]+-[0-9a-f]{8}\.[a-z0-9]+$/.test(rel))
+          headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        return new Response(file, { headers });
       }
 
       // POST /api/asset?name=<orig> (raw image bytes as body) → save under
@@ -280,7 +287,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         if (bytes.length === 0) return new Response("Empty body", { status: 400 });
         const saved = await saveAsset(docDir, name, bytes);
         if (!saved)
-          return new Response("Unsupported file — images only (png, jpg, gif, webp, avif, bmp), bytes must match", {
+          return new Response(`Unsupported file — images only (${IMAGE_EXTS_LABEL}), bytes must match`, {
             status: 415,
           });
         return Response.json(saved);

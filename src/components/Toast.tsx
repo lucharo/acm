@@ -2,10 +2,12 @@
 // side effect (an image drop writing a file to disk: "Saved assets/…"). Purely
 // presentational; App owns the queue and the auto-dismiss timer.
 
+import type { ToastKind } from "../lib/types";
+
 export interface ToastItem {
   id: number;
   message: string;
-  kind: "info" | "error";
+  kind: ToastKind;
 }
 
 export default function ToastStack({ toasts }: { toasts: ToastItem[] }) {

@@ -26,6 +26,7 @@ import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./
 import type { CritCallbacks } from "./criticMarkupView";
 import { markdownPreview } from "./markdownPreview";
 import { imageInsert } from "./imageInsert";
+import type { ToastFn } from "./imageInsert";
 import { footnotes } from "./footnotes";
 import { bionicReading } from "./bionicView";
 import { pageBreaks } from "./pageBreaks";
@@ -40,7 +41,7 @@ export interface UseCodeMirrorOptions {
   /** Open/toggle the keyboard-shortcuts cheat sheet (bound to ⌘/ in the editor). */
   onShowShortcuts?: () => void;
   /** Bottom-right toast — image drop/paste reports where the file was saved. */
-  onToast?: (message: string, kind?: "info" | "error") => void;
+  onToast?: ToastFn;
   lineNumbers?: boolean;
   page?: boolean;
   bionic?: boolean;

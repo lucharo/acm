@@ -285,7 +285,7 @@ function Workspace({
   // (an image drop writes a file: "Saved assets/…"). Auto-dismiss after 4s.
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastId = useRef(0);
-  const pushToast = useCallback((message: string, kind: "info" | "error" = "info") => {
+  const pushToast = useCallback((message: string, kind: ToastItem["kind"] = "info") => {
     const id = ++toastId.current;
     setToasts((ts) => [...ts, { id, message, kind }]);
     setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), 4000);

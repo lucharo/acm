@@ -14,29 +14,13 @@
 
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
+import { IMAGE_EXT_BY_MIME } from "../lib/imageTypes";
+import type { ToastKind } from "../lib/types";
 
 /** Bottom-right toast, provided by the app shell. */
-export type ToastFn = (message: string, kind?: "info" | "error") => void;
+export type ToastFn = (message: string, kind?: ToastKind) => void;
 
 const isImage = (f: File) => /^image\//.test(f.type);
-
-// The formats the server accepts (magic-byte-verified there). No fallback: an
-// unsupported paste type (image/tiff, image/heic…) is rejected with a toast,
-// not silently uploaded under a .png name it can't honour (roborev #3439).
-const EXT_BY_MIME: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "image/avif": "avif",
-  "image/bmp": "bmp",
-};
-
-/** Alt text = the asset's stem minus the content-hash suffix. */
-function altFromPath(path: string): string {
-  const base = path.slice(path.lastIndexOf("/") + 1);
-  return base.replace(/\.[a-z0-9]+$/i, "").replace(/-[0-9a-f]{8}$/, "");
-}
 
 /** A dragged image ELEMENT (from a webpage, another app) carries no File —
  *  just a text/uri-list. Left unhandled, the browser's default is to NAVIGATE
@@ -45,7 +29,7 @@ function altFromPath(path: string): string {
 function fileFromDataUri(uri: string): File | null {
   const m = /^data:(image\/[a-z+.-]+);base64,(.+)$/is.exec(uri.trim());
   if (!m) return null;
-  const ext = EXT_BY_MIME[m[1].toLowerCase()];
+  const ext = IMAGE_EXT_BY_MIME[m[1].toLowerCase()];
   if (!ext) return null;
   try {
     const bin = atob(m[2]);
@@ -57,53 +41,40 @@ function fileFromDataUri(uri: string): File | null {
   }
 }
 
-async function upload(file: File, origin: "drop" | "paste"): Promise<string> {
-  // Pasted images get the decided generic stem; drops keep their filename. The
-  // server re-verifies the bytes against the extension either way.
-  const name =
-    origin === "paste" ? `pasted.${EXT_BY_MIME[file.type]}` : file.name || `image.${EXT_BY_MIME[file.type] ?? "png"}`;
-  const res = await fetch(`/api/asset?name=${encodeURIComponent(name)}`, {
+/** POST the bytes; the server names the file (content-addressed) and returns
+ *  the doc-relative path + the slugged stem for the alt text — the client
+ *  never re-parses the naming scheme. */
+async function upload(file: File): Promise<{ path: string; stem: string }> {
+  const res = await fetch(`/api/asset?name=${encodeURIComponent(file.name)}`, {
     method: "POST",
     body: file,
   });
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-  return ((await res.json()) as { path: string }).path;
+  return (await res.json()) as { path: string; stem: string };
 }
 
-function insertImages(
-  view: EditorView,
-  files: File[],
-  pos: number,
-  origin: "drop" | "paste",
-  toast: ToastFn,
-): boolean {
-  let images = files.filter(isImage);
+/** Upload the image files among `files` and insert their references at `pos`.
+ *  Always consumes the gesture: non-images get a rejection toast, a failed
+ *  upload gets an error toast and no insert. Callers guarantee `files` is
+ *  non-empty. */
+function insertImages(view: EditorView, files: File[], pos: number, toast: ToastFn): boolean {
+  const images = files.filter(isImage);
   if (images.length === 0) {
-    if (files.length) toast("Only images can be dropped into the doc", "error");
-    return files.length > 0; // consumed the gesture (rejection) or not ours at all
-  }
-  // A paste has no filename to derive the extension from, so an unsupported
-  // MIME type is rejected here; drops keep their name and the server decides.
-  if (origin === "paste") {
-    const unsupported = images.filter((f) => !EXT_BY_MIME[f.type]);
-    if (unsupported.length) {
-      toast(`Unsupported image type: ${unsupported.map((f) => f.type).join(", ")}`, "error");
-      images = images.filter((f) => EXT_BY_MIME[f.type]);
-      if (images.length === 0) return true;
-    }
+    toast("Only images can be dropped into the doc", "error");
+    return true;
   }
   void (async () => {
     try {
-      const paths = [];
-      for (const f of images) paths.push(await upload(f, origin));
+      const saved = [];
+      for (const f of images) saved.push(await upload(f));
       const at = Math.min(pos, view.state.doc.length);
-      const text = paths.map((p) => `![${altFromPath(p)}](${p})`).join("\n");
+      const text = saved.map((s) => `![${s.stem}](${s.path})`).join("\n");
       view.dispatch({
         changes: { from: at, insert: text },
         selection: { anchor: at + text.length },
         scrollIntoView: true,
       });
-      toast(paths.length === 1 ? `Saved ${paths[0]}` : `Saved ${paths.length} images to assets/`);
+      toast(saved.length === 1 ? `Saved ${saved[0].path}` : `Saved ${saved.length} images to assets/`);
       if (images.length < files.length) toast("Skipped non-image files", "error");
     } catch (err) {
       toast(`Image save failed — ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -133,7 +104,7 @@ export function imageInsert(toast: ToastFn): Extension {
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? view.state.selection.main.head;
       if (files.length) {
         e.preventDefault(); // stop CM's own file-drop (it would paste bytes as text)
-        return insertImages(view, files, pos, "drop", toast);
+        return insertImages(view, files, pos, toast);
       }
       // No File: a dragged image element. Its uri-list is either a data: URI
       // (decode → normal asset path) or a remote URL (insert a remote ref).
@@ -147,7 +118,7 @@ export function imageInsert(toast: ToastFn): Extension {
           toast("Couldn't read the dragged image", "error");
           return true;
         }
-        return insertImages(view, [f], pos, "drop", toast);
+        return insertImages(view, [f], pos, toast);
       }
       if (/^https?:/i.test(uri)) {
         e.preventDefault(); // remote image: reference it, don't copy it
@@ -158,10 +129,22 @@ export function imageInsert(toast: ToastFn): Extension {
       return false;
     },
     paste(e, view) {
-      const files = Array.from(e.clipboardData?.files ?? []).filter(isImage);
-      if (files.length === 0) return false; // normal text paste
+      // Paste is the one gesture with no filename to derive an extension from:
+      // rename supported images to the decided `pasted.<ext>` stem here, and
+      // reject unsupported MIME types (tiff/heic…) rather than mislabel them
+      // (roborev #3439). Drops keep their name; the server stays the authority.
+      const images = Array.from(e.clipboardData?.files ?? []).filter(isImage);
+      if (images.length === 0) return false; // normal text paste
       e.preventDefault();
-      return insertImages(view, files, view.state.selection.main.head, "paste", toast);
+      const supported = images.filter((f) => IMAGE_EXT_BY_MIME[f.type]);
+      const unsupported = images.filter((f) => !IMAGE_EXT_BY_MIME[f.type]);
+      if (unsupported.length)
+        toast(`Unsupported image type: ${unsupported.map((f) => f.type).join(", ")}`, "error");
+      if (supported.length === 0) return true;
+      const renamed = supported.map(
+        (f) => new File([f], `pasted.${IMAGE_EXT_BY_MIME[f.type]}`, { type: f.type }),
+      );
+      return insertImages(view, renamed, view.state.selection.main.head, toast);
     },
   });
 }

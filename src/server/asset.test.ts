@@ -72,7 +72,10 @@ describe("saveAsset", () => {
     const r = await saveAsset(dir, "shot.png", payload);
     expect(r).not.toBeNull();
     expect(r!.path).toMatch(/^assets\/shot-[0-9a-f]{8}\.png$/);
+    expect(r!.stem).toBe("shot"); // the client's alt text — no scheme re-parsing
     expect(new Uint8Array(await Bun.file(join(dir, r!.path)).arrayBuffer())).toEqual(payload);
+    // Re-save of identical content is a no-op returning the same path (dedup).
+    expect((await saveAsset(dir, "shot.png", payload))!.path).toBe(r!.path);
   });
 
   test("returns null (writes nothing) for non-images and mislabelled bytes", async () => {
