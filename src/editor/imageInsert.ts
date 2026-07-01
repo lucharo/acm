@@ -22,16 +22,29 @@ export type ToastFn = (message: string, kind?: ToastKind) => void;
 
 const isImage = (f: File) => /^image\//.test(f.type);
 
-// "Does this dragged URL look like an image?" — image extension in the path
-// (before any ?query/#hash). Used with the <img>-in-html check to separate a
-// dragged image element from a dragged plain hyperlink.
-const IMAGE_URL_RE = new RegExp(`\\.(${[...RENDERABLE_IMAGE_EXTS].join("|")})([?#]|$)`, "i");
+const IMAGE_PATH_RE = new RegExp(`\\.(${[...RENDERABLE_IMAGE_EXTS].join("|")})$`, "i");
+
+/** "Does this dragged http(s) URI look like an IMAGE?" — a dragged <img>
+ *  carries an <img> tag in the drag's text/html payload; failing that, an
+ *  image extension on the URL's PATH (not its query — ?target=photo.png is a
+ *  redirect link, not an image). Separates a dragged image element from a
+ *  dragged plain hyperlink; exported for tests — this discriminator churned
+ *  three times before being pinned. */
+export function looksLikeRemoteImage(uri: string, html: string): boolean {
+  if (/<img[\s>]/i.test(html)) return true;
+  try {
+    return IMAGE_PATH_RE.test(new URL(uri).pathname);
+  } catch {
+    return false;
+  }
+}
 
 /** A dragged image ELEMENT (from a webpage, another app) carries no File —
  *  just a text/uri-list. Left unhandled, the browser's default is to NAVIGATE
  *  to that URI (a data: tab full of base64). Decode a data:image URI into a
- *  File so it takes the normal asset path, or null for anything else. */
-function fileFromDataUri(uri: string): File | null {
+ *  File so it takes the normal asset path, or null for anything else.
+ *  Exported for tests. */
+export function fileFromDataUri(uri: string): File | null {
   const m = /^data:(image\/[a-z+.-]+);base64,(.+)$/is.exec(uri.trim());
   if (!m) return null;
   const ext = IMAGE_EXT_BY_MIME[m[1].toLowerCase()];
@@ -128,13 +141,11 @@ export function imageInsert(toast: ToastFn): Extension {
         }
         return insertImages(view, [f], pos, toast);
       }
-      // Remote drop is an IMAGE only when it looks like one — a dragged <img>
-      // carries an <img> tag in its text/html payload, and image URLs usually
-      // carry an image extension. A plain hyperlink also has a uri-list, and
-      // turning it into ![image](url) would render a broken-image chip.
+      // Remote drop is an IMAGE only when it looks like one — a plain
+      // hyperlink also carries a uri-list, and turning it into ![image](url)
+      // would render a broken-image chip.
       if (/^https?:/i.test(uri)) {
-        const html = dt?.getData("text/html") ?? "";
-        if (/<img[\s>]/i.test(html) || IMAGE_URL_RE.test(uri)) {
+        if (looksLikeRemoteImage(uri, dt?.getData("text/html") ?? "")) {
           e.preventDefault(); // remote image: reference it, don't copy it
           const text = `![image](${uri})`;
           view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
