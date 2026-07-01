@@ -142,16 +142,27 @@ unclear bit. Standalone suggestions (not tied to a thread) are welcome.
 
 ## Spelling pass
 
-For long or transcribed prose, run a spell check and turn real typos into Apply-able
-cards rather than fixing them silently:
+For long or transcribed prose, run ACM's own spell check — the SAME engine as the
+editor's squiggles (UK/US variant, the user's personal dictionary, and code/URL/comment
+skip-regions all honoured), so you never flag what the editor wouldn't:
 
 ```
-uvx codespell <doc>     # DETECT only — never -w (no silent rewrites)
+acm spell --json        # every flagged word: count, suggestions, line (DETECT only)
 ```
 
-For each genuine **prose** typo: `acm suggest "<typo>" "<fix>"`. **Skip** matches inside
-comment bodies, footnote definitions, and foreign-language spans (Spanish/German/Māori
-trigger false positives), and skip any section the human is still actively rewriting.
+Then sort the flagged words into three buckets:
+
+- **Genuine prose typo** → `acm suggest "<typo>" "<fix>"` — an Apply-able card, never a
+  silent rewrite. (`acm spell replace` exists but auto-fixes every occurrence; in a
+  review, prefer suggest cards the human can accept.)
+- **Name / real word the dictionary lacks** (surnames, jargon) → `acm spell add <word…>`
+  — goes to the user's persistent personal dictionary. Only add words that are
+  unambiguously legitimate; when unsure, leave a comment instead.
+- **Foreign-language word valid only in THIS doc** (Spanish/German/Māori spans) →
+  `acm spell ignore <word…>` — a per-document ignore list, so it never pollutes the
+  global dictionary.
+
+Skip any section the human is still actively rewriting.
 
 ## Pacing a large review
 
