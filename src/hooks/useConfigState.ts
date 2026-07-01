@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FONT_STACKS, loadSettings } from "../lib/viewSettings";
 import type { ViewSettings } from "../lib/viewSettings";
 
-async function fetchConfig(): Promise<Record<string, unknown> | null> {
+export async function fetchConfig(): Promise<Record<string, unknown> | null> {
   try {
     const res = await fetch("/api/settings");
     return res.ok ? ((await res.json()) as Record<string, unknown>) : null;
@@ -160,6 +160,28 @@ export function useDictionary() {
     return () => {
       cancelled = true;
     };
+  }, []);
+  // Re-read on window focus: `acm spell add` PUTs a merged list to /api/settings
+  // while this state is stale — without a re-read, the NEXT GUI add would PUT the
+  // stale list back and silently drop the CLI-added words. Focus is the natural
+  // moment (terminal → click back into the editor). Guards: skip until hydrated;
+  // skip adoption if a local edit raced the fetch (its debounced PUT is the newer
+  // truth); skip no-op adoptions so idle focus cycles don't churn PUTs.
+  const dictRef = useRef(dictionary);
+  dictRef.current = dictionary;
+  useEffect(() => {
+    const sync = () => {
+      if (!hydrated.current) return;
+      const before = dictRef.current;
+      void fetchConfig().then((cfg) => {
+        if (!cfg || !Array.isArray(cfg.dictionary)) return;
+        if (dictRef.current !== before) return; // a local edit won the race
+        const server = cfg.dictionary as string[];
+        if (JSON.stringify(server) !== JSON.stringify(before)) setDictionary(server);
+      });
+    };
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
   }, []);
   useEffect(() => {
     if (!hydrated.current) return;

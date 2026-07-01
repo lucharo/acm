@@ -324,24 +324,36 @@ async function commitWrite(
   console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}`);
 }
 
-// ── acm spell [list|add|replace] — review & fix spelling from the shell ───────
+// ── acm spell [list|add|ignore|replace] — review & fix spelling from the shell ─
 // The browser checker (editor/spellcheck.ts) only runs inside the editor; this is
 // the same engine over a raw .md (cli/spellEngine.ts), reading the SAME persisted
-// variant (UK/US) and personal dictionary the GUI uses. Three sub-verbs:
+// variant (UK/US) and personal dictionary the GUI uses. Four sub-verbs:
 //   list (default) — every flagged word, counts, suggestions (--json for agents)
 //   add <word…>    — keep words: append to the personal dictionary (shared with GUI)
+//   ignore <word…> — stop flagging words in THIS doc only (settings.json spellIgnore
+//                    keyed by absolute doc path; the GUI seeds its session ignore set
+//                    from it, so squiggles agree). For foreign words/names that are
+//                    valid here but don't belong in the global dictionary.
 //   replace <w> <r>— fix every flagged occurrence of <w> in the doc, case-preserving
 
-/** The persisted spelling variant + personal dictionary (~/.config/acm/settings.json),
- *  defaulting to British + empty — matching DEFAULT_SETTINGS and a fresh install. */
-async function spellConfig(): Promise<{ variant: SpellVariant; dictionary: string[] }> {
-  const cfg = await readConfig<{ settings?: { spellVariant?: SpellVariant }; dictionary?: unknown }>(
-    "settings.json",
-    {},
-  );
+/** The persisted spelling variant + personal dictionary + per-doc ignore lists
+ *  (~/.config/acm/settings.json), with fresh-install defaults (British, empty). */
+async function spellConfig(): Promise<{
+  variant: SpellVariant;
+  dictionary: string[];
+  spellIgnore: Record<string, string[]>;
+}> {
+  const cfg = await readConfig<{
+    settings?: { spellVariant?: SpellVariant };
+    dictionary?: unknown;
+    spellIgnore?: unknown;
+  }>("settings.json", {});
+  const ig = cfg.spellIgnore;
   return {
     variant: cfg.settings?.spellVariant === "us" ? "us" : "uk",
     dictionary: Array.isArray(cfg.dictionary) ? (cfg.dictionary as string[]) : [],
+    spellIgnore:
+      ig && typeof ig === "object" && !Array.isArray(ig) ? (ig as Record<string, string[]>) : {},
   };
 }
 
@@ -361,18 +373,22 @@ function lineOf(text: string, offset: number): number {
 async function runSpell(f: Flags): Promise<void> {
   const sub = f.positional[0] ?? "list";
   if (sub === "add") return runSpellAdd(f);
-  if (sub !== "list" && sub !== "replace") {
-    console.error(`acm spell: unknown subcommand "${sub}" — use: list | add | replace`);
+  if (sub !== "list" && sub !== "ignore" && sub !== "replace") {
+    console.error(`acm spell: unknown subcommand "${sub}" — use: list | add | ignore | replace`);
     process.exit(1);
   }
 
   const docPath = await docPathFrom(f);
-  const { variant, dictionary } = await spellConfig();
-  const engine = loadSpellEngine(variant, dictionary);
+  if (sub === "ignore") return runSpellIgnore(f, docPath);
+  const { variant, dictionary, spellIgnore } = await spellConfig();
+  const ignored = spellIgnore[docPath] ?? [];
+  const engine = loadSpellEngine(variant, dictionary, ignored);
   const before = await Bun.file(docPath).text();
 
   if (sub === "list") {
     printFlagged(engine, before, f.json);
+    if (!f.json && ignored.length)
+      console.log(`  (${ignored.length} word${ignored.length === 1 ? "" : "s"} ignored for this doc — acm spell ignore)`);
     return;
   }
 
@@ -426,7 +442,52 @@ async function runSpellAdd(f: Flags): Promise<void> {
   }
   console.log(`acm spell add: +${added.length} → ${added.join(", ")}`);
   console.log(`  personal dictionary now ${merged.length} words (~/.config/acm/settings.json)`);
-  if (live) console.log(`  reload the open editor to clear their squiggles`);
+  if (live) console.log(`  click back into the open editor to clear their squiggles (it re-reads on focus)`);
+}
+
+/** `acm spell ignore <word…>` — stop flagging words in THIS doc only. Stored in
+ *  settings.json under spellIgnore[<abs doc path>]; the GUI seeds its session ignore
+ *  set from the same list, so the CLI and the squiggles agree. Unlike `add`, the
+ *  words are never taught to the speller and never leave this document. */
+async function runSpellIgnore(f: Flags, docPath: string): Promise<void> {
+  const words = f.positional.slice(1).map((w) => w.trim().toLowerCase()).filter(Boolean);
+  if (words.length === 0) {
+    console.error("usage: acm spell ignore <word> [word…]   (stops flagging them in THIS doc only)");
+    process.exit(1);
+  }
+  const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
+  const rawMap = cfg.spellIgnore;
+  const map: Record<string, string[]> =
+    rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)
+      ? { ...(rawMap as Record<string, string[]>) }
+      : {};
+  const current = Array.isArray(map[docPath]) ? map[docPath] : [];
+  const merged = [...new Set([...current, ...words])].sort();
+  const added = merged.filter((w) => !current.includes(w));
+  map[docPath] = merged;
+
+  const live = await anyLiveServer();
+  if (live) {
+    const res = await fetch(`http://localhost:${live.port}/api/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ spellIgnore: map }),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      console.error(`acm spell ignore: the ACM editor on :${live.port} did not accept the update — nothing written.`);
+      process.exit(1);
+    }
+  } else {
+    await writeConfig("settings.json", { ...cfg, spellIgnore: map });
+  }
+
+  if (added.length === 0) {
+    console.log(`acm spell ignore: nothing new — already ignored for this doc (${merged.length} words)`);
+    return;
+  }
+  console.log(`acm spell ignore: +${added.length} → ${added.join(", ")}`);
+  console.log(`  ${merged.length} word${merged.length === 1 ? "" : "s"} ignored for ${docPath}`);
+  if (live) console.log(`  click back into the open editor to clear their squiggles (it re-reads on focus)`);
 }
 
 /** Print the flagged words (one row each) or a JSON array for agent consumption. */

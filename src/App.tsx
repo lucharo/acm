@@ -26,7 +26,7 @@ import Header from "./components/Header";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
-import { useViewSettings, useSeenState, useDictionary, commentKey } from "./hooks/useConfigState";
+import { useViewSettings, useSeenState, useDictionary, commentKey, fetchConfig } from "./hooks/useConfigState";
 import {
   setCustomWords,
   setSpellVariant,
@@ -236,6 +236,33 @@ function Workspace({
   useEffect(() => {
     setSpellVariant(settings.spellVariant);
   }, [settings.spellVariant]);
+  // Per-document ignore list (`acm spell ignore`): seed the session ignore set from
+  // settings.json's spellIgnore[<this doc's path>] so CLI-ignored words don't
+  // squiggle here either. One-way — the in-app Ignore action stays session-only.
+  // Re-seeds on window focus so a CLI ignore lands without a reload (ignoreWord is
+  // a Set-add, so re-seeding already-known words is a no-op).
+  useEffect(() => {
+    let docPath: string | null = null;
+    const seed = async () => {
+      if (!docPath) {
+        const res = await fetch("/api/doc").catch(() => null);
+        const body = res && res.ok ? ((await res.json()) as { path?: string }) : null;
+        docPath = body?.path ?? null;
+        if (!docPath) return; // older server without `path` — nothing to key on
+      }
+      const cfg = await fetchConfig();
+      const map = cfg?.spellIgnore;
+      const words =
+        map && typeof map === "object" && !Array.isArray(map)
+          ? (map as Record<string, string[]>)[docPath]
+          : undefined;
+      if (Array.isArray(words)) for (const w of words) ignoreWord(w);
+    };
+    void seed();
+    const onFocus = () => void seed();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
   const { seenThreadIds, unseenCount } = useSeenDerived(commentCards, seen);
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that

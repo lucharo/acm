@@ -65,8 +65,15 @@ export function setEmbeddedDicts(map: Partial<Record<SpellVariant, DictPaths>>):
 }
 
 /** Build the speller for `variant`, pre-loaded with the supplement and the given
- *  personal-dictionary words. Synchronous (~50ms) — fine for a one-shot CLI. */
-export function loadSpellEngine(variant: SpellVariant, personal: Iterable<string> = []): SpellEngine {
+ *  personal-dictionary words, plus a per-document `ignored` set (from `acm spell
+ *  ignore`): those words are never flagged, but — unlike `personal` — are NOT taught
+ *  to the speller, so they don't influence suggestions and stay doc-local in spirit.
+ *  Synchronous (~50ms) — fine for a one-shot CLI. */
+export function loadSpellEngine(
+  variant: SpellVariant,
+  personal: Iterable<string> = [],
+  ignored: Iterable<string> = [],
+): SpellEngine {
   // Prefer the embedded dicts (compiled binary); else resolve them from node_modules.
   const emb = embeddedDicts?.[variant];
   const paths =
@@ -85,10 +92,16 @@ export function loadSpellEngine(variant: SpellVariant, personal: Iterable<string
     personalSet.add(lower);
     speller.add(lower);
   }
+  const ignoredSet = new Set<string>();
+  for (const w of ignored) {
+    const lower = String(w).trim().toLowerCase();
+    if (lower) ignoredSet.add(lower); // suppress flagging only — never speller.add
+  }
 
   const isMisspelled = (word: string): boolean => {
     if (word.length < MIN_LEN) return false;
-    if (personalSet.has(word.toLowerCase())) return false;
+    const lower = word.toLowerCase();
+    if (personalSet.has(lower) || ignoredSet.has(lower)) return false;
     return !speller.correct(word);
   };
 

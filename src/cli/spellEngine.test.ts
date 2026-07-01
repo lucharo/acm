@@ -84,6 +84,30 @@ describe("loadSpellEngine — applyReplaceAll()", () => {
   });
 });
 
+describe("loadSpellEngine — per-doc ignored words", () => {
+  test("ignored words are not flagged, but other misspellings still are", () => {
+    const e = loadSpellEngine("uk", [], ["fusión", "reo"]);
+    const out = e.flagged("the fusión of te reo and a recieve typo").map((w) => w.lower);
+    expect(out).not.toContain("fusión");
+    expect(out).not.toContain("reo");
+    expect(out).toContain("recieve");
+  });
+
+  test("ignored words are excluded from replace targets", () => {
+    const e = loadSpellEngine("uk", [], ["recieve"]);
+    const doc = "we recieve the parcel";
+    expect(e.applyReplaceAll(doc, "recieve", "receive")).toBe(doc); // ignored → untouched
+  });
+
+  test("ignore does not teach the speller (unlike personal words)", () => {
+    // A personal word influences the engine via speller.add; an ignored word must
+    // not — the same word stays flagged in a DIFFERENT engine without the ignore.
+    const withIgnore = loadSpellEngine("uk", [], ["zyxwv"]);
+    expect(withIgnore.flagged("zyxwv")).toEqual([]);
+    expect(engine.flagged("zyxwv").map((w) => w.lower)).toContain("zyxwv");
+  });
+});
+
 describe("loadSpellEngine — suggest()", () => {
   test("returns ranked candidates, capped at 6", () => {
     const s = engine.suggest("recieve");
