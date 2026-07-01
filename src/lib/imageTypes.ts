@@ -21,3 +21,8 @@ export const IMAGE_EXTS: ReadonlySet<string> = new Set([
 
 /** Human list for error messages, derived from the same table. */
 export const IMAGE_EXTS_LABEL = Object.values(IMAGE_EXT_BY_MIME).join(", ");
+
+/** Extensions that RENDER as images (serve route + URL sniffing): the upload
+ *  types plus svg — a hand-written on-disk .svg reference renders; svg just
+ *  isn't an accepted upload (ADR-0002). */
+export const RENDERABLE_IMAGE_EXTS: ReadonlySet<string> = new Set([...IMAGE_EXTS, "svg"]);

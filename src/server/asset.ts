@@ -6,7 +6,7 @@
 // file and names never collide without -1/-2 suffix bookkeeping.
 
 import { join, resolve, sep, extname, basename } from "node:path";
-import { IMAGE_EXTS } from "../lib/imageTypes";
+import { IMAGE_EXTS, RENDERABLE_IMAGE_EXTS } from "../lib/imageTypes";
 
 // The insert gesture is images-only by decision (a PDF drop is rejected with a
 // toast, not saved as a generic attachment). The server enforces it too — the
@@ -74,19 +74,15 @@ export async function saveAsset(
   return { path: rel, stem: parts.stem };
 }
 
-// What GET /api/asset may serve: the upload types plus svg (a hand-written
-// on-disk .svg reference renders; svg just isn't an accepted UPLOAD). The
-// extension whitelist keeps the route an IMAGE route — without it, any file
-// under the doc's directory (settings.json, sibling .md drafts) would be
-// readable by whoever can reach the server.
-const SERVABLE_EXTS = new Set([...IMAGE_EXTS, "svg"]);
-
 /** Resolve a doc-relative IMAGE path to an absolute one, or null when it
- *  escapes the doc's directory (traversal guard) or isn't an image type.
- *  Deliberately allows any directory under docDir — not just assets/ — so
- *  hand-written references like ![](figures/plot.png) render too. */
+ *  escapes the doc's directory (traversal guard) or isn't an image type. The
+ *  extension whitelist keeps the route an IMAGE route — without it, any file
+ *  under the doc's directory (settings.json, sibling .md drafts) would be
+ *  readable by whoever can reach the server. Deliberately allows any
+ *  directory under docDir — not just assets/ — so hand-written references
+ *  like ![](figures/plot.png) render too. */
 export function resolveUnderDocDir(docDir: string, rel: string): string | null {
-  if (!SERVABLE_EXTS.has(extname(rel).slice(1).toLowerCase())) return null;
+  if (!RENDERABLE_IMAGE_EXTS.has(extname(rel).slice(1).toLowerCase())) return null;
   const abs = resolve(docDir, rel);
   return abs.startsWith(docDir + sep) ? abs : null;
 }

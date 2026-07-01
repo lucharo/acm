@@ -283,7 +283,14 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // inserts the returned path through the normal save path.
       if (pathname === "/api/asset" && req.method === "POST") {
         const name = url.searchParams.get("name") ?? "";
+        // Cap the upload BEFORE buffering it — the route is network-reachable
+        // and req.arrayBuffer() would otherwise hold an unbounded body in
+        // memory. Checked again after (Content-Length can lie / be absent).
+        const MAX_ASSET_BYTES = 32 * 1024 * 1024; // generous for any screenshot
+        if (Number(req.headers.get("content-length") ?? 0) > MAX_ASSET_BYTES)
+          return new Response("Image too large (32 MB max)", { status: 413 });
         const bytes = new Uint8Array(await req.arrayBuffer());
+        if (bytes.length > MAX_ASSET_BYTES) return new Response("Image too large (32 MB max)", { status: 413 });
         if (bytes.length === 0) return new Response("Empty body", { status: 400 });
         const saved = await saveAsset(docDir, name, bytes);
         if (!saved)

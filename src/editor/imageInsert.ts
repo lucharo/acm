@@ -14,13 +14,18 @@
 
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-import { IMAGE_EXT_BY_MIME } from "../lib/imageTypes";
+import { IMAGE_EXT_BY_MIME, RENDERABLE_IMAGE_EXTS } from "../lib/imageTypes";
 import type { ToastKind } from "../lib/types";
 
 /** Bottom-right toast, provided by the app shell. */
 export type ToastFn = (message: string, kind?: ToastKind) => void;
 
 const isImage = (f: File) => /^image\//.test(f.type);
+
+// "Does this dragged URL look like an image?" — image extension in the path
+// (before any ?query/#hash). Used with the <img>-in-html check to separate a
+// dragged image element from a dragged plain hyperlink.
+const IMAGE_URL_RE = new RegExp(`\\.(${[...RENDERABLE_IMAGE_EXTS].join("|")})([?#]|$)`, "i");
 
 /** A dragged image ELEMENT (from a webpage, another app) carries no File —
  *  just a text/uri-list. Left unhandled, the browser's default is to NAVIGATE
@@ -123,13 +128,25 @@ export function imageInsert(toast: ToastFn): Extension {
         }
         return insertImages(view, [f], pos, toast);
       }
+      // Remote drop is an IMAGE only when it looks like one — a dragged <img>
+      // carries an <img> tag in its text/html payload, and image URLs usually
+      // carry an image extension. A plain hyperlink also has a uri-list, and
+      // turning it into ![image](url) would render a broken-image chip.
       if (/^https?:/i.test(uri)) {
-        e.preventDefault(); // remote image: reference it, don't copy it
-        const text = `![image](${uri})`;
-        view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
-        return true;
+        const html = dt?.getData("text/html") ?? "";
+        if (/<img[\s>]/i.test(html) || IMAGE_URL_RE.test(uri)) {
+          e.preventDefault(); // remote image: reference it, don't copy it
+          const text = `![image](${uri})`;
+          view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
+          return true;
+        }
       }
-      return false;
+      // Non-image link or exotic scheme (file:, mailto:…): if it carries text,
+      // let CodeMirror insert that (it prevents the default itself); otherwise
+      // swallow the drop — the browser default would NAVIGATE to the URI.
+      if (dt?.types.includes("text/plain")) return false;
+      e.preventDefault();
+      return true;
     },
     paste(e, view) {
       // Paste is the one gesture with no filename to derive an extension from:
