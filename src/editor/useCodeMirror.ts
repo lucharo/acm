@@ -25,6 +25,7 @@ import { CriticMarkup } from "./criticMarkupParser";
 import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
 import { markdownPreview } from "./markdownPreview";
+import { imageInsert } from "./imageInsert";
 import { footnotes } from "./footnotes";
 import { bionicReading } from "./bionicView";
 import { pageBreaks } from "./pageBreaks";
@@ -38,6 +39,8 @@ export interface UseCodeMirrorOptions {
   onUpdate?: (u: ViewUpdate) => void;
   /** Open/toggle the keyboard-shortcuts cheat sheet (bound to ⌘/ in the editor). */
   onShowShortcuts?: () => void;
+  /** Bottom-right toast — image drop/paste reports where the file was saved. */
+  onToast?: (message: string, kind?: "info" | "error") => void;
   lineNumbers?: boolean;
   page?: boolean;
   bionic?: boolean;
@@ -146,6 +149,9 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         // ::selection rule in theme.ts). We don't need multi-range/rectangular select.
         markdown({ base: markdownLanguage, extensions: [CriticMarkup] }),
         markdownPreview,
+        // Image drop/paste — reads the toast through optsRef so it always
+        // reaches the app shell's freshest handler (same pattern as onUpdate).
+        imageInsert((msg, kind) => optsRef.current.onToast?.(msg, kind)),
         footnotes,
         criticMarkupExtension(),
         acmTheme,

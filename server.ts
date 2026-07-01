@@ -24,6 +24,7 @@ import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, writeConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
+import { saveAsset, resolveUnderDocDir } from "./src/server/asset";
 
 const SETTINGS_FILE = "settings.json";
 
@@ -251,6 +252,32 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const { from, to } = body as { from: number; to: number };
         humanSel = { from, to, at: Date.now() };
         return Response.json({ ok: true });
+      }
+
+      // GET /api/asset?path=<rel> → serve a file the doc references by relative
+      // path (issue #3). Any path UNDER the doc's directory is fair game — not
+      // just assets/ — so hand-written references like ![](figures/plot.png)
+      // render; anything resolving above docDir is refused (traversal guard).
+      if (pathname === "/api/asset" && req.method === "GET") {
+        const abs = resolveUnderDocDir(docDir, url.searchParams.get("path") ?? "");
+        if (!abs) return new Response("Forbidden", { status: 403 });
+        const file = Bun.file(abs);
+        if (!(await file.exists())) return new Response("Not found", { status: 404 });
+        return new Response(file);
+      }
+
+      // POST /api/asset?name=<orig> (raw image bytes as body) → save under
+      // <docDir>/assets/ with a content-addressed name; returns { path } for the
+      // markdown reference. Images only — the reject decision is enforced here,
+      // not just in the client filter. No doc write happens here: the editor
+      // inserts the returned path through the normal save path.
+      if (pathname === "/api/asset" && req.method === "POST") {
+        const name = url.searchParams.get("name") ?? "";
+        const bytes = new Uint8Array(await req.arrayBuffer());
+        if (bytes.length === 0) return new Response("Empty body", { status: 400 });
+        const saved = await saveAsset(docDir, name, bytes);
+        if (!saved) return new Response("Only image files are accepted", { status: 415 });
+        return Response.json(saved);
       }
 
       // GET /api/settings → persisted view settings + "seen" state (or {} on a

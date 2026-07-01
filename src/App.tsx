@@ -45,6 +45,8 @@ import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import ShortcutsOverlay from "./components/ShortcutsOverlay";
 import SpellingReview from "./components/SpellingReview";
+import ToastStack from "./components/Toast";
+import type { ToastItem } from "./components/Toast";
 import { toggleStrong, toggleEmphasis } from "./editor/formatting";
 import {
   scanTokens,
@@ -279,6 +281,16 @@ function Workspace({
   // toggle it via onShowShortcuts.
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
+  // Bottom-right toasts — feedback for actions with an off-screen side effect
+  // (an image drop writes a file: "Saved assets/…"). Auto-dismiss after 4s.
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastId = useRef(0);
+  const pushToast = useCallback((message: string, kind: "info" | "error" = "info") => {
+    const id = ++toastId.current;
+    setToasts((ts) => [...ts, { id, message, kind }]);
+    setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), 4000);
+  }, []);
+
   const editor = useCodeMirror({
     initialDoc,
     callbacks: stableCallbacks,
@@ -288,6 +300,7 @@ function Workspace({
     },
     onUpdate,
     onShowShortcuts: () => setShortcutsOpen((o) => !o),
+    onToast: pushToast,
     lineNumbers: settings.lineNumbers,
     page: settings.page,
     bionic: settings.bionic,
@@ -1201,6 +1214,7 @@ function Workspace({
       ) : null}
 
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
+      <ToastStack toasts={toasts} />
     </div>
   );
 }

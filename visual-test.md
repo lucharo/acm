@@ -49,3 +49,19 @@ Deletion: this sentence loses {--an unnecessary aside--} for brevity.
 - bullet two
 
 **Bold**, *italic*, `inline code`, and a [link](https://example.com) should all render normally alongside the markup above.
+
+## Images
+
+A doc-relative image (any path under the doc's directory serves — not just `assets/`):
+
+![acm logo](docs/logos/c1-braces.png)
+
+A dropped image lands in `assets/` with a content-hash name (this one is a 1×1 test pixel, so expect a dot):
+
+![drop-test](assets/drop-test-2875e6e2.png)
+
+A missing reference shows a compact chip with the path, not nothing:
+
+![ghost](assets/does-not-exist.png)
+
+Click either to reveal the raw `![alt](path)` syntax; drag an image file onto the editor (or paste a screenshot) to insert one — it saves to `assets/` and a toast confirms where.
