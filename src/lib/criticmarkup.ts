@@ -1349,6 +1349,8 @@ export function applicableSuggestionIds(content: string, tokens?: CritToken[]): 
 export interface SuggestionGroupMember {
   commentId: string; // the member's SUGGEST comment id (for jump/keying)
   from: number; // the member's comment offset, in document order
+  anchorFrom: number; // the anchored span's start offset (for scroll + flash)
+  anchorTo: number; // the anchored span's end offset
   anchorText: string; // the highlighted span being edited (the "old" text)
   replacement: string; // the proposed wording ("" → suggests deleting the span)
   isDelete: boolean; // replacement is empty/blank → a deletion
@@ -1381,6 +1383,10 @@ export function suggestionGroupMembers(
       return {
         commentId: s.commentId,
         from: s.commentFrom,
+        // The visible span sits inside the `{==` / `==}` delimiters — flash that, not
+        // the hidden markers, so the pulse lands on the words the reader sees.
+        anchorFrom: s.hlFrom + 3,
+        anchorTo: s.hlTo - 3,
         anchorText,
         replacement: s.replacement,
         isDelete: s.replacement.trim() === "",

@@ -33,8 +33,8 @@ interface NavPanelProps {
   groupMembersOf: Map<string, SuggestionGroupMember[]>;
   /** Accept/reject EVERY member of a group as one atomic edit. */
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
-  /** Jump the editor to a document offset (a group member's comment). */
-  onJumpToOffset: (from: number) => void;
+  /** Scroll a span into view + flash it — a group member row → its edit in the doc. */
+  onLocate: (from: number, to: number) => void;
 }
 
 const FILTERS: { value: FilterMode; label: string }[] = [
@@ -117,7 +117,7 @@ export default function NavPanel(props: NavPanelProps) {
     groupView,
     groupMembersOf,
     onGroupEdit,
-    onJumpToOffset,
+    onLocate,
   } = props;
 
   const suggestionCount = tokens.filter(isSuggestion).length;
@@ -219,8 +219,8 @@ export default function NavPanel(props: NavPanelProps) {
                     <li key={m.commentId}>
                       <button
                         type="button"
-                        onClick={() => onJumpToOffset(m.from)}
-                        title="Jump to this edit"
+                        onClick={() => onLocate(m.anchorFrom, m.anchorTo)}
+                        title="Jump to this edit in the document"
                         className="flex w-full gap-1.5 rounded px-1 py-0.5 text-left text-[12px] leading-snug hover:bg-[var(--bg)]"
                       >
                         <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>

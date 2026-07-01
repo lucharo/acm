@@ -67,6 +67,8 @@ interface CommentSidebarProps {
   groupView: GroupView;
   /** Accept/reject EVERY member of a group as one atomic edit. */
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+  /** Scroll a span into view + flash it — a group member row → its edit in the doc. */
+  onLocate: (from: number, to: number) => void;
   /** Accept / reject a suggestion card's suggestion. */
   onAcceptSuggestion: (card: SidebarCard) => void;
   onRejectSuggestion: (card: SidebarCard) => void;
@@ -146,6 +148,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     groupMembersOf,
     groupView,
     onGroupEdit,
+    onLocate,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
     onAcceptSuggestion,
@@ -701,6 +704,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                     isOpen={openControl === c.id}
                                     onToggle={() => setOpenControl(openControl === c.id ? null : c.id)}
                                     onGroupEdit={onGroupEdit}
+                                    onLocate={onLocate}
                                   />
                                 );
                               })()}
@@ -795,26 +799,40 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 // compact row (the Suggestions panel owns the list in that mode). All three list
 // the same groupMembersOf data and call the same atomic onGroupEdit.
 
-/** The members of a group as old → new rows, in document order. */
-function GroupMembers({ members }: { members: SuggestionGroupMember[] }) {
+/** The members of a group as old → new rows, in document order. Click a row to
+ *  scroll to + flash the exact span it edits (via onLocate). */
+function GroupMembers({
+  members,
+  onLocate,
+}: {
+  members: SuggestionGroupMember[];
+  onLocate: (from: number, to: number) => void;
+}) {
   return (
-    <ul className="space-y-1">
+    <ul className="space-y-0.5">
       {members.map((m, i) => (
-        <li key={m.commentId} className="flex gap-1.5 text-[12px] leading-snug">
-          <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
-          <span className="min-w-0">
-            {m.anchorText ? (
-              <>
-                <span className="text-[var(--crit-del)] line-through">{m.anchorText}</span>
-                <span className="px-1 text-[var(--faint)]">→</span>
-              </>
-            ) : null}
-            {m.isDelete ? (
-              <span className="italic text-[var(--crit-del)]">(delete)</span>
-            ) : (
-              <span className="text-[var(--crit-ins)]">{m.replacement}</span>
-            )}
-          </span>
+        <li key={m.commentId}>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onLocate(m.anchorFrom, m.anchorTo); }}
+            title="Jump to this edit in the document"
+            className="flex w-full gap-1.5 rounded px-1 py-0.5 text-left text-[12px] leading-snug hover:bg-[var(--line)]"
+          >
+            <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
+            <span className="min-w-0">
+              {m.anchorText ? (
+                <>
+                  <span className="text-[var(--crit-del)] line-through">{m.anchorText}</span>
+                  <span className="px-1 text-[var(--faint)]">→</span>
+                </>
+              ) : null}
+              {m.isDelete ? (
+                <span className="italic text-[var(--crit-del)]">(delete)</span>
+              ) : (
+                <span className="text-[var(--crit-ins)]">{m.replacement}</span>
+              )}
+            </span>
+          </button>
         </li>
       ))}
     </ul>
@@ -861,6 +879,7 @@ function GroupSurface({
   isOpen,
   onToggle,
   onGroupEdit,
+  onLocate,
 }: {
   groupId: string;
   size: number;
@@ -869,6 +888,7 @@ function GroupSurface({
   isOpen: boolean;
   onToggle: () => void;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+  onLocate: (from: number, to: number) => void;
 }) {
   // Group tag, colour-matched to the card's spine so identity is unmistakable.
   const color = groupColor(groupId);
@@ -906,7 +926,7 @@ function GroupSurface({
         </button>
         {isOpen ? (
           <div className="mt-1.5">
-            <GroupMembers members={members} />
+            <GroupMembers members={members} onLocate={onLocate} />
             <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
           </div>
         ) : null}
@@ -947,7 +967,7 @@ function GroupSurface({
             </button>
           </div>
           <div className="max-h-60 overflow-y-auto pr-0.5">
-            <GroupMembers members={members} />
+            <GroupMembers members={members} onLocate={onLocate} />
           </div>
           <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
         </div>
