@@ -25,3 +25,8 @@ megabyte strings through the `merge3`/`commitWrite` path on every save.
 - The serve route deliberately covers *any* path under the doc's directory (not
   just `assets/`) so hand-written references like `![](figures/plot.png)` in
   pre-existing docs render too. Paths resolving above the doc directory 404.
+- Uploads are magic-byte verified (bytes must sniff as the claimed extension),
+  and **SVG is not an accepted upload type**: it's a text format with nothing to
+  sniff, and a script-bearing SVG served from the app's origin is a stored-XSS
+  surface. Hand-written `.svg` references on disk still render (served with
+  `Content-Security-Policy: sandbox`).

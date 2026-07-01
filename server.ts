@@ -263,7 +263,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
         if (!abs) return new Response("Forbidden", { status: 403 });
         const file = Bun.file(abs);
         if (!(await file.exists())) return new Response("Not found", { status: 404 });
-        return new Response(file);
+        // CSP sandbox: an on-disk SVG (or anything else) opened directly from
+        // this route must never run scripts on the app's origin. <img> rendering
+        // is unaffected.
+        return new Response(file, { headers: { "Content-Security-Policy": "sandbox" } });
       }
 
       // POST /api/asset?name=<orig> (raw image bytes as body) → save under
@@ -276,7 +279,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const bytes = new Uint8Array(await req.arrayBuffer());
         if (bytes.length === 0) return new Response("Empty body", { status: 400 });
         const saved = await saveAsset(docDir, name, bytes);
-        if (!saved) return new Response("Only image files are accepted", { status: 415 });
+        if (!saved)
+          return new Response("Unsupported file — images only (png, jpg, gif, webp, avif, bmp), bytes must match", {
+            status: 415,
+          });
         return Response.json(saved);
       }
 

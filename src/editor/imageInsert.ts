@@ -20,19 +20,17 @@ export type ToastFn = (message: string, kind?: "info" | "error") => void;
 
 const isImage = (f: File) => /^image\//.test(f.type);
 
-/** Extension for a pasted screenshot's File (browsers name it "image.png"). */
-function extFromMime(mime: string): string {
-  const map: Record<string, string> = {
-    "image/png": "png",
-    "image/jpeg": "jpg",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/svg+xml": "svg",
-    "image/avif": "avif",
-    "image/bmp": "bmp",
-  };
-  return map[mime] ?? "png";
-}
+// The formats the server accepts (magic-byte-verified there). No fallback: an
+// unsupported paste type (image/tiff, image/heic…) is rejected with a toast,
+// not silently uploaded under a .png name it can't honour (roborev #3439).
+const EXT_BY_MIME: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/avif": "avif",
+  "image/bmp": "bmp",
+};
 
 /** Alt text = the asset's stem minus the content-hash suffix. */
 function altFromPath(path: string): string {
@@ -41,9 +39,10 @@ function altFromPath(path: string): string {
 }
 
 async function upload(file: File, origin: "drop" | "paste"): Promise<string> {
-  // Pasted images get the decided generic stem; drops keep their filename.
+  // Pasted images get the decided generic stem; drops keep their filename. The
+  // server re-verifies the bytes against the extension either way.
   const name =
-    origin === "paste" ? `pasted.${extFromMime(file.type)}` : file.name || `image.${extFromMime(file.type)}`;
+    origin === "paste" ? `pasted.${EXT_BY_MIME[file.type]}` : file.name || `image.${EXT_BY_MIME[file.type] ?? "png"}`;
   const res = await fetch(`/api/asset?name=${encodeURIComponent(name)}`, {
     method: "POST",
     body: file,
@@ -59,10 +58,20 @@ function insertImages(
   origin: "drop" | "paste",
   toast: ToastFn,
 ): boolean {
-  const images = files.filter(isImage);
+  let images = files.filter(isImage);
   if (images.length === 0) {
     if (files.length) toast("Only images can be dropped into the doc", "error");
     return files.length > 0; // consumed the gesture (rejection) or not ours at all
+  }
+  // A paste has no filename to derive the extension from, so an unsupported
+  // MIME type is rejected here; drops keep their name and the server decides.
+  if (origin === "paste") {
+    const unsupported = images.filter((f) => !EXT_BY_MIME[f.type]);
+    if (unsupported.length) {
+      toast(`Unsupported image type: ${unsupported.map((f) => f.type).join(", ")}`, "error");
+      images = images.filter((f) => EXT_BY_MIME[f.type]);
+      if (images.length === 0) return true;
+    }
   }
   void (async () => {
     try {
