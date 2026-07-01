@@ -38,6 +38,25 @@ function altFromPath(path: string): string {
   return base.replace(/\.[a-z0-9]+$/i, "").replace(/-[0-9a-f]{8}$/, "");
 }
 
+/** A dragged image ELEMENT (from a webpage, another app) carries no File —
+ *  just a text/uri-list. Left unhandled, the browser's default is to NAVIGATE
+ *  to that URI (a data: tab full of base64). Decode a data:image URI into a
+ *  File so it takes the normal asset path, or null for anything else. */
+function fileFromDataUri(uri: string): File | null {
+  const m = /^data:(image\/[a-z+.-]+);base64,(.+)$/is.exec(uri.trim());
+  if (!m) return null;
+  const ext = EXT_BY_MIME[m[1].toLowerCase()];
+  if (!ext) return null;
+  try {
+    const bin = atob(m[2]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], `dropped.${ext}`, { type: m[1].toLowerCase() });
+  } catch {
+    return null;
+  }
+}
+
 async function upload(file: File, origin: "drop" | "paste"): Promise<string> {
   // Pasted images get the decided generic stem; drops keep their filename. The
   // server re-verifies the bytes against the extension either way.
@@ -97,21 +116,46 @@ function insertImages(
  *  shell can hand in a stable closure over its freshest state. */
 export function imageInsert(toast: ToastFn): Extension {
   return EditorView.domEventHandlers({
-    // Files need an explicit dragover preventDefault or the browser never fires
-    // drop; text drags (no Files) stay with CodeMirror's native handling.
+    // Files/uri-lists need an explicit dragover preventDefault or the browser
+    // never fires drop; in-editor text drags (text/plain, no Files) stay with
+    // CodeMirror's native handling.
     dragover(e) {
-      if (e.dataTransfer?.types.includes("Files")) {
+      const t = e.dataTransfer?.types;
+      if (t && (t.includes("Files") || (t.includes("text/uri-list") && !t.includes("text/plain")))) {
         e.preventDefault();
         return true;
       }
       return false;
     },
     drop(e, view) {
-      const files = Array.from(e.dataTransfer?.files ?? []);
-      if (files.length === 0) return false; // text drag — CodeMirror handles
-      e.preventDefault(); // stop CM's own file-drop (it would paste bytes as text)
+      const dt = e.dataTransfer;
+      const files = Array.from(dt?.files ?? []);
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY }) ?? view.state.selection.main.head;
-      return insertImages(view, files, pos, "drop", toast);
+      if (files.length) {
+        e.preventDefault(); // stop CM's own file-drop (it would paste bytes as text)
+        return insertImages(view, files, pos, "drop", toast);
+      }
+      // No File: a dragged image element. Its uri-list is either a data: URI
+      // (decode → normal asset path) or a remote URL (insert a remote ref).
+      // Never let it fall through — the browser default navigates away.
+      const uri = dt?.getData("text/uri-list").split(/\r?\n/).find((l) => l && !l.startsWith("#")) ?? "";
+      if (!uri || (dt?.types.includes("text/plain") && !uri.startsWith("data:"))) return false; // text drag
+      if (uri.startsWith("data:")) {
+        e.preventDefault();
+        const f = fileFromDataUri(uri);
+        if (!f) {
+          toast("Couldn't read the dragged image", "error");
+          return true;
+        }
+        return insertImages(view, [f], pos, "drop", toast);
+      }
+      if (/^https?:/i.test(uri)) {
+        e.preventDefault(); // remote image: reference it, don't copy it
+        const text = `![image](${uri})`;
+        view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
+        return true;
+      }
+      return false;
     },
     paste(e, view) {
       const files = Array.from(e.clipboardData?.files ?? []).filter(isImage);

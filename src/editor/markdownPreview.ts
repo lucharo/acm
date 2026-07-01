@@ -91,6 +91,9 @@ class ImageWidget extends WidgetType {
       ? this.url
       : `/api/asset?path=${encodeURIComponent(this.url)}`;
     img.alt = this.alt;
+    // Dragging a rendered image would put its /api/asset URL on the drag — a
+    // re-drop would insert a broken duplicate ref (or navigate). Not a gesture.
+    img.draggable = false;
     img.onerror = () => {
       wrap.textContent = `⚠ ${this.url} (missing)`;
       wrap.className = "cm-md-image cm-md-image-missing";
