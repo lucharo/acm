@@ -74,11 +74,19 @@ export async function saveAsset(
   return { path: rel, stem: parts.stem };
 }
 
-/** Resolve a doc-relative path to an absolute one, or null when it escapes the
- *  doc's directory (the traversal guard for GET /api/asset). Deliberately serves
- *  ANY path under docDir — not just assets/ — so hand-written references like
- *  ![](figures/plot.png) in pre-existing docs render too. */
+// What GET /api/asset may serve: the upload types plus svg (a hand-written
+// on-disk .svg reference renders; svg just isn't an accepted UPLOAD). The
+// extension whitelist keeps the route an IMAGE route — without it, any file
+// under the doc's directory (settings.json, sibling .md drafts) would be
+// readable by whoever can reach the server.
+const SERVABLE_EXTS = new Set([...IMAGE_EXTS, "svg"]);
+
+/** Resolve a doc-relative IMAGE path to an absolute one, or null when it
+ *  escapes the doc's directory (traversal guard) or isn't an image type.
+ *  Deliberately allows any directory under docDir — not just assets/ — so
+ *  hand-written references like ![](figures/plot.png) render too. */
 export function resolveUnderDocDir(docDir: string, rel: string): string | null {
+  if (!SERVABLE_EXTS.has(extname(rel).slice(1).toLowerCase())) return null;
   const abs = resolve(docDir, rel);
   return abs.startsWith(docDir + sep) ? abs : null;
 }

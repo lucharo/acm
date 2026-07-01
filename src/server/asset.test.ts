@@ -99,6 +99,14 @@ describe("resolveUnderDocDir", () => {
     expect(resolveUnderDocDir(docDir, "/etc/passwd")).toBeNull();
   });
 
+  test("serves only image types — not arbitrary files under docDir", () => {
+    expect(resolveUnderDocDir(docDir, "settings.json")).toBeNull();
+    expect(resolveUnderDocDir(docDir, "draft.md")).toBeNull();
+    expect(resolveUnderDocDir(docDir, "noext")).toBeNull();
+    // svg serves (hand-written refs) even though it isn't an upload type
+    expect(resolveUnderDocDir(docDir, "figures/diagram.svg")).toBe(join(docDir, "figures", "diagram.svg"));
+  });
+
   test("a sneaky same-prefix sibling dir does not pass the guard", () => {
     // /docs/essay-evil shares the string prefix but is NOT under /docs/essay.
     expect(resolveUnderDocDir(docDir, "../essay-evil/x.png")).toBeNull();

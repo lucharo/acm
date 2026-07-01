@@ -88,11 +88,13 @@ function insertImages(view: EditorView, files: File[], pos: number, toast: Toast
 export function imageInsert(toast: ToastFn): Extension {
   return EditorView.domEventHandlers({
     // Files/uri-lists need an explicit dragover preventDefault or the browser
-    // never fires drop; in-editor text drags (text/plain, no Files) stay with
-    // CodeMirror's native handling.
+    // never fires drop. The discriminator is text/uri-list PRESENCE, not
+    // text/plain absence: a dragged <img>/link carries BOTH (both set to the
+    // URL), while an in-editor text-selection drag carries text/plain only —
+    // so uri-list is what separates element drags from CodeMirror's own.
     dragover(e) {
       const t = e.dataTransfer?.types;
-      if (t && (t.includes("Files") || (t.includes("text/uri-list") && !t.includes("text/plain")))) {
+      if (t && (t.includes("Files") || t.includes("text/uri-list"))) {
         e.preventDefault();
         return true;
       }
@@ -106,11 +108,12 @@ export function imageInsert(toast: ToastFn): Extension {
         e.preventDefault(); // stop CM's own file-drop (it would paste bytes as text)
         return insertImages(view, files, pos, toast);
       }
-      // No File: a dragged image element. Its uri-list is either a data: URI
-      // (decode → normal asset path) or a remote URL (insert a remote ref).
-      // Never let it fall through — the browser default navigates away.
+      // No File: a dragged element (image or link). Its uri-list is either a
+      // data: URI (decode → normal asset path) or a remote URL (insert a
+      // remote ref). Never let it fall through — the browser default
+      // NAVIGATES to the URI. Text-selection drags have no uri-list.
       const uri = dt?.getData("text/uri-list").split(/\r?\n/).find((l) => l && !l.startsWith("#")) ?? "";
-      if (!uri || (dt?.types.includes("text/plain") && !uri.startsWith("data:"))) return false; // text drag
+      if (!uri) return false; // text drag — CodeMirror handles
       if (uri.startsWith("data:")) {
         e.preventDefault();
         const f = fileFromDataUri(uri);
