@@ -166,6 +166,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
   const server = Bun.serve({
     port,
+    // Hard body cap aligned with the asset route's 32 MB intent (plus header
+    // room) — a chunked upload with no Content-Length aborts here instead of
+    // buffering to Bun's 128 MB default. Prose docs are far below this.
+    maxRequestBodySize: 33 * 1024 * 1024,
 
     async fetch(req) {
       const url = new URL(req.url);

@@ -285,11 +285,17 @@ function Workspace({
   // (an image drop writes a file: "Saved assets/…"). Auto-dismiss after 4s.
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastId = useRef(0);
-  const toastTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const toastTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const pushToast = useCallback((message: string, kind: ToastItem["kind"] = "info") => {
     const id = ++toastId.current;
     setToasts((ts) => [...ts, { id, message, kind }]);
-    toastTimers.current.push(setTimeout(() => setToasts((ts) => ts.filter((t) => t.id !== id)), 4000));
+    toastTimers.current.set(
+      id,
+      setTimeout(() => {
+        toastTimers.current.delete(id);
+        setToasts((ts) => ts.filter((t) => t.id !== id));
+      }, 4000),
+    );
   }, []);
   // Pending dismiss timers must not fire into an unmounted Workspace.
   useEffect(() => () => toastTimers.current.forEach(clearTimeout), []);
