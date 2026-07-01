@@ -145,6 +145,27 @@ export const acmTheme: Extension = EditorView.theme(
       textDecorationSkipInk: "none",
       textUnderlineOffset: "2px",
     },
+    // Rendered inline image (replaces `![alt](url)` off the active line —
+    // markdownPreview.ts ImageWidget). Constrained to the prose column and a
+    // sane viewport share so a full-res screenshot doesn't swallow the page;
+    // click places the cursor → the raw syntax reveals.
+    ".cm-md-image img": {
+      maxWidth: "100%",
+      maxHeight: "60vh",
+      display: "inline-block",
+      verticalAlign: "text-bottom",
+      borderRadius: "6px",
+      cursor: "text",
+    },
+    // A reference whose file didn't load — show the path, don't vanish.
+    ".cm-md-image-missing": {
+      color: "var(--muted)",
+      backgroundColor: "var(--line)",
+      borderRadius: "4px",
+      padding: "0.05em 0.4em",
+      fontSize: "0.85em",
+      fontFamily: "ui-monospace, monospace",
+    },
     // Substitution arrow rendered in place of `~>`.
     ".cm-md-sub-arrow": {
       color: "var(--muted)",

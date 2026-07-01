@@ -5,6 +5,19 @@ CriticMarkup: tracked insertions/deletions, inline comments, and suggestions.
 This glossary fixes the words for the concepts that recur across the product, so
 the UI, the code, and these docs all say the same thing.
 
+## Images
+
+**Asset**:
+A binary file (an image) stored in the `assets/` folder beside the document and
+referenced from the markdown by relative path. The document text stays the one
+source of truth; an asset is what a path in it points at.
+_Avoid_: attachment, upload, media.
+
+**Insert (an image)**:
+The gesture — drag-drop or paste — that saves the bytes as an asset and puts an
+image reference in the document at that point.
+_Avoid_: upload, embed.
+
 ## Spelling
 
 **Misspelling**:

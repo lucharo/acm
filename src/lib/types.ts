@@ -125,3 +125,6 @@ export type ServerMessage = { type: "update"; content: string; version: number }
 
 /** Filters offered by the nav panel. */
 export type FilterMode = "all" | "comments" | "suggestions" | "unresolved";
+
+/** Severity of a bottom-right toast (Toast.tsx / imageInsert.ts / App). */
+export type ToastKind = "info" | "error";

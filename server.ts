@@ -24,6 +24,8 @@ import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, writeConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
+import { saveAsset, resolveUnderDocDir } from "./src/server/asset";
+import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
 
 const SETTINGS_FILE = "settings.json";
 
@@ -168,6 +170,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // only at the direct-run entry point below (serveOrDie), not to every caller.
   const server = Bun.serve({
     port,
+    // Hard body cap aligned with the asset route's 32 MB intent (plus header
+    // room) — a chunked upload with no Content-Length aborts here instead of
+    // buffering to Bun's 128 MB default. Prose docs are far below this.
+    maxRequestBodySize: 33 * 1024 * 1024,
 
     async fetch(req) {
       const url = new URL(req.url);
@@ -256,6 +262,51 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const { from, to } = body as { from: number; to: number };
         humanSel = { from, to, at: Date.now() };
         return Response.json({ ok: true });
+      }
+
+      // GET /api/asset?path=<rel> → serve a file the doc references by relative
+      // path (issue #3). Any path UNDER the doc's directory is fair game — not
+      // just assets/ — so hand-written references like ![](figures/plot.png)
+      // render; anything resolving above docDir is refused (traversal guard).
+      if (pathname === "/api/asset" && req.method === "GET") {
+        const rel = url.searchParams.get("path") ?? "";
+        const abs = resolveUnderDocDir(docDir, rel);
+        if (!abs) return new Response("Forbidden", { status: 403 });
+        const file = Bun.file(abs);
+        if (!(await file.exists())) return new Response("Not found", { status: 404 });
+        // CSP sandbox: an on-disk SVG (or anything else) opened directly from
+        // this route must never run scripts on the app's origin. <img> rendering
+        // is unaffected. ACM-managed assets are content-addressed (stem-hash8),
+        // hence immutable — cache them hard so scrolling a doc with big
+        // screenshots doesn't refetch full bodies on every viewport re-entry.
+        const headers: Record<string, string> = { "Content-Security-Policy": "sandbox" };
+        if (/^assets\/[^/]+-[0-9a-f]{8}\.[a-z0-9]+$/.test(rel))
+          headers["Cache-Control"] = "public, max-age=31536000, immutable";
+        return new Response(file, { headers });
+      }
+
+      // POST /api/asset?name=<orig> (raw image bytes as body) → save under
+      // <docDir>/assets/ with a content-addressed name; returns { path } for the
+      // markdown reference. Images only — the reject decision is enforced here,
+      // not just in the client filter. No doc write happens here: the editor
+      // inserts the returned path through the normal save path.
+      if (pathname === "/api/asset" && req.method === "POST") {
+        const name = url.searchParams.get("name") ?? "";
+        // Cap the upload BEFORE buffering it — the route is network-reachable
+        // and req.arrayBuffer() would otherwise hold an unbounded body in
+        // memory. Checked again after (Content-Length can lie / be absent).
+        const MAX_ASSET_BYTES = 32 * 1024 * 1024; // generous for any screenshot
+        if (Number(req.headers.get("content-length") ?? 0) > MAX_ASSET_BYTES)
+          return new Response("Image too large (32 MB max)", { status: 413 });
+        const bytes = new Uint8Array(await req.arrayBuffer());
+        if (bytes.length > MAX_ASSET_BYTES) return new Response("Image too large (32 MB max)", { status: 413 });
+        if (bytes.length === 0) return new Response("Empty body", { status: 400 });
+        const saved = await saveAsset(docDir, name, bytes);
+        if (!saved)
+          return new Response(`Unsupported file — images only (${IMAGE_EXTS_LABEL}), bytes must match`, {
+            status: 415,
+          });
+        return Response.json(saved);
       }
 
       // GET /api/settings → persisted view settings + "seen" state (or {} on a

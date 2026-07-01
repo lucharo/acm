@@ -67,6 +67,47 @@ class BulletWidget extends WidgetType {
 }
 const bulletDeco = Decoration.replace({ widget: new BulletWidget() });
 
+/** Renders an inline `![alt](url)` as the actual image when the line isn't
+ *  active (issue #3); the cursor on the line reveals the raw syntax, same as
+ *  every other marker. Relative urls are served doc-relative via /api/asset;
+ *  a failed load swaps to a compact "missing" chip so a bad path is visible.
+ *  eq() by url+alt so selection-driven rebuilds reuse the DOM — otherwise the
+ *  <img> would be recreated (and flicker/refetch) on every keystroke. */
+class ImageWidget extends WidgetType {
+  constructor(
+    readonly url: string,
+    readonly alt: string,
+  ) {
+    super();
+  }
+  eq(other: ImageWidget) {
+    return other.url === this.url && other.alt === this.alt;
+  }
+  toDOM() {
+    const wrap = document.createElement("span");
+    wrap.className = "cm-md-image";
+    const img = document.createElement("img");
+    img.src = /^(https?:|data:)/i.test(this.url)
+      ? this.url
+      : `/api/asset?path=${encodeURIComponent(this.url)}`;
+    img.alt = this.alt;
+    // Dragging a rendered image would put its /api/asset URL on the drag — a
+    // re-drop would insert a broken duplicate ref (or navigate). Not a gesture.
+    img.draggable = false;
+    img.onerror = () => {
+      wrap.textContent = `⚠ ${this.url} (missing)`;
+      wrap.className = "cm-md-image cm-md-image-missing";
+    };
+    wrap.appendChild(img);
+    return wrap;
+  }
+  // Let the editor handle clicks: they place the cursor at the image, which
+  // makes the line active → raw syntax reveals for editing.
+  ignoreEvent() {
+    return false;
+  }
+}
+
 // Marks that, when present as a node's child, denote raw markdown syntax we hide.
 // NB: ListMark is NOT here — it's special-cased in buildHide (rendered as a bullet
 // for unordered lists, left visible for ordered) rather than hidden outright.
@@ -225,6 +266,24 @@ function buildHide(view: EditorView): DecorationSet {
           return false;
         }
         if (name.startsWith("CM")) return; // container node — descend to its delimiters
+
+        // Images: replace the whole `![alt](url)` with the rendered image (off
+        // the active line). `return false` throughout — the node's LinkMark/URL
+        // children must not ALSO emit hide ranges under (or instead of) the
+        // replacement. Reference-style images (no inline URL child) stay raw.
+        if (name === "Image") {
+          if (selectionOnRange(view, node.from, node.to)) return false; // reveal raw for editing
+          const urlNode = node.node.getChild("URL");
+          if (!urlNode) return false;
+          const url = view.state.doc.sliceString(urlNode.from, urlNode.to);
+          const alt = /^!\[([^\]]*)\]/.exec(
+            view.state.doc.sliceString(node.from, node.to),
+          )?.[1] ?? "";
+          ranges.push(
+            Decoration.replace({ widget: new ImageWidget(url, alt) }).range(node.from, node.to),
+          );
+          return false;
+        }
 
         // List markers: render a bullet for unordered (-, *, +); leave ordered (1.)
         // visible. Revealed raw on the active line for editing. (Not in HIDDEN_MARK_NODES.)
