@@ -7,7 +7,7 @@ import type { FormEvent } from "react";
 import { MOD, handleCommentKey } from "./CommentSidebar";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
-import type { Font, GroupView, Theme, SpellVariant, ViewSettings } from "../lib/viewSettings";
+import type { Font, Theme, SpellVariant, ViewSettings } from "../lib/viewSettings";
 
 export interface HeaderProps {
   connected: boolean;
@@ -310,17 +310,6 @@ export default function Header(props: HeaderProps) {
                 onToggle={() => onChangeSettings({ showSeen: !settings.showSeen })}
               />
               <SettingRow label="Overview panel" checked={navOpen} onToggle={onToggleNav} />
-              <div className="my-1 border-t border-[var(--line)]" />
-              <Segmented<GroupView>
-                label="Group edits — review the set"
-                value={settings.groupView}
-                options={[
-                  { value: "popover", label: "Popover" },
-                  { value: "inline", label: "Inline" },
-                  { value: "panel", label: "Panel" },
-                ]}
-                onChange={(groupView) => onChangeSettings({ groupView })}
-              />
               <div className="my-1 border-t border-[var(--line)]" />
               <button
                 type="button"

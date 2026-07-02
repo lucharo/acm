@@ -22,7 +22,6 @@ import { MOD } from "../lib/platform";
 import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
-import type { GroupView } from "../lib/viewSettings";
 import { authorColor, groupColor } from "./authorColor";
 
 interface CommentSidebarProps {
@@ -60,11 +59,8 @@ interface CommentSidebarProps {
    *  members (#21). Only real groups (≥2 members) appear here. */
   suggestionGroupOf: Map<string, { id: string; size: number }>;
   /** groupId → its members ({old span, new wording}, in document order) — the data
-   *  the popover / inline-expand views list so the whole set is reviewable before an
-   *  Apply-all. */
+   *  the group popover lists so the whole set is reviewable before an Apply-all. */
   groupMembersOf: Map<string, SuggestionGroupMember[]>;
-  /** Which "see the group together" layout to render (comparison build). */
-  groupView: GroupView;
   /** Accept/reject EVERY member of a group as one atomic edit. */
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
   /** Scroll a span into view + flash it — a group member row → its edit in the doc. */
@@ -146,7 +142,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onApplySuggestion,
     suggestionGroupOf,
     groupMembersOf,
-    groupView,
     onGroupEdit,
     onLocate,
     onRejectSuggestionEdit,
@@ -336,10 +331,10 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   useLayoutEffect(() => {
     recompute();
-    // openControl/groupView: expanding a group surface (inline/popover) changes a
-    // card's height, so the greedy stack must re-measure or following cards overlap.
+    // openControl: opening a group popover can change a card's height, so the
+    // greedy stack must re-measure or following cards overlap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds, openControl, groupView]);
+  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds, openControl]);
 
   // Wheel over the comment column scrolls the DOCUMENT. The column is a sibling
   // panel with no scrollable content of its own (cards are absolutely positioned
@@ -694,7 +689,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                               {(() => {
                                 // Member of a suggestion group (#21): surface the whole-set
                                 // controls — every member edit lands as ONE undoable apply.
-                                // The LAYOUT of "see the set together" is chosen by groupView.
                                 const g = suggestionGroupOf.get(c.id);
                                 if (!g) return null;
                                 return (
@@ -702,7 +696,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                     groupId={g.id}
                                     size={g.size}
                                     members={groupMembersOf.get(g.id) ?? []}
-                                    view={groupView}
                                     isOpen={openControl === c.id}
                                     onToggle={() => setOpenControl(openControl === c.id ? null : c.id)}
                                     onGroupEdit={onGroupEdit}
@@ -794,12 +787,11 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   );
 }
 
-// ── Suggestion-group "see the whole set" surfaces ─────────────────────────────
-// A group member's card carries controls to review + apply the WHOLE group. Three
-// layouts (comparison build, picked by ViewSettings.groupView): a popover that
-// floats the member list off the chip, an inline expansion in the card, or a
-// compact row (the Suggestions panel owns the list in that mode). All three list
-// the same groupMembersOf data and call the same atomic onGroupEdit.
+// ── Suggestion-group "see the whole set" surface ──────────────────────────────
+// A group member's card carries controls to review + apply the WHOLE group: the
+// ⛓ chip opens a popover listing every member (old → new, click to locate) with
+// the atomic Apply-all/Reject-all. (Three layouts were compared live — popover /
+// inline-expand / grouped panel — popover won and the others were removed.)
 
 /** The members of a group as old → new rows, in document order. Click a row to
  *  scroll to + flash the exact span it edits (via onLocate). */
@@ -877,7 +869,6 @@ function GroupSurface({
   groupId,
   size,
   members,
-  view,
   isOpen,
   onToggle,
   onGroupEdit,
@@ -886,7 +877,6 @@ function GroupSurface({
   groupId: string;
   size: number;
   members: SuggestionGroupMember[];
-  view: GroupView;
   isOpen: boolean;
   onToggle: () => void;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
@@ -900,45 +890,9 @@ function GroupSurface({
     </span>
   );
 
-  // Panel mode: the Suggestions overview owns the grouped list, so the card keeps
-  // the compact inline controls (today's behaviour).
-  if (view === "panel") {
-    return (
-      <div className="mt-1.5 flex items-center gap-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]">
-        <span title={`Suggestion group “${groupId}” — listed in the Suggestions panel`}>{chip}</span>
-        <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
-      </div>
-    );
-  }
-
-  // Inline mode: a disclosure ▸/▾ expands the member list within the card.
-  if (view === "inline") {
-    return (
-      <div
-        data-group-ui
-        className="mt-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]"
-      >
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onToggle(); }}
-          className="flex w-full items-center gap-1 text-left hover:text-[var(--ink)]"
-          aria-expanded={isOpen}
-        >
-          <span aria-hidden="true">{isOpen ? "▾" : "▸"}</span> {chip}
-        </button>
-        {isOpen ? (
-          <div className="mt-1.5">
-            <GroupMembers members={members} onLocate={onLocate} />
-            <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  // Popover mode (default): the chip opens a floating list off the card. Opens
-  // UPWARD (the control sits at the card's bottom) so it overlays the visible card
-  // body rather than spilling past the clipped column edge.
+  // The chip opens a floating list off the card. Opens UPWARD (the control sits at
+  // the card's bottom) so it overlays the visible card body rather than spilling
+  // past the clipped column edge.
   return (
     <div
       data-group-ui

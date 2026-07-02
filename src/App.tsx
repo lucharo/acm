@@ -1150,10 +1150,6 @@ function Workspace({
               onAccept={acceptToken}
               onReject={rejectToken}
               onResolve={resolveComment}
-              groupView={settings.groupView}
-              groupMembersOf={groupMembersOf}
-              onGroupEdit={runGroupEdit}
-              onLocate={locateSpan}
             />
           </aside>
         ) : null}
@@ -1201,7 +1197,6 @@ function Workspace({
                   applicableSuggestionIds={applicableSuggestionIds}
                   suggestionGroupOf={suggestionGroupOf}
                   groupMembersOf={groupMembersOf}
-                  groupView={settings.groupView}
                   onGroupEdit={runGroupEdit}
                   onLocate={locateSpan}
                   onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
