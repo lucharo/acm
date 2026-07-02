@@ -196,5 +196,11 @@ export const footnotes: Extension = [footnoteFlashField, footnoteMarks, footnote
  *  "locate" a suggestion-group member: click a row → the edited span pulses in the
  *  doc. Reuses navigateTo, so the flash timing/behaviour stays identical everywhere. */
 export function flashRange(view: EditorView, from: number, to: number): void {
+  if (from >= to) {
+    // Zero-width span (e.g. an empty {====} anchor): a zero-length mark decoration
+    // is invalid in CM6 — just scroll there, no flash.
+    view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "center" }) });
+    return;
+  }
   navigateTo(view, { from, to });
 }

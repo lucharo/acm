@@ -336,8 +336,10 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   useLayoutEffect(() => {
     recompute();
+    // openControl/groupView: expanding a group surface (inline/popover) changes a
+    // card's height, so the greedy stack must re-measure or following cards overlap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds]);
+  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds, openControl, groupView]);
 
   // Wheel over the comment column scrolls the DOCUMENT. The column is a sibling
   // panel with no scrollable content of its own (cards are absolutely positioned
