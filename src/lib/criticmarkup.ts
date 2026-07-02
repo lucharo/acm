@@ -1342,3 +1342,54 @@ export function applyRangedEdits(
 export function applicableSuggestionIds(content: string, tokens?: CritToken[]): Set<string> {
   return new Set(inlineSuggestions(content, tokens).map((s) => s.commentId));
 }
+
+/** One member of a suggestion group, flattened for a "review the whole set" view:
+ *  the anchored span it edits (struck "old" half) and the proposed wording (green
+ *  "new" half; "" → delete the span). */
+export interface SuggestionGroupMember {
+  commentId: string; // the member's SUGGEST comment id (for jump/keying)
+  from: number; // the member's comment offset, in document order
+  anchorFrom: number; // the anchored span's start offset (for scroll + flash)
+  anchorTo: number; // the anchored span's end offset
+  anchorText: string; // the highlighted span being edited (the "old" text)
+  replacement: string; // the proposed wording ("" → suggests deleting the span)
+  isDelete: boolean; // replacement is empty/blank → a deletion
+}
+
+/**
+ * Every member of suggestion group `groupId`, in document order, flattened to
+ * {old span, new wording} pairs — the data a "see the whole group together" view
+ * (popover / inline-expand / grouped panel) renders before an Apply-all. Derived
+ * from the SAME {@link inlineSuggestions} pass that drives the inline widgets and
+ * {@link suggestionGroupEdits}, so the preview can never disagree with what
+ * Apply-all will actually do. The anchored span is read from the member's own
+ * highlight token (its `.inner`), so a stacked anchor reads its true span text.
+ */
+export function suggestionGroupMembers(
+  content: string,
+  groupId: string,
+  tokens?: CritToken[],
+): SuggestionGroupMember[] {
+  const toks = tokens ?? scanTokens(content);
+  const hlByFrom = new Map(
+    toks.filter((t) => t.type === "highlight").map((t) => [t.from, t]),
+  );
+  return inlineSuggestions(content, toks)
+    .filter((s) => s.groupId === groupId)
+    .map((s) => {
+      const hl = hlByFrom.get(s.hlFrom);
+      const anchorText =
+        hl && hl.type === "highlight" ? hl.inner : content.slice(s.hlFrom + 3, s.hlTo - 3);
+      return {
+        commentId: s.commentId,
+        from: s.commentFrom,
+        // The visible span sits inside the `{==` / `==}` delimiters — flash that, not
+        // the hidden markers, so the pulse lands on the words the reader sees.
+        anchorFrom: s.hlFrom + 3,
+        anchorTo: s.hlTo - 3,
+        anchorText,
+        replacement: s.replacement,
+        isDelete: s.replacement.trim() === "",
+      };
+    });
+}

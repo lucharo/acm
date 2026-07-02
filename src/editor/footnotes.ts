@@ -190,3 +190,17 @@ const footnoteMarks = ViewPlugin.fromClass(
 /** Footnote hyperlinks: click a `[^id]` reference to scroll to its definition and
  *  back. Styling lives in theme.ts (`.cm-footnote-ref` / `-def-label` / `-flash`). */
 export const footnotes: Extension = [footnoteFlashField, footnoteMarks, footnoteClick];
+
+/** Scroll a document range into view and flash it (same transient highlight as
+ *  footnote jumps) — WITHOUT moving the cursor. Exposed so the comment sidebar can
+ *  "locate" a suggestion-group member: click a row → the edited span pulses in the
+ *  doc. Reuses navigateTo, so the flash timing/behaviour stays identical everywhere. */
+export function flashRange(view: EditorView, from: number, to: number): void {
+  if (from >= to) {
+    // Zero-width span (e.g. an empty {====} anchor): a zero-length mark decoration
+    // is invalid in CM6 — just scroll there, no flash.
+    view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "center" }) });
+    return;
+  }
+  navigateTo(view, { from, to });
+}

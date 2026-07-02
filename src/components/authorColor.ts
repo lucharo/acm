@@ -23,3 +23,19 @@ export function authorColor(author: string | null): string {
   const index = ((hash % AUTHOR_HUE_COUNT) + AUTHOR_HUE_COUNT) % AUTHOR_HUE_COUNT;
   return `var(--author-${index})`;
 }
+
+/**
+ * Stable color for a SUGGESTION GROUP id, so every member of one group
+ * (`SUGGEST[g:id]`) shares a hue the eye can cluster on. Uses a CONTINUOUS HSL hue
+ * (not the 8-slot author palette) so nearby groups don't collide — the whole point
+ * is telling one group from another. Mid saturation + lightness read on both light
+ * and dark panels; the same value drives the card spine and the group tag.
+ */
+export function groupColor(groupId: string): string {
+  let hash = 0;
+  for (let i = 0; i < groupId.length; i++) {
+    hash = (Math.imul(hash, 31) + groupId.charCodeAt(i)) | 0;
+  }
+  const hue = ((hash % 360) + 360) % 360;
+  return `hsl(${hue}, 62%, 52%)`;
+}

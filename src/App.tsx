@@ -48,6 +48,7 @@ import SpellingReview from "./components/SpellingReview";
 import ToastStack from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
 import { toggleStrong, toggleEmphasis } from "./editor/formatting";
+import { flashRange } from "./editor/footnotes";
 import {
   scanTokens,
   applySuggestion,
@@ -221,6 +222,7 @@ function Workspace({
     diagnostics,
     fixableCount,
     suggestionGroupOf,
+    groupMembersOf,
   } = useDocDerived(doc);
 
   // "Seen" tracking — content-keyed, non-destructive (state + persistence in
@@ -478,6 +480,16 @@ function Workspace({
       const v = editor.viewRef.current;
       if (!v) return;
       v.dispatch({ effects: EditorView.scrollIntoView(token.from, { y: "center" }) });
+    },
+    [editor.viewRef],
+  );
+
+  // Locate an edit: scroll a span into view and flash it (no cursor move). Used by
+  // the group views to jump from a member row to the exact span it edits.
+  const locateSpan = useCallback(
+    (from: number, to: number) => {
+      const v = editor.viewRef.current;
+      if (v) flashRange(v, from, to);
     },
     [editor.viewRef],
   );
@@ -1138,6 +1150,10 @@ function Workspace({
               onAccept={acceptToken}
               onReject={rejectToken}
               onResolve={resolveComment}
+              groupView={settings.groupView}
+              groupMembersOf={groupMembersOf}
+              onGroupEdit={runGroupEdit}
+              onLocate={locateSpan}
             />
           </aside>
         ) : null}
@@ -1184,7 +1200,10 @@ function Workspace({
                   onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
                   applicableSuggestionIds={applicableSuggestionIds}
                   suggestionGroupOf={suggestionGroupOf}
+                  groupMembersOf={groupMembersOf}
+                  groupView={settings.groupView}
                   onGroupEdit={runGroupEdit}
+                  onLocate={locateSpan}
                   onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
                   onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
                   onFocusThread={focusThread}
