@@ -121,6 +121,10 @@ not a lock.
   itself + a newline + your new def — that keeps it a single applyable card. If you
   also need to fix surrounding punctuation, e.g. a stray `)`, make that a third member
   of the same group.)
+  **If a definition card renders raw/mangled** — `[^id]:` lines wrapped in a highlight
+  have leaked as raw markup on some builds (seen June 2026) — reject the card, run
+  `acm heal`, and add the definition by direct edit instead. Defs are structural lines;
+  markers (`[^id]`, no colon) are always safe to card.
 - **Rename a term across a section** — one member per occurrence, same group id.
 - **Move / re-word a clause** — the deletion here and the re-insertion there, grouped.
 
@@ -142,6 +146,15 @@ const threads = groupThreads(comments, text); // each thread.to = where a reply 
 `groupThreads` returns threads; **`thread.to` is exactly where you insert a reply** so
 it threads cleanly. This is the reliable way to locate anchors and avoid mis-edits.
 
+**After EVERY mutating write, run the 2-line integrity gate**: count of `{==` must equal
+`==}` and `{>>` must equal `<<}` (plus a word-count sanity delta vs your backup). A
+mismatch means a corrupted anchor — restore the backup rather than writing further.
+For very large reply sweeps (~20+ threads), one scripted write beats N `acm comment`
+calls: build `{offset → reply}` from `groupThreads`, insert each `{>>@you: …<<}` at its
+`thread.to` sorted DESCENDING so earlier offsets stay valid, then re-scan + gate.
+(A 148-thread sweep landed this way in one write; its lone failure was a mis-keyed
+offset — verify the pending count hits 0 afterwards.)
+
 ## Clearing threads — the reply sweep
 
 A move the human will love at the end of a pass: **reply to every thread still waiting
@@ -158,8 +171,12 @@ const pending = groupThreads(comments, text).filter((th) => {
 Reply to each — an ack ("good call, resolve"), a decision ("go with X"), or a concrete
 `SUGGEST:` — via `acm comment` / `acm apply edits.json`, so every thread ends in your
 voice. **Be confident and proactive:** you don't only respond where they commented — add
-standalone `acm suggest` cards and comments wherever you spot an error, a typo, or an
-unclear bit. Standalone suggestions (not tied to a thread) are welcome.
+standalone `acm suggest` cards wherever you spot an error, a typo, or an unclear bit;
+they anchor on any unique span, no thread needed. **`acm comment` can NOT do this** —
+it's reply-only (anchors by matching an EXISTING comment's text, so it 0-matches on bare
+prose; a standalone-note verb is tracked in lucharo/acm#45). To leave a bare note on
+uncommented prose, insert `{==span==}{>>@you: note<<}` via a direct write (see the
+direct-file rules below).
 
 ## Spelling pass
 
@@ -198,6 +215,12 @@ Skip any section the human is still actively rewriting.
   finished rewrite; the writer's own passages stay their hand.
 - **Skip already-answered threads.** Work only the raw, unanswered ones (last comment isn't
   you, and no prior `@claude`/`[Claude]` note). Don't re-litigate settled threads.
+- **Fresh eyes for the final pass.** Before the doc ships, spawn a read-only copy-editor
+  subagent with an explicit voice-preservation brief (list the author's deliberate
+  choices: dialect/variant, intentional fragments, their own em-dashes) returning
+  `[{anchor, verdict, suggestion}]` JSON with exact-string anchors. Merge its verdicts
+  with your own judgment conservatively — it catches what you've gone blind to after
+  many passes.
 
 ## Workflow
 
@@ -262,6 +285,15 @@ no server is running** — a blind write while an editor is live skips the merge
 guard and can clobber the human's unsaved typing (the exact failure #38 prevents). So
 for review work prefer the `acm` verbs: they pick the safe path automatically, snapshot,
 and validate; raw writes don't.
+
+When you genuinely need direct writes with an editor live (bulk scripted transforms the
+verbs can't express), do the **stop-the-world dance**: `cp` a timestamped backup → find
+the server (`lsof -ti :<port>` filtered to bun/node via `ps -o comm=`) → capture
+`md5 -q <doc>` → kill → confirm the md5 is unchanged (no last-moment flush) → edit →
+restart the server → re-verify counts. And have the human **close stale editor tabs
+before the restart** — a disconnected tab still holds its old buffer, and on reconnect
+the user's buffer wins by design ("your version is kept"), which would flush stale
+content over your edits.
 
 ## Voice
 
