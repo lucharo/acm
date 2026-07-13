@@ -55,14 +55,22 @@ export async function liveInstances(): Promise<InstanceEntry[]> {
 }
 
 /** Second-factor liveness: a recycled PID can impersonate a dead server, but it
- *  won't answer ACM's /api/doc on the registered port. Short timeout — local. */
+ *  won't answer ACM's /api/doc on the registered port. Three attempts, not one:
+ *  a single short-timeout fetch false-negatives under CPU contention (a cold bun
+ *  process is still transpiling while the fetch clock runs), and a false "dead"
+ *  here lets a mutating verb direct-write past a LIVE editor — the exact clobber
+ *  #38 guards against. A truly dead port refuses instantly, so retrying keeps
+ *  that case fast while absorbing transient slowness. */
 export async function probeInstance(e: InstanceEntry): Promise<boolean> {
-  try {
-    const res = await fetch(`http://localhost:${e.port}/api/doc`, {
-      signal: AbortSignal.timeout(400),
-    });
-    return res.ok;
-  } catch {
-    return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`http://localhost:${e.port}/api/doc`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      return res.ok; // the server answered — definitive either way, no retry
+    } catch {
+      if (attempt < 2) await Bun.sleep(100);
+    }
   }
+  return false;
 }
