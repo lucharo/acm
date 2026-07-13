@@ -184,21 +184,16 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   const before = await Bun.file(docPath).text();
   let after: string;
   let note: string;
+  // Bare `reply` (no --batch) is a single-thread reply — the same operation as
+  // `comment`; dispatch both spellings to one implementation (`cmd` keeps the
+  // invoked name for messages).
+  const op = cmd === "reply" && !f.batch ? "comment" : cmd;
   try {
-    switch (cmd) {
-      case "apply": // deprecated spelling of `reply --batch` — "apply" belongs to accepting SUGGEST cards
+    switch (op) {
+      case "apply": // deprecated spelling of `reply --batch` — "apply" is the GUI's SUGGEST-card action (CONTEXT.md)
       case "reply": {
         if (cmd === "apply") console.error("acm apply is deprecated — use `acm reply --batch <edits.json>`");
-        if (cmd === "reply" && !f.batch) {
-          // Bare form: reply to one thread — same anchoring as `acm comment`.
-          const [phrase, text] = f.positional;
-          if (!phrase || !text)
-            throw new Error('usage: acm reply "<phrase>" "<text>" | acm reply --batch <edits.json>  [--doc] [--author]');
-          after = addComment(before, phrase, author, text);
-          note = `replied to "${phrase.slice(0, 40)}" as @${author}`;
-          break;
-        }
-        const editsPath = cmd === "apply" ? f.positional[0] : f.batch;
+        const editsPath = f.batch ?? f.positional[0];
         if (!editsPath) throw new Error("usage: acm reply --batch <edits.json> [--doc <file>]");
         const edits = JSON.parse(await Bun.file(resolve(editsPath)).text()) as {
           id: string;
@@ -226,7 +221,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       }
       case "comment": {
         const [phrase, text] = f.positional;
-        if (!phrase || !text) throw new Error('usage: acm comment "<phrase>" "<text>" [--doc] [--author]');
+        if (!phrase || !text) throw new Error(`usage: acm ${cmd} "<phrase>" "<text>" [--doc] [--author]`);
         after = addComment(before, phrase, author, text);
         note = `replied to "${phrase.slice(0, 40)}" as @${author}`;
         break;

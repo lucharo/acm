@@ -43,6 +43,12 @@ _Avoid_: conversation, discussion.
 The verdict that applies a suggestion — the proposed text replaces the original
 — and strips its markup from the file.
 
+**Apply**:
+The act of landing an accepted suggestion's text — the GUI's button on a SUGGEST
+card ("Apply", "Apply all"), and where "applicable" comes from. Accept is the
+verdict; apply is what it does to the prose. Not a CLI verb: replying in batch is
+`acm reply --batch` (the old `acm apply` spelling is deprecated for this reason).
+
 **Reject**:
 The verdict that declines a suggestion — the original text stays — and strips
 its markup from the file.
