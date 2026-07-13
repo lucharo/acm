@@ -146,12 +146,20 @@ const threads = groupThreads(comments, text); // each thread.to = where a reply 
 `groupThreads` returns threads; **`thread.to` is exactly where you insert a reply** so
 it threads cleanly. This is the reliable way to locate anchors and avoid mis-edits.
 
-**After EVERY mutating write, gate on a real parse**: run `acm threads` and require zero
-errors plus the expected thread-count delta — the parser catches what delimiter counting
-can't (nested comments, literal delimiters in a body, mangled `{~~…~>…~~}`). The 2-line
-balance check (`{==` = `==}`, `{>>` = `<<}`, word-count delta vs backup) stays as a cheap
-pre-check only. A failure means a corrupted anchor — restore the backup rather than
-writing further.
+**After EVERY mutating write, gate on a real parse** — the parser catches what delimiter
+counting can't (nested comments, literal delimiters in a body, mangled `{~~…~>…~~}`).
+Using the same import pattern as above:
+
+```ts
+import { validateMarkup, nestedCommentIssues, groupThreads, scanTokens } from "<acm>/src/lib/criticmarkup";
+const text = await Bun.file(DOC).text();
+if (validateMarkup(text).length || nestedCommentIssues(text).length) throw "corrupted markup";
+// …and check groupThreads(…).length moved by exactly the delta you intended.
+```
+
+The 2-line balance check (`{==` = `==}`, `{>>` = `<<}`, word-count delta vs backup) stays
+as a cheap pre-check only. A failure means a corrupted anchor — restore the backup rather
+than writing further.
 For very large reply sweeps (~20+ threads), one scripted write beats N `acm comment`
 calls: build `{offset → reply}` from `groupThreads`, insert each `{>>@you: …<<}` at its
 `thread.to` sorted DESCENDING so earlier offsets stay valid, then re-scan + gate.
