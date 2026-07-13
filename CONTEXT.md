@@ -86,19 +86,20 @@ so it renders as intended again.
 _Avoid_: fix (reserved for spelling), repair.
 
 **Prose**:
-The document text outside any CriticMarkup construct — what remains when every
-suggestion, comment, and highlight is stripped.
+The document text as it reads with every suggestion accepted and all comments
+removed — what word count, pagination, and spell check operate on.
 _Avoid_: content, body text.
 
 ## Reading & instances
 
 **Page view**:
 The document rendered as A4 sheets: the sheet styling, the page-break markers,
-and the page tally are one concept behind one toggle, on by default.
+and the page tally are one concept. (The UI still splits them in two settings;
+merging them is decided and tracked.)
 _Avoid_: page breaks (as a separate setting), sheet mode.
 
 **Page**:
-The A4 unit page view divides the document into.
+The A4 unit the pagination estimate divides the prose into.
 
 **Instance**:
 One running ACM server bound to one document on one port.
