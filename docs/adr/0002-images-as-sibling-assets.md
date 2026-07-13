@@ -8,7 +8,7 @@ gains a traversal-guarded route that serves files under the doc's directory.
 The alternative — base64 data URIs inline in the `.md` — would keep the doc
 self-contained but was rejected: a single screenshot becomes ~1.4 MB of base64
 mid-prose, which wrecks the document's readability (the whole point of ACM is a
-human-readable co-edited source), bloats every git-journal commit, and pushes
+human-readable co-edited source), bloats every git-history commit, and pushes
 megabyte strings through the `merge3`/`commitWrite` path on every save.
 
 ## Consequences

@@ -1,4 +1,4 @@
-// ── Doc history: a git shadow journal (#11) ────────────────────────────────────
+// ── Doc history: a git shadow record (#11) ─────────────────────────────────────
 // Version control for the document WITHOUT a second source of truth: a hidden
 // git repo at `<docDir>/.acm/history.git` whose work-tree is the doc directory,
 // tracking ONLY the doc file. The user's directory stays clean (no nested .git),
@@ -45,8 +45,8 @@ async function git(
 
 /** Make `<docDir>/.acm` invisible to any ENCLOSING git repo: a nested
  *  `.gitignore` containing `*` ignores the whole dir (itself included), so the
- *  journal/snapshots never show up as untracked noise in the user's repo and
- *  nothing in their .gitignore needs editing. The journal itself is unaffected —
+ *  history/snapshots never show up as untracked noise in the user's repo and
+ *  nothing in their .gitignore needs editing. The history itself is unaffected —
  *  every git call passes explicit --git-dir/--work-tree, so an enclosing repo is
  *  never discovered or touched. */
 export function selfIgnoreAcmDir(acmDir: string): void {
@@ -98,7 +98,7 @@ export async function recordHistory(docPath: string, source: string): Promise<st
   }
 }
 
-/** The journal, newest first: `<short-sha>  <relative time>  <message>` lines. */
+/** The history, newest first: `<short-sha>  <relative time>  <message>` lines. */
 export async function listHistory(docPath: string, n = 20): Promise<string[]> {
   if (!existsSync(gitDirFor(docPath))) return [];
   const log = await git(docPath, [

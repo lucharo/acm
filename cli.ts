@@ -62,8 +62,8 @@ running ACM editor; snapshot before every write):
   acm spell add <word…>             Keep words in your personal dictionary
   acm spell ignore <word…>          Stop flagging words in THIS doc only
   acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
-  acm history [n]                   The doc's version journal (auto-recorded)
-  acm restore <sha>                 Restore a journal version (snapshots first)
+  acm history [n]                   The doc's version history (auto-recorded)
+  acm restore <sha>                 Restore a history version (snapshots first)
     (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
 
 Options:
