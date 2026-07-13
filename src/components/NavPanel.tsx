@@ -5,6 +5,12 @@
 // Filters (FilterMode): all / comments / suggestions / unresolved. "Unresolved"
 // is treated as comments-only: resolving removes a comment from the document, so
 // every comment still present is by definition unresolved.
+//
+// "Suggestion" here follows the glossary umbrella: inline CriticMarkup tokens
+// (isSuggestion) PLUS agent SUGGEST cards — comments whose id is in
+// applicableSuggestionIds. Those cards count and filter as suggestions, never
+// as comments (no double-counting); they stay in "unresolved" because a pending
+// suggestion is still an open item.
 
 import type {
   CritToken,
@@ -17,6 +23,10 @@ import { authorColor } from "./authorColor";
 
 interface NavPanelProps {
   tokens: CritToken[];
+  /** Ids of SUGGEST-card comments with a resolvable anchor (see
+   *  applicableSuggestionIds in lib/criticmarkup) — tallied and filtered as
+   *  suggestions, not comments. */
+  applicableSuggestionIds: Set<string>;
   filter: FilterMode;
   onFilterChange: (f: FilterMode) => void;
   activeId: string | null;
@@ -79,16 +89,21 @@ function preview(token: CritToken): string {
   }
 }
 
-function matchesFilter(token: CritToken, filter: FilterMode): boolean {
+function matchesFilter(
+  token: CritToken,
+  filter: FilterMode,
+  suggestCardIds: Set<string>,
+): boolean {
   switch (filter) {
     case "all":
       return true;
     case "comments":
-      return isComment(token);
+      return isComment(token) && !suggestCardIds.has(token.id);
     case "suggestions":
-      return isSuggestion(token);
+      return isSuggestion(token) || suggestCardIds.has(token.id);
     case "unresolved":
-      // Comments-only: every present comment is unresolved.
+      // Comments-only: every present comment is unresolved. SUGGEST cards stay
+      // in — a pending suggestion is still an open item.
       return isComment(token);
   }
 }
@@ -96,6 +111,7 @@ function matchesFilter(token: CritToken, filter: FilterMode): boolean {
 export default function NavPanel(props: NavPanelProps) {
   const {
     tokens,
+    applicableSuggestionIds,
     filter,
     onFilterChange,
     activeId,
@@ -105,10 +121,14 @@ export default function NavPanel(props: NavPanelProps) {
     onResolve,
   } = props;
 
-  const suggestionCount = tokens.filter(isSuggestion).length;
-  const commentCount = tokens.filter(isComment).length;
+  const suggestionCount = tokens.filter(
+    (t) => isSuggestion(t) || applicableSuggestionIds.has(t.id),
+  ).length;
+  const commentCount = tokens.filter(
+    (t) => isComment(t) && !applicableSuggestionIds.has(t.id),
+  ).length;
 
-  const visible = tokens.filter((t) => matchesFilter(t, filter));
+  const visible = tokens.filter((t) => matchesFilter(t, filter, applicableSuggestionIds));
 
   return (
     <div className="flex h-full w-full flex-col bg-[var(--panel)] text-[var(--ink)]">

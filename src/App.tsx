@@ -1143,6 +1143,7 @@ function Workspace({
           <aside className="w-72 shrink-0 overflow-hidden border-r border-[var(--line)]">
             <NavPanel
               tokens={tokens}
+              applicableSuggestionIds={applicableSuggestionIds}
               filter={filter}
               onFilterChange={setFilter}
               activeId={activeId}
