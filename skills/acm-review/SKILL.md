@@ -278,7 +278,7 @@ acm reject "<phrase>"             # reject it (keep the original span)
 acm accept --group <id>           # accept EVERY suggestion in the group, one atomic write
 acm reject --group <id>           # reject the whole group (keep every original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>
-acm reply --batch <edits.json>    # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
+acm reply --batch <edits.json>    # batch reply-append; [{id,match,insert}] where insert is VERBATIM markup (e.g. "{>>@you: …<<}"); idempotent (re-runs skip)
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
 acm import <file.docx> [out.md]   # Word → CriticMarkup .md (tracked changes + comments); validates the result
 acm heal                          # repair markup that renders raw (multi-block anchors, trapped/nested comments); snapshot-first
