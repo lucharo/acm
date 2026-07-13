@@ -18,7 +18,10 @@ let edits: string;
 function run(...args: string[]) {
   const env = { ...process.env };
   delete env.ACM_AUTHOR; // tests assert the default @claude author
-  const p = Bun.spawnSync(["bun", CLI, ...args, "--doc", doc], { cwd: resolve(import.meta.dir, "../.."), env });
+  // timeout bounds a dispatch regression: if a verb ever falls out of VERBS,
+  // cli.ts treats it as a filename and starts a long-lived server — spawnSync
+  // would block forever and wedge the suite instead of failing. Fail fast.
+  const p = Bun.spawnSync(["bun", CLI, ...args, "--doc", doc], { cwd: resolve(import.meta.dir, "../.."), env, timeout: 15_000 });
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
 }
 
@@ -43,6 +46,9 @@ describe("acm reply dispatch", () => {
     const r = run("comment", "is this clear?", "ack");
     expect(r.code).toBe(0);
     expect(readFileSync(doc, "utf8")).toContain("<<}{>>@claude: ack<<}");
+    // pins the cmd-for-messages contract: the alias reports itself as `comment`,
+    // not the internal `op` name it dispatches to.
+    expect(r.out).toContain("acm comment: replied to");
   });
 
   test("reply --batch applies the edits.json batch", () => {
