@@ -200,6 +200,14 @@ describe("threadsSummary", () => {
     const s = threadsSummary(DOC, seenKeys);
     expect(s.find((t) => t.anchor === "quick brown fox")!.seen).toBe(true);
     expect(s.find((t) => t.anchor === "lazy dog")!.seen).toBe(false);
-    expect(threadsSummary(DOC).every((t) => !t.seen)).toBe(true);
+    expect(threadsSummary(DOC).every((t) => t.seen === false)).toBe(true);
+  });
+
+  test("a comment riding a raw suggestion token has no seen state (null) — GUI parity", () => {
+    // The GUI folds this comment into a suggestion card (accept/reject, no Mark-seen),
+    // so it must not count as unseen forever in the CLI.
+    const doc = "It was {++genuinely++}{>>@luis: is this right?<<} hard.";
+    const [t] = threadsSummary(doc);
+    expect(t.seen).toBeNull();
   });
 });

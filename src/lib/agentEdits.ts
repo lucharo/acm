@@ -8,6 +8,7 @@
 import {
   scanTokens,
   groupThreads,
+  groupCards,
   commentKey,
   formatComment,
   suggestionThreadEdit,
@@ -139,7 +140,7 @@ export interface ThreadSummary {
   authors: string[];
   count: number; // messages in the thread
   applicable: boolean; // has an applyable SUGGEST
-  seen: boolean; // the human has read every comment in the thread (GUI "seen" state)
+  seen: boolean | null; // human read every comment (GUI "seen"); null = no seen state (suggestion-attached)
   preview: string; // first comment, trimmed
 }
 
@@ -147,11 +148,21 @@ export interface ThreadSummary {
  *  whether it carries an applyable suggestion. Drives `acm threads [--json]`.
  *  `seenKeys` is the human's persisted seen-set (content keys via commentKey,
  *  from ~/.config/acm/settings.json); a thread counts as seen only when EVERY
- *  comment in it is — the same rule the GUI uses. */
+ *  comment in it is — the same rule the GUI uses. Threads whose comments ride a
+ *  raw `{++/--/~~}` suggestion card have NO seen affordance in the GUI (they're
+ *  accept/reject, not inbox items) → `seen: null`, so the unseen count can't
+ *  drift from the GUI's counter. */
 export function threadsSummary(content: string, seenKeys: Set<string> = new Set()): ThreadSummary[] {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
   const applicable = applicableSuggestionIds(content, tokens);
+  // Comments claimed by a raw-suggestion card (adjacent to a `{++/--/~~}` token) —
+  // the GUI gives these no Mark-seen toggle and keeps them out of the inbox count.
+  const suggestionComments = new Set(
+    groupCards(tokens, content)
+      .filter((c) => c.kind === "suggestion")
+      .flatMap((c) => c.comments.map((cm) => cm.id)),
+  );
   return groupThreads(comments, content).map((th) => {
     // Same gap-tolerant adjacency rule as the sidebar/apply path — a stray space
     // between span and comment must not report `anchor: null` on an applyable
@@ -165,7 +176,9 @@ export function threadsSummary(content: string, seenKeys: Set<string> = new Set(
       authors: [...new Set(th.comments.map((c) => c.author ?? "?"))],
       count: th.comments.length,
       applicable: th.comments.some((c) => applicable.has(c.id)),
-      seen: th.comments.every((c) => seenKeys.has(commentKey(c))),
+      seen: th.comments.some((c) => suggestionComments.has(c.id))
+        ? null
+        : th.comments.every((c) => seenKeys.has(commentKey(c))),
       preview: (th.comments[0]?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
     };
   });

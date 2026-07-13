@@ -169,7 +169,9 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       const marks = `${t.applicable ? " [SUGGEST]" : ""}${t.seen ? " [seen]" : ""}`;
       console.log(`#${t.id} (${t.count}) @${t.authors.join(" @")}${marks}  ${anchor}${t.preview}`);
     }
-    const unseen = summary.filter((t) => !t.seen).length;
+    // seen === null (suggestion-attached, no GUI seen state) stays out of the count,
+    // matching the GUI's inbox counter.
+    const unseen = summary.filter((t) => t.seen === false).length;
     console.log(`\n${summary.length} threads, ${unseen} unseen`);
     return;
   }

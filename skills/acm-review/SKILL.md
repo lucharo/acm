@@ -221,7 +221,10 @@ Skip any section the human is still actively rewriting.
 - **Pace by what the human has read.** Each thread in `acm threads` carries a `seen` flag
   (`[seen]` in the text listing) — the human's persisted review state from the GUI. Many
   unseen threads means they haven't caught up; prefer answering/refining those over opening
-  new ones. Read-only: only the human's editor marks seen.
+  new ones. Read-only: only the human's editor marks seen. Caveats: `seen: null` means the
+  thread rides a raw `{++/--/~~}` suggestion (accept/reject, no seen state), and seen keys
+  are global **by content** (author+body), not per-doc — an identical comment in another
+  doc shares its seen state, so don't over-trust `[seen]` across docs.
 - **Fresh eyes for the final pass.** Before the doc ships, spawn a read-only copy-editor
   subagent with an explicit voice-preservation brief (list the author's deliberate
   choices: dialect/variant, intentional fragments, their own em-dashes) returning
