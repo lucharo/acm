@@ -146,9 +146,12 @@ const threads = groupThreads(comments, text); // each thread.to = where a reply 
 `groupThreads` returns threads; **`thread.to` is exactly where you insert a reply** so
 it threads cleanly. This is the reliable way to locate anchors and avoid mis-edits.
 
-**After EVERY mutating write, run the 2-line integrity gate**: count of `{==` must equal
-`==}` and `{>>` must equal `<<}` (plus a word-count sanity delta vs your backup). A
-mismatch means a corrupted anchor — restore the backup rather than writing further.
+**After EVERY mutating write, gate on a real parse**: run `acm threads` and require zero
+errors plus the expected thread-count delta — the parser catches what delimiter counting
+can't (nested comments, literal delimiters in a body, mangled `{~~…~>…~~}`). The 2-line
+balance check (`{==` = `==}`, `{>>` = `<<}`, word-count delta vs backup) stays as a cheap
+pre-check only. A failure means a corrupted anchor — restore the backup rather than
+writing further.
 For very large reply sweeps (~20+ threads), one scripted write beats N `acm comment`
 calls: build `{offset → reply}` from `groupThreads`, insert each `{>>@you: …<<}` at its
 `thread.to` sorted DESCENDING so earlier offsets stay valid, then re-scan + gate.

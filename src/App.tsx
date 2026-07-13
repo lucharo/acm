@@ -26,7 +26,7 @@ import Header from "./components/Header";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
-import { useViewSettings, useSeenState, useDictionary, commentKey, fetchConfig } from "./hooks/useConfigState";
+import { useViewSettings, useSeenState, useDictionary, fetchConfig } from "./hooks/useConfigState";
 import {
   setCustomWords,
   setSpellVariant,
@@ -64,6 +64,7 @@ import {
   suggestionThreadEdit,
   hardWrap,
   suggestionGroupEdits,
+  commentKey,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
 import type {

@@ -156,7 +156,9 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     // what the human has already read — no live server needed. Read-only here; only
     // the GUI marks seen.
     const cfg = await readConfig<{ seen?: unknown }>("settings.json", {});
-    const seenKeys = new Set(Array.isArray(cfg.seen) ? (cfg.seen as string[]) : []);
+    const seenKeys = new Set(
+      Array.isArray(cfg.seen) ? cfg.seen.filter((k): k is string => typeof k === "string") : [],
+    );
     const summary = threadsSummary(content, seenKeys);
     if (f.json) {
       console.log(JSON.stringify(summary, null, 2));

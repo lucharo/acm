@@ -15,11 +15,11 @@ import {
   nestedCommentIssues,
   validateMarkup,
   healDocument,
+  commentKey,
 } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
 import { isComment } from "../lib/types";
 import type { SidebarCard } from "../lib/types";
-import { commentKey } from "./useConfigState";
 
 export function useDocDerived(doc: string) {
   const tokens = useMemo(() => scanTokens(doc), [doc]);
