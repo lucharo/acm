@@ -1141,6 +1141,7 @@ function Workspace({
           <aside className="w-72 shrink-0 overflow-hidden border-r border-[var(--line)]">
             <NavPanel
               tokens={tokens}
+              applicableSuggestionIds={applicableSuggestionIds}
               filter={filter}
               onFilterChange={setFilter}
               activeId={activeId}
@@ -1148,6 +1149,8 @@ function Workspace({
               onAccept={acceptToken}
               onReject={rejectToken}
               onResolve={resolveComment}
+              onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
+              onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
             />
           </aside>
         ) : null}

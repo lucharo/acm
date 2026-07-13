@@ -5,6 +5,14 @@
 // Filters (FilterMode): all / comments / suggestions / unresolved. "Unresolved"
 // is treated as comments-only: resolving removes a comment from the document, so
 // every comment still present is by definition unresolved.
+//
+// "Suggestion" here follows the glossary umbrella: inline CriticMarkup tokens
+// (isSuggestion) PLUS anchored/applyable agent SUGGEST cards — comments whose id
+// is in applicableSuggestionIds. Those cards count, filter, and render as
+// suggestions (✓ applies / ✗ rejects, mirroring the sidebar), never as comments
+// (no double-counting). An unanchored `{>>SUGGEST: …<<}` has no applyable edit,
+// so it stays a comment. All comments — SUGGEST cards included — stay in
+// "unresolved": a pending suggestion is still an open item.
 
 import type {
   CritToken,
@@ -17,6 +25,10 @@ import { authorColor } from "./authorColor";
 
 interface NavPanelProps {
   tokens: CritToken[];
+  /** Ids of SUGGEST-card comments with a resolvable anchor (see
+   *  applicableSuggestionIds in lib/criticmarkup) — tallied, filtered, and
+   *  rendered as suggestions, not comments. */
+  applicableSuggestionIds: Set<string>;
   filter: FilterMode;
   onFilterChange: (f: FilterMode) => void;
   activeId: string | null;
@@ -24,6 +36,11 @@ interface NavPanelProps {
   onAccept: (token: SuggestionToken) => void;
   onReject: (token: SuggestionToken) => void;
   onResolve: (token: CommentToken) => void;
+  /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
+   *  proposed wording (same path as the sidebar's Apply). */
+  onApplySuggestion: (comment: CommentToken) => void;
+  /** Reject a structured `SUGGEST:` comment — keep the original span (mirror of Apply). */
+  onRejectSuggestionEdit: (comment: CommentToken) => void;
 }
 
 const FILTERS: { value: FilterMode; label: string }[] = [
@@ -33,8 +50,10 @@ const FILTERS: { value: FilterMode; label: string }[] = [
   { value: "unresolved", label: "Unresolved" },
 ];
 
-/** Color for a token's type marker dot. */
-function markerColor(token: CritToken): string {
+/** Color for a token's type marker dot. `suggestCard` = an applyable SUGGEST-card
+ *  comment, which reads as a suggestion, not a comment. */
+function markerColor(token: CritToken, suggestCard: boolean): string {
+  if (suggestCard) return "var(--crit-ins)";
   switch (token.type) {
     case "insert":
       return "var(--crit-ins)";
@@ -50,7 +69,8 @@ function markerColor(token: CritToken): string {
 }
 
 /** Short single-line label for a token's type. */
-function typeLabel(token: CritToken): string {
+function typeLabel(token: CritToken, suggestCard: boolean): string {
+  if (suggestCard) return "suggestion";
   switch (token.type) {
     case "insert":
       return "insert";
@@ -79,16 +99,63 @@ function preview(token: CritToken): string {
   }
 }
 
-function matchesFilter(token: CritToken, filter: FilterMode): boolean {
+/** The ✓/✗ pair shared by inline-token accept/reject and SUGGEST-card
+ *  apply/reject — one markup source so the two can't drift. aria-labels
+ *  distinguish the three ✓ meanings in the list for screen readers. */
+function AcceptRejectPair(props: {
+  onAccept: () => void;
+  onReject: () => void;
+  acceptLabel: string;
+  rejectLabel: string;
+  acceptTitle: string;
+  rejectTitle: string;
+}) {
+  const { onAccept, onReject, acceptLabel, rejectLabel, acceptTitle, rejectTitle } = props;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAccept();
+        }}
+        className="rounded px-1 py-0.5 text-xs text-[var(--crit-ins)] hover:bg-[var(--crit-ins-bg)]"
+        title={acceptTitle}
+        aria-label={acceptLabel}
+      >
+        ✓
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onReject();
+        }}
+        className="rounded px-1 py-0.5 text-xs text-[var(--crit-del)] hover:bg-[var(--crit-del-bg)]"
+        title={rejectTitle}
+        aria-label={rejectLabel}
+      >
+        ✗
+      </button>
+    </>
+  );
+}
+
+function matchesFilter(
+  token: CritToken,
+  filter: FilterMode,
+  suggestCardIds: Set<string>,
+): boolean {
   switch (filter) {
     case "all":
       return true;
     case "comments":
-      return isComment(token);
+      return isComment(token) && !suggestCardIds.has(token.id);
     case "suggestions":
-      return isSuggestion(token);
+      return isSuggestion(token) || suggestCardIds.has(token.id);
     case "unresolved":
-      // Comments-only: every present comment is unresolved.
+      // Comments-only: every present comment is unresolved. SUGGEST cards stay
+      // in — a pending suggestion is still an open item.
       return isComment(token);
   }
 }
@@ -96,6 +163,7 @@ function matchesFilter(token: CritToken, filter: FilterMode): boolean {
 export default function NavPanel(props: NavPanelProps) {
   const {
     tokens,
+    applicableSuggestionIds,
     filter,
     onFilterChange,
     activeId,
@@ -103,12 +171,18 @@ export default function NavPanel(props: NavPanelProps) {
     onAccept,
     onReject,
     onResolve,
+    onApplySuggestion,
+    onRejectSuggestionEdit,
   } = props;
 
-  const suggestionCount = tokens.filter(isSuggestion).length;
-  const commentCount = tokens.filter(isComment).length;
+  const suggestionCount = tokens.filter(
+    (t) => isSuggestion(t) || applicableSuggestionIds.has(t.id),
+  ).length;
+  const commentCount = tokens.filter(
+    (t) => isComment(t) && !applicableSuggestionIds.has(t.id),
+  ).length;
 
-  const visible = tokens.filter((t) => matchesFilter(t, filter));
+  const visible = tokens.filter((t) => matchesFilter(t, filter, applicableSuggestionIds));
 
   return (
     <div className="flex h-full w-full flex-col bg-[var(--panel)] text-[var(--ink)]">
@@ -165,6 +239,10 @@ export default function NavPanel(props: NavPanelProps) {
           <ul className="divide-y divide-[var(--line)]">
             {visible.map((token) => {
               const isActive = token.id === activeId;
+              // Applyable SUGGEST card — a suggestion in comment clothing: label,
+              // dot, and controls must all say "suggestion", or the ✓ reads as
+              // accept while actually resolving (deleting) the proposal.
+              const suggestCard = isComment(token) && applicableSuggestionIds.has(token.id);
               return (
                 <li key={token.id}>
                   <div
@@ -187,15 +265,15 @@ export default function NavPanel(props: NavPanelProps) {
                     {/* type marker */}
                     <span
                       className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: markerColor(token) }}
-                      title={typeLabel(token)}
+                      style={{ backgroundColor: markerColor(token, suggestCard) }}
+                      title={typeLabel(token, suggestCard)}
                       aria-hidden="true"
                     />
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] uppercase tracking-wide text-[var(--faint)]">
-                          {typeLabel(token)}
+                          {typeLabel(token, suggestCard)}
                         </span>
                         {isComment(token) && (
                           <span
@@ -214,32 +292,26 @@ export default function NavPanel(props: NavPanelProps) {
                     {/* inline controls */}
                     <div className="flex shrink-0 items-center gap-0.5">
                       {isSuggestion(token) && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAccept(token);
-                            }}
-                            className="rounded px-1 py-0.5 text-xs text-[var(--crit-ins)] hover:bg-[var(--crit-ins-bg)]"
-                            title="Accept"
-                          >
-                            ✓
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onReject(token);
-                            }}
-                            className="rounded px-1 py-0.5 text-xs text-[var(--crit-del)] hover:bg-[var(--crit-del-bg)]"
-                            title="Reject"
-                          >
-                            ✗
-                          </button>
-                        </>
+                        <AcceptRejectPair
+                          onAccept={() => onAccept(token)}
+                          onReject={() => onReject(token)}
+                          acceptLabel="Accept suggestion"
+                          rejectLabel="Reject suggestion"
+                          acceptTitle="Accept"
+                          rejectTitle="Reject"
+                        />
                       )}
-                      {isComment(token) && (
+                      {suggestCard && isComment(token) && (
+                        <AcceptRejectPair
+                          onAccept={() => onApplySuggestion(token)}
+                          onReject={() => onRejectSuggestionEdit(token)}
+                          acceptLabel="Apply suggestion"
+                          rejectLabel="Reject suggestion"
+                          acceptTitle="Apply this edit — replace the highlighted span with the proposed wording"
+                          rejectTitle="Reject suggestion — keep the original wording"
+                        />
+                      )}
+                      {!suggestCard && isComment(token) && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -248,6 +320,7 @@ export default function NavPanel(props: NavPanelProps) {
                           }}
                           className="rounded px-1 py-0.5 text-[10px] font-medium text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
                           title="Resolve comment"
+                          aria-label="Resolve comment"
                         >
                           ✓
                         </button>
