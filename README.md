@@ -102,4 +102,4 @@ src/App.tsx          Integration: the buffer is ground truth; local edits deboun
 
 ## Non-goals
 
-One file, one window. No multi-doc/project management, no auth, no cloud, no multiplayer cursors, no export pipeline (it's already a `.md`).
+One doc per window. No workspace or project management (a picker for opening a doc is fine; doc collections are not). No accounts or access levels — sharing, if it ever lands, is your own tunnel exposing your local instance (ADR-0006). No cloud, no multiplayer cursors, no export pipeline (it's already a `.md`).

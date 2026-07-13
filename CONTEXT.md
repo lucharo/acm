@@ -63,6 +63,17 @@ One unit in the right margin: a comment thread, or a suggestion with its
 replies.
 _Avoid_: bubble, item.
 
+**Suggestion group**:
+A set of SUGGEST cards tagged with a shared group id, reviewed and
+accepted/rejected as one unit.
+_Avoid_: batch, changeset.
+
+**Author**:
+The self-declared name a comment or suggestion is signed with (the `@name:`
+prefix). The human and agents are authors alike; the label carries no identity
+or authentication.
+_Avoid_: user, account.
+
 ## History & recovery
 
 **History**:
