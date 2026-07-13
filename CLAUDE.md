@@ -19,3 +19,11 @@ module's absence in plain source mode never breaks typecheck. See:
 
 Both run in `build:embed` (which `build:bin` depends on). **Verify** a new embed by
 running `dist/acm <verb>` from a directory with no `node_modules` anywhere up the tree.
+
+## NUL bytes (commentKey)
+
+commentKey joins author+body with a NUL separator, written in source as the
+backslash-u-0000 escape. Typing that escape in a tool call inserts a RAW NUL byte
+(the file then reads as binary; Bash rejects the command). Author NUL-bearing
+content via python3 (backslash-x-00 in single-quoted script source); repair a
+corrupted file with a perl byte-substitution back to the escape.
