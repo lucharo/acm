@@ -62,7 +62,6 @@ import {
   nestedCommentIssues,
   validateMarkup,
   suggestionThreadEdit,
-  suggestCards,
   hardWrap,
   suggestionGroupEdits,
 } from "./lib/criticmarkup";
@@ -216,7 +215,6 @@ function Workspace({
     threads,
     cards,
     commentCards,
-    suggestCardList,
     applicableSuggestionIds,
     healIssues,
     diagnostics,
