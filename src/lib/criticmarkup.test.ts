@@ -17,7 +17,7 @@ import {
   suggestionReplacement,
   applySuggestionEdit,
   rejectSuggestionEdit,
-  inlineSuggestions,
+  suggestCards,
   suggestionGroupMembers,
   applicableSuggestionIds,
   validateMarkup,
@@ -484,7 +484,7 @@ describe("scanTokens — highlight wrapping tracked changes", () => {
   });
 
   test("a SUGGEST on such an anchor is applyable (inline + sidebar agree)", () => {
-    const sugs = inlineSuggestions(text);
+    const sugs = suggestCards(text);
     expect(sugs).toHaveLength(1);
     expect(sugs[0].replacement).toBe("span with mixed edits");
     expect(applicableSuggestionIds(text).has(sugs[0].commentId)).toBe(true);
@@ -1002,7 +1002,7 @@ describe("structured suggestions (SUGGEST: …)", () => {
       .find((c) => c.body.includes("the new span"))!;
     // a reply deep in the thread is still recognised + applyable (inherits the root's anchor)
     expect(applicableSuggestionIds(text).has(reply.id)).toBe(true);
-    expect(inlineSuggestions(text).some((s) => s.commentFrom === reply.from && s.hasReplies)).toBe(true);
+    expect(suggestCards(text).some((s) => s.commentFrom === reply.from && s.hasReplies)).toBe(true);
     const acc = applySuggestionEdit(text, reply)!;
     expect(text.slice(0, acc.from) + acc.insert + text.slice(acc.to)).toBe(
       "Pay {==the new span==}{>>@a: what about rewording?<<} here.",
@@ -1038,11 +1038,11 @@ describe("structured suggestions (SUGGEST: …)", () => {
     const pt = scanTokens("x {>>@a: SUGGEST: y<<}").find((t) => t.type === "comment") as CommentToken;
     expect(rejectSuggestionEdit("x {>>@a: SUGGEST: y<<}", pt)).toBeNull();
   });
-  test("inlineSuggestions surfaces each anchored SUGGEST with its span, replacement, and hasReplies", () => {
+  test("suggestCards surfaces each anchored SUGGEST with its span, replacement, and hasReplies", () => {
     // one bare suggestion + one with a reply thread + a plain anchored comment (ignored).
     const text =
       "A {==s1==}{>>@a: SUGGEST: r1<<} B {==s2==}{>>@b: SUGGEST: r2<<}{>>@c: good idea<<} C {==s3==}{>>@d: note<<}";
-    const list = inlineSuggestions(text);
+    const list = suggestCards(text);
     expect(list.length).toBe(2);
     const [a, b] = list;
     expect(a.replacement).toBe("r1");

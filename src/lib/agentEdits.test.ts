@@ -14,7 +14,7 @@ import {
   scanTokens,
   suggestionReplacement,
   suggestionGroupId,
-  inlineSuggestions,
+  suggestCards,
 } from "./criticmarkup";
 
 const DOC =
@@ -98,8 +98,8 @@ describe("suggestion groups (#21)", () => {
     expect(suggestionGroupId("a plain comment")).toBeNull();
   });
 
-  test("inlineSuggestions carries groupId + groupSize", () => {
-    const sugs = inlineSuggestions(GDOC);
+  test("suggestCards carries groupId + groupSize", () => {
+    const sugs = suggestCards(GDOC);
     expect(sugs).toHaveLength(3);
     const grouped = sugs.filter((s) => s.groupId === "7a");
     expect(grouped).toHaveLength(2);

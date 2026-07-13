@@ -10,7 +10,7 @@ import {
   countWords,
   groupThreads,
   groupCards,
-  inlineSuggestions,
+  suggestCards,
   suggestionGroupMembers,
   nestedCommentIssues,
   validateMarkup,
@@ -58,10 +58,10 @@ export function useDocDerived(doc: string) {
   // The anchored SUGGEST: pairs — ONE pass over the already-memoized tokens, feeding
   // both the editor's inline accept/reject layer and the sidebar's Apply gate. The
   // gate is just their ids, so "what's applyable" can't drift between the two.
-  const inlineSuggestionList = useMemo(() => inlineSuggestions(doc, tokens), [doc, tokens]);
+  const suggestCardList = useMemo(() => suggestCards(doc, tokens), [doc, tokens]);
   const applicableSuggestionIds = useMemo(
-    () => new Set(inlineSuggestionList.map((s) => s.commentId)),
-    [inlineSuggestionList],
+    () => new Set(suggestCardList.map((s) => s.commentId)),
+    [suggestCardList],
   );
 
   // Doc health: comments accidentally inserted INSIDE another comment's body
@@ -84,11 +84,11 @@ export function useDocDerived(doc: string) {
   // group-wide Apply/Reject controls. Only real groups (≥2 members) qualify.
   const suggestionGroupOf = useMemo(() => {
     const map = new Map<string, { id: string; size: number }>();
-    for (const s of inlineSuggestionList) {
+    for (const s of suggestCardList) {
       if (s.groupId && s.groupSize > 1) map.set(s.commentId, { id: s.groupId, size: s.groupSize });
     }
     return map;
-  }, [inlineSuggestionList]);
+  }, [suggestCardList]);
 
   // groupId → its members, flattened to {old span, new wording} pairs in document
   // order — the data every "see the whole group together" view (popover / inline /
@@ -97,10 +97,10 @@ export function useDocDerived(doc: string) {
   const groupMembersOf = useMemo(() => {
     const map = new Map<string, SuggestionGroupMember[]>();
     const ids = new Set<string>();
-    for (const s of inlineSuggestionList) if (s.groupId && s.groupSize > 1) ids.add(s.groupId);
+    for (const s of suggestCardList) if (s.groupId && s.groupSize > 1) ids.add(s.groupId);
     for (const id of ids) map.set(id, suggestionGroupMembers(doc, id, tokens));
     return map;
-  }, [inlineSuggestionList, doc, tokens]);
+  }, [suggestCardList, doc, tokens]);
 
   return {
     tokens,
@@ -110,7 +110,7 @@ export function useDocDerived(doc: string) {
     threads,
     cards,
     commentCards,
-    inlineSuggestionList,
+    suggestCardList,
     applicableSuggestionIds,
     healIssues,
     diagnostics,

@@ -31,8 +31,8 @@ import {
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Facet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { Extension, Range, RangeSet } from "@codemirror/state";
-import { inlineSuggestions } from "../lib/criticmarkup";
-import type { InlineSuggestion } from "../lib/criticmarkup";
+import { suggestCards } from "../lib/criticmarkup";
+import type { SuggestCard } from "../lib/criticmarkup";
 
 // ── Active / seen highlight state (App → editor bridge) ───────────────────────
 // App tells the editor which comment-anchor highlights are ACTIVE (selected) or
@@ -87,10 +87,10 @@ export const critHighlightField = StateField.define<CritHighlightState>({
 // suggestion-span and which comment is an inline suggestion. Deriving in-state
 // (rather than a React round-trip) means classification can never lag the doc —
 // no one-frame flicker of suggestion widgets collapsing to plain dots.
-export const inlineSuggestionsField = StateField.define<InlineSuggestion[]>({
-  create: (state) => inlineSuggestions(state.doc.toString()),
+export const suggestCardsField = StateField.define<SuggestCard[]>({
+  create: (state) => suggestCards(state.doc.toString()),
   update(value, tr) {
-    return tr.docChanged ? inlineSuggestions(tr.newDoc.toString()) : value;
+    return tr.docChanged ? suggestCards(tr.newDoc.toString()) : value;
   },
 });
 
@@ -308,7 +308,7 @@ function buildMarks(view: EditorView): DecorationSet {
   // Anchor highlights of SUGGEST: pairs render as a substitution's struck "old"
   // half (the proposed wording is shown by the inline widget), not yellow.
   const suggestHls = new Set(
-    (view.state.field(inlineSuggestionsField, false) ?? []).map((s) => s.hlFrom),
+    (view.state.field(suggestCardsField, false) ?? []).map((s) => s.hlFrom),
   );
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
@@ -388,7 +388,7 @@ const markPlugin = ViewPlugin.fromClass(
         // first-paint parse boundary and everything beyond renders raw.
         syntaxTree(u.state) !== syntaxTree(u.startState) ||
         u.startState.field(critHighlightField, false) !== u.state.field(critHighlightField, false) ||
-        u.startState.field(inlineSuggestionsField, false) !== u.state.field(inlineSuggestionsField, false)
+        u.startState.field(suggestCardsField, false) !== u.state.field(suggestCardsField, false)
       ) {
         this.decorations = buildMarks(u.view);
       }
@@ -402,7 +402,7 @@ function buildWidgets(view: EditorView): DecorationSet {
   // SUGGEST: comments → an inline suggestion widget (proposed wording + ✓/✗)
   // instead of the plain 💬 bubble. Keyed by the comment's start offset.
   const suggestByComment = new Map(
-    (view.state.field(inlineSuggestionsField, false) ?? []).map((s) => [s.commentFrom, s]),
+    (view.state.field(suggestCardsField, false) ?? []).map((s) => [s.commentFrom, s]),
   );
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
@@ -487,7 +487,7 @@ const widgetPlugin = ViewPlugin.fromClass(
         u.docChanged ||
         u.viewportChanged ||
         syntaxTree(u.state) !== syntaxTree(u.startState) || // async parse progress (see markPlugin)
-        u.startState.field(inlineSuggestionsField, false) !== u.state.field(inlineSuggestionsField, false)
+        u.startState.field(suggestCardsField, false) !== u.state.field(suggestCardsField, false)
       ) {
         this.decorations = buildWidgets(u.view);
       }
@@ -587,7 +587,7 @@ const criticAtomicRanges = EditorView.atomicRanges.of((view): RangeSet<Decoratio
 export function criticMarkupExtension(): Extension {
   return [
     critHighlightField,
-    inlineSuggestionsField,
+    suggestCardsField,
     EditorView.outerDecorations.of((view) =>
       view.plugin(markPlugin)?.decorations ?? Decoration.none,
     ),

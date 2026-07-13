@@ -1099,7 +1099,7 @@ export function suggestionGroupId(body: string): string | null {
  * Tokens may be passed in to avoid re-scanning when the caller already has them.
  *
  * Exported so every reader of "what span is this thread about" (sidebar,
- * inlineSuggestions, `acm threads`) shares the ONE adjacency rule.
+ * suggestCards, `acm threads`) shares the ONE adjacency rule.
  */
 export function anchorHighlightFor(
   content: string,
@@ -1221,7 +1221,7 @@ export function rejectSuggestionEdit(
  *  highlight to strike, the comment to replace with the proposed wording + ✓/✗,
  *  the replacement text, and whether a real discussion thread hangs off it (so the
  *  unified render doesn't hide that replies exist). */
-export interface InlineSuggestion {
+export interface SuggestCard {
   hlFrom: number; // anchor highlight node start (render its span struck)
   hlTo: number;
   commentId: string; // the SUGGEST: comment's token id (so callers can key on it)
@@ -1241,11 +1241,11 @@ export interface InlineSuggestion {
  * view stays presentational: it places decorations on real lezer nodes and only
  * consults this list to classify which highlight/comment is a suggestion.
  */
-export function inlineSuggestions(content: string, tokens?: CritToken[]): InlineSuggestion[] {
+export function suggestCards(content: string, tokens?: CritToken[]): SuggestCard[] {
   const toks = tokens ?? scanTokens(content);
   const comments = toks.filter((t): t is CommentToken => t.type === "comment");
   const threads = groupThreads(comments, content);
-  const out: InlineSuggestion[] = [];
+  const out: SuggestCard[] = [];
   const perAnchor = new Map<number, number>(); // hlFrom → suggestions seen so far
   for (const t of comments) {
     const repl = suggestionReplacement(t.body);
@@ -1301,7 +1301,7 @@ export function suggestionGroupEdits(
 ): { edits: { from: number; to: number; insert: string }[]; skipped: number } {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
-  const members = inlineSuggestions(content, tokens).filter((s) => s.groupId === groupId);
+  const members = suggestCards(content, tokens).filter((s) => s.groupId === groupId);
   const edits: { from: number; to: number; insert: string }[] = [];
   let skipped = 0;
   for (const m of members) {
@@ -1335,12 +1335,12 @@ export function applyRangedEdits(
 
 /**
  * Ids of every `SUGGEST:` comment whose Apply is REAL (has a resolvable anchor),
- * for gating the sidebar Apply button. Exactly the comments {@link inlineSuggestions}
+ * for gating the sidebar Apply button. Exactly the comments {@link suggestCards}
  * surfaces — derived from that one pass rather than a second scan + anchor-resolve,
  * so the sidebar gate and the inline layer can never disagree on what's applyable.
  */
 export function applicableSuggestionIds(content: string, tokens?: CritToken[]): Set<string> {
-  return new Set(inlineSuggestions(content, tokens).map((s) => s.commentId));
+  return new Set(suggestCards(content, tokens).map((s) => s.commentId));
 }
 
 /** One member of a suggestion group, flattened for a "review the whole set" view:
@@ -1360,7 +1360,7 @@ export interface SuggestionGroupMember {
  * Every member of suggestion group `groupId`, in document order, flattened to
  * {old span, new wording} pairs — the data a "see the whole group together" view
  * (popover / inline-expand / grouped panel) renders before an Apply-all. Derived
- * from the SAME {@link inlineSuggestions} pass that drives the inline widgets and
+ * from the SAME {@link suggestCards} pass that drives the inline widgets and
  * {@link suggestionGroupEdits}, so the preview can never disagree with what
  * Apply-all will actually do. The anchored span is read from the member's own
  * highlight token (its `.inner`), so a stacked anchor reads its true span text.
@@ -1374,7 +1374,7 @@ export function suggestionGroupMembers(
   const hlByFrom = new Map(
     toks.filter((t) => t.type === "highlight").map((t) => [t.from, t]),
   );
-  return inlineSuggestions(content, toks)
+  return suggestCards(content, toks)
     .filter((s) => s.groupId === groupId)
     .map((s) => {
       const hl = hlByFrom.get(s.hlFrom);

@@ -62,7 +62,7 @@ import {
   nestedCommentIssues,
   validateMarkup,
   suggestionThreadEdit,
-  inlineSuggestions,
+  suggestCards,
   hardWrap,
   suggestionGroupEdits,
 } from "./lib/criticmarkup";
@@ -216,7 +216,7 @@ function Workspace({
     threads,
     cards,
     commentCards,
-    inlineSuggestionList,
+    suggestCardList,
     applicableSuggestionIds,
     healIssues,
     diagnostics,
@@ -1066,7 +1066,7 @@ function Workspace({
   }, [editor, activeAnchorFrom, seenAnchorFroms, busyAnchorFroms]);
 
   // (Inline SUGGEST rendering needs no push: the editor derives the anchored
-  // pairs from the document itself — see inlineSuggestionsField.)
+  // pairs from the document itself — see suggestCardsField.)
 
   // ── Mobile comment surface ────────────────────────────────────────────────────
   // On a phone the right-margin column is hidden (commentsVisible=false), so the
