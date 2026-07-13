@@ -5,6 +5,85 @@ CriticMarkup: tracked insertions/deletions, inline comments, and suggestions.
 This glossary fixes the words for the concepts that recur across the product, so
 the UI, the code, and these docs all say the same thing.
 
+## Suggestions & review
+
+**Suggestion**:
+Any proposed change to the document awaiting a human accept/reject decision.
+An umbrella term with exactly two encodings: the inline suggestion and the
+SUGGEST card.
+_Avoid_: proposal, edit request, change request.
+
+**Inline suggestion**:
+A suggestion encoded natively in CriticMarkup — `{++add++}`, `{--delete--}`,
+or `{~~old~>new~~}` — sitting directly in the prose.
+_Avoid_: tracked change.
+
+**SUGGEST card**:
+A suggestion encoded as a highlight + comment pair,
+`{==span==}{>>@author: SUGGEST: replacement<<}`. The corruption-proof envelope
+agents use instead of writing inline markup at precise offsets.
+_Avoid_: suggestion comment, structured comment.
+
+**Highlight**:
+The `{==…==}` construct itself. Standalone, it is a human marking (rendered
+yellow) and is not a suggestion.
+_Avoid_: mark, span markup.
+
+**Anchor**:
+The role a highlight plays when a comment thread or SUGGEST card rides on it —
+the span of prose the card is about.
+_Avoid_: target, attachment point.
+
+**Thread**:
+A run of comments sharing an anchor, rendered as one card. The first comment is
+the root; the rest are replies.
+_Avoid_: conversation, discussion.
+
+**Accept**:
+The verdict that applies a suggestion — the proposed text replaces the original
+— and strips its markup from the file.
+
+**Reject**:
+The verdict that declines a suggestion — the original text stays — and strips
+its markup from the file.
+
+**Resolve**:
+The verdict that strips a whole thread (comments and anchor markup) from the
+file, keeping the prose. Resolved means no longer in the file; there is no
+resolved-but-present state.
+_Avoid_: close, dismiss, done.
+
+**Seen**:
+Per-thread review state marking what has already been read. Shared context:
+both the human and agents should be able to read it.
+_Avoid_: read, viewed.
+
+**Card**:
+One unit in the right margin: a comment thread, or a suggestion with its
+replies.
+_Avoid_: bubble, item.
+
+## History & recovery
+
+**History**:
+The automatically recorded sequence of the document's states, kept while ACM
+edits the doc. Each entry is a version.
+_Avoid_: journal, log.
+
+**Version**:
+A document state recorded in the history; any version can be restored.
+_Avoid_: revision. (The save-protocol's version counter is machinery, not this.)
+
+**Snapshot**:
+A timestamped copy of the document taken automatically before a mutating agent
+operation — the safety net when a single write goes wrong.
+_Avoid_: backup.
+
+**Restore**:
+Replace the document's content with a chosen version from the history. Restoring
+snapshots first, so it is itself reversible.
+_Avoid_: rollback, revert.
+
 ## Images
 
 **Asset**:
