@@ -22,8 +22,9 @@ running `dist/acm <verb>` from a directory with no `node_modules` anywhere up th
 
 ## NUL bytes (commentKey)
 
-commentKey joins author+body with a NUL separator, written in source as the
-backslash-u-0000 escape. Typing that escape in a tool call inserts a RAW NUL byte
-(the file then reads as binary; Bash rejects the command). Author NUL-bearing
-content via python3 (backslash-x-00 in single-quoted script source); repair a
-corrupted file with a perl byte-substitution back to the escape.
+commentKey joins author+body with a NUL separator (author+body only — no anchor
+hash), written in source as the \u0000 escape. Typing that escape in a
+tool call inserts a RAW NUL byte (the file then reads as binary; Bash rejects the
+command). Author NUL-bearing content via python3 (\x00 in single-quoted
+script source). Repair a corrupted file by substituting the raw NUL back to the
+escape text, e.g. `perl -0pi -e 's/\x00/\\u0000/g' <file>`.
