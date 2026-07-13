@@ -74,6 +74,41 @@ prefix). The human and agents are authors alike; the label carries no identity
 or authentication.
 _Avoid_: user, account.
 
+**Applicable**:
+The property of a SUGGEST card whose anchor still resolves in the document, so
+accepting it is a real action. A non-applicable card still shows its proposal
+but offers no verdict.
+_Avoid_: valid, actionable.
+
+**Heal**:
+Mechanically repair markup that renders raw (broken or mis-nested constructs)
+so it renders as intended again.
+_Avoid_: fix (reserved for spelling), repair.
+
+**Prose**:
+The document text outside any CriticMarkup construct — what remains when every
+suggestion, comment, and highlight is stripped.
+_Avoid_: content, body text.
+
+## Reading & instances
+
+**Page view**:
+The document rendered as A4 sheets: the sheet styling, the page-break markers,
+and the page tally are one concept behind one toggle, on by default.
+_Avoid_: page breaks (as a separate setting), sheet mode.
+
+**Page**:
+The A4 unit page view divides the document into.
+
+**Instance**:
+One running ACM server bound to one document on one port.
+_Avoid_: session, editor process.
+
+**Live**:
+The property of a document currently owned by a running instance. Writes to a
+live document route through its instance so they merge instead of clobbering.
+_Avoid_: open, active.
+
 ## History & recovery
 
 **History**:
