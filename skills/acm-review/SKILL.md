@@ -152,6 +152,8 @@ Using the same import pattern as above:
 
 ```ts
 import { validateMarkup, nestedCommentIssues, groupThreads, scanTokens } from "<acm>/src/lib/criticmarkup";
+const before = await Bun.file(BACKUP).text(); // your pre-write snapshot
+const after = await Bun.file(DOC).text();     // re-read AFTER your write
 // DELTA, not absolute: live docs can carry pre-existing diagnostics the human made
 // (that's what `acm heal` is for) — only YOUR write adding new ones is corruption.
 const diags = (t: string) => validateMarkup(t).length + nestedCommentIssues(t).length;
