@@ -8,7 +8,7 @@
 
 import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
-import { liveInstances, probeInstance } from "../server/instances";
+import { liveInstances, probeInstanceState, isConnectionRefused } from "../server/instances";
 import { listHistory, showVersion, recordHistory } from "../server/history";
 import { readConfig, writeConfig } from "../server/config";
 import {
@@ -56,10 +56,19 @@ async function docPathFrom(f: Flags): Promise<string> {
   // No explicit doc → the one open in the running editor (instance registry).
   // Exactly one live instance resolves; several is ambiguous — never guess.
   // Probe each candidate's port too: a recycled PID can impersonate a dead
-  // server, but it won't answer /api/doc.
+  // server, but it won't answer /api/doc. An UNREACHABLE candidate (probe timed
+  // out — possibly alive but slow) makes resolution ambiguous the same way a
+  // second live editor does: dropping it could pick the WRONG document.
   const registered = await liveInstances();
-  const probes = await Promise.all(registered.map(probeInstance));
-  const live = registered.filter((_, i) => probes[i]);
+  const states = await Promise.all(registered.map(probeInstanceState));
+  const unreachable = registered.filter((_, i) => states[i] === "unreachable");
+  if (unreachable.length > 0) {
+    console.error("acm: an ACM editor did not answer its port (busy machine?) — pass --doc <file.md> rather than guessing:");
+    for (const e of unreachable) console.error(`  :${e.port} → ${e.doc} (unreachable)`);
+    console.error("  (if an editor is actually gone, remove its entry from ~/.config/acm/instances.json)");
+    process.exit(1);
+  }
+  const live = registered.filter((_, i) => states[i] === "live");
   if (live.length === 1) {
     console.error(`acm: using ${live[0].doc} (open in ACM on :${live[0].port})`);
     return live[0].doc;
@@ -75,11 +84,19 @@ async function docPathFrom(f: Flags): Promise<string> {
 
 /** The live ACM server serving `docPath`, if one is open (pid-alive + answers its
  *  port). When present, agent writes go THROUGH it so they merge with the human's
- *  in-editor edits instead of racing the file (issue #38). */
+ *  in-editor edits instead of racing the file (issue #38). An owner whose probe
+ *  timed out (rather than refused) still counts: the editor may be alive but slow
+ *  (loaded machine), so the write must still route through it (or fail), never
+ *  fall back to a direct write that could clobber unsaved human edits. */
 async function liveServerFor(docPath: string): Promise<{ port: number } | null> {
   const owners = (await liveInstances()).filter((e) => e.doc === docPath);
-  for (const e of owners) if (await probeInstance(e)) return { port: e.port };
-  return null;
+  let unreachable: number | null = null;
+  for (const e of owners) {
+    const state = await probeInstanceState(e);
+    if (state === "live") return { port: e.port };
+    if (state === "unreachable" && unreachable === null) unreachable = e.port;
+  }
+  return unreachable === null ? null : { port: unreachable };
 }
 
 export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
@@ -270,17 +287,41 @@ async function commitWrite(
   let final = after;
   let viaEditorPort: number | null = null;
   if (live) {
-    const res = await fetch(`http://localhost:${live.port}/api/agent-write`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ base: before, content: after }),
-    }).catch(() => null);
+    let res: Response | null = null;
+    let refused = false;
+    let failure: unknown;
+    try {
+      res = await fetch(`http://127.0.0.1:${live.port}/api/agent-write`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ base: before, content: after }),
+        // Env override exists for the test suite (a black-holed-port test shouldn't
+        // cost 10 real seconds); users never set it.
+        signal: AbortSignal.timeout(Number(process.env.ACM_AGENT_WRITE_TIMEOUT_MS) || 10_000),
+      });
+    } catch (err) {
+      refused = isConnectionRefused(err);
+      failure = err;
+    }
 
-    if (!res) {
-      // No response at all (connection refused): the editor died between the liveness
-      // probe and this POST. With no live server there's no second writer to race, so
-      // a direct write is safe (the pre-edit snapshot above is the recovery net).
+    if (!res && refused) {
+      // Connection REFUSED: the editor died between the liveness probe and this POST.
+      // With no live server there's no second writer to race, so a direct write is
+      // safe (the pre-edit snapshot above is the recovery net).
       await Bun.write(docPath, after);
+    } else if (!res) {
+      // Timed out / indeterminate — the editor may be ALIVE but slow or blocked, and
+      // may hold unsaved human edits. Never direct-write over a possibly-live editor:
+      // fail loudly instead (the same never-fake-success stance as the skew case below).
+      console.error(
+        `acm ${cmd}: the ACM editor on :${live.port} did not respond to the write ` +
+          `(${(failure as Error)?.message ?? "no response"}) — NOT falling back to a direct ` +
+          `write, which could clobber unsaved edits in it. Nothing written. Retry in a moment; ` +
+          `if that editor is actually gone, remove its :${live.port} entry from ` +
+          `~/.config/acm/instances.json.`,
+      );
+      if (snap) console.error(`  (pre-edit backup → ${snap})`);
+      process.exit(1);
     } else {
       const body = (await res.json().catch(() => null)) as
         | { version?: number; content?: string; conflict?: string }
@@ -357,10 +398,28 @@ async function spellConfig(): Promise<{
   };
 }
 
-/** Any live ACM server (settings are global, not per-doc, so any owner will do). */
+/** Any live ACM server (settings are global, not per-doc, so any owner will do).
+ *  Callers writing settings fall back to a direct writeConfig when this is null,
+ *  so an UNREACHABLE editor (probe timed out — possibly alive but slow) must not
+ *  collapse to "none": that direct write would race the running server's own
+ *  settings writes. Fail loudly instead, same stance as commitWrite. */
 async function anyLiveServer(): Promise<{ port: number } | null> {
-  for (const e of await liveInstances()) if (await probeInstance(e)) return { port: e.port };
-  return null;
+  // Scan ALL instances before deciding: settings are global, so ANY unreachable
+  // editor makes the write unsafe — routing through a different live one doesn't
+  // help, and the answer must not depend on registry (port) order.
+  const registered = await liveInstances();
+  const states = await Promise.all(registered.map(probeInstanceState));
+  const wedged = registered.find((_, i) => states[i] === "unreachable");
+  if (wedged) {
+    console.error(
+      `acm: the ACM editor on :${wedged.port} did not answer its port (busy machine?) — ` +
+        `not writing settings behind its back. Nothing written. Retry in a moment; if that ` +
+        `editor is actually gone, remove its :${wedged.port} entry from ~/.config/acm/instances.json.`,
+    );
+    process.exit(1);
+  }
+  const live = registered.find((_, i) => states[i] === "live");
+  return live ? { port: live.port } : null;
 }
 
 /** 1-based line number of `offset` in `text` (for the list view). */
@@ -423,10 +482,11 @@ async function runSpellAdd(f: Flags): Promise<void> {
 
   const live = await anyLiveServer();
   if (live) {
-    const res = await fetch(`http://localhost:${live.port}/api/settings`, {
+    const res = await fetch(`http://127.0.0.1:${live.port}/api/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ dictionary: merged }),
+      signal: AbortSignal.timeout(10_000),
     }).catch(() => null);
     if (!res || !res.ok) {
       console.error(`acm spell add: the ACM editor on :${live.port} did not accept the update — nothing written.`);
@@ -468,10 +528,11 @@ async function runSpellIgnore(f: Flags, docPath: string): Promise<void> {
 
   const live = await anyLiveServer();
   if (live) {
-    const res = await fetch(`http://localhost:${live.port}/api/settings`, {
+    const res = await fetch(`http://127.0.0.1:${live.port}/api/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ spellIgnore: map }),
+      signal: AbortSignal.timeout(10_000),
     }).catch(() => null);
     if (!res || !res.ok) {
       console.error(`acm spell ignore: the ACM editor on :${live.port} did not accept the update — nothing written.`);

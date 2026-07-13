@@ -54,28 +54,51 @@ export async function liveInstances(): Promise<InstanceEntry[]> {
     .sort((a, b) => a.port - b.port);
 }
 
+/** What a port probe established: `live` (answered /api/doc — ANY HTTP answer,
+ *  even a 5xx, is proof of life: an erroring-but-alive server must still gate
+ *  writes, and a false "alive" fails loudly at the agent-write POST), `dead`
+ *  (connection refused — nothing listens there), or `unreachable` (timed out or
+ *  otherwise indeterminate — the editor may be alive but slow/blocked). Writers
+ *  must treat `unreachable` as possibly-live and NOT fall back to a direct write:
+ *  a loaded machine turning a live editor's slow accept into a "dead" verdict is
+ *  exactly the silent-clobber path issue #38 exists to close. */
+export type ProbeState = "live" | "dead" | "unreachable";
+
+/** Was this fetch rejection a connection REFUSED (nothing listening — truly dead)?
+ *  Bun surfaces it as `err.code === "ConnectionRefused"` today; check `cause` and
+ *  `name` too so a Bun upgrade moving the code can't silently turn every refusal
+ *  into "unreachable" (which would wedge CLI writes behind a stale registry entry).
+ *  The single discriminator for every caller — don't re-derive it inline. */
+export function isConnectionRefused(err: unknown): boolean {
+  const e = err as { code?: unknown; name?: unknown; cause?: { code?: unknown; name?: unknown } };
+  return (
+    e?.code === "ConnectionRefused" ||
+    e?.name === "ConnectionRefused" ||
+    e?.cause?.code === "ConnectionRefused" ||
+    e?.cause?.name === "ConnectionRefused"
+  );
+}
+
 /** Second-factor liveness: a recycled PID can impersonate a dead server, but it
- *  won't answer ACM's /api/doc on the registered port. Timeouts retry (up to 3
- *  attempts): a single short-timeout fetch false-negatives under CPU contention
- *  (a cold bun process is still transpiling while the fetch clock runs), and a
- *  false "dead" here lets a mutating verb direct-write past a LIVE editor — the
- *  exact clobber #38 guards against. Only a REFUSED connection is a definitive
- *  fast "dead" (nothing listens there); every other failure — timeout, reset, a
- *  transient client-side error — retries, because the safety asymmetry points
- *  that way: a false "alive" fails loudly at the agent-write POST, a false
- *  "dead" silently clobbers. ANY HTTP answer — even a 5xx — is proof of life:
- *  an erroring-but-alive server must still gate writes. */
-export async function probeInstance(e: InstanceEntry): Promise<boolean> {
-  for (let attempt = 0; attempt < 3; attempt++) {
+ *  won't answer ACM's /api/doc on the registered port. Short timeout — local.
+ *  127.0.0.1, not localhost: Bun's fetch can resolve localhost to ::1 while
+ *  Bun.serve listens on IPv4 only, and the mismatched connect HANGS (not refuses)
+ *  until the abort — a false "dead" for a perfectly live editor. */
+export async function probeInstanceState(e: InstanceEntry): Promise<ProbeState> {
+  const attempt = async (budgetMs: number): Promise<ProbeState> => {
     try {
-      await fetch(`http://localhost:${e.port}/api/doc`, {
-        signal: AbortSignal.timeout(1000),
+      await fetch(`http://127.0.0.1:${e.port}/api/doc`, {
+        signal: AbortSignal.timeout(budgetMs),
       });
-      return true;
+      return "live"; // any HTTP answer — even a 5xx — is proof of life (see ProbeState)
     } catch (err) {
-      if ((err as { code?: string })?.code === "ConnectionRefused") return false;
-      if (attempt < 2) await Bun.sleep(100);
+      return isConnectionRefused(err) ? "dead" : "unreachable";
     }
-  }
-  return false;
+  };
+  // Fast path 400ms; but `unreachable` is FATAL for the write paths, so before
+  // declaring it, retry once with a generous budget — a single short-timeout fetch
+  // false-negatives under CPU contention (a cold bun process is still transpiling
+  // while the fetch clock runs), and that's the very case this exists for.
+  const fast = await attempt(400);
+  return fast === "unreachable" ? attempt(3_000) : fast;
 }

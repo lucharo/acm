@@ -41,7 +41,9 @@ async function boot(seed: string): Promise<{ url: string; docPath: string }> {
   // Port 0 → the OS hands out a free ephemeral port, so parallel runs can't collide.
   const srv = startServer({ docPath, port: 0, staticDir: "./dist" });
   live.push(srv);
-  const url = `http://localhost:${srv.server.port}`;
+  // 127.0.0.1, not localhost: Bun's fetch can resolve localhost to ::1 while the
+  // server listens on IPv4 only, and that connect hangs instead of refusing.
+  const url = `http://127.0.0.1:${srv.server.port}`;
   for (let i = 0; i < 100; i++) {
     try {
       if ((await fetch(`${url}/api/doc`)).ok) return { url, docPath };
@@ -126,7 +128,12 @@ describe("#38 — multi-region agent edit doesn't falsely 409 on a human edit be
 });
 
 describe("#38 — CLI never fakes success against a non-agent-write server (version skew)", () => {
-  test("an older editor (serves HTML for /api/agent-write) → CLI hard-fails, no direct write", async () => {
+  // 20s timeout: this test pays a full `bun cli.ts` subprocess boot (transpiling the
+  // whole CLI graph, ~1–2.5s idle, worse under machine load) that the in-process
+  // tests above don't; the default 5s trips on a loaded machine.
+  test(
+    "an older editor (serves HTML for /api/agent-write) → CLI hard-fails, no direct write",
+    async () => {
     const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
     const seed = "The quick brown fox jumps over the lazy dog.\n";
     await Bun.write(docPath, seed);
@@ -162,9 +169,84 @@ describe("#38 — CLI never fakes success against a non-agent-write server (vers
     const exit = await proc.exited;
     oldAcm.stop();
 
-    expect(exit).not.toBe(0); // hard failure, not a fabricated success
-    expect(await disk(docPath)).toBe(seed); // and the doc was NOT blindly direct-written
-  });
+      expect(exit).not.toBe(0); // hard failure, not a fabricated success
+      expect(await disk(docPath)).toBe(seed); // and the doc was NOT blindly direct-written
+    },
+    20_000,
+  );
+
+  test(
+    "a registry entry whose port REFUSES (editor truly gone) → CLI direct-writes fine",
+    async () => {
+      // The counterpart guard: refused ≠ unreachable. A pid-alive registry entry
+      // pointing at a closed port is a dead editor, and the CLI must still work
+      // (direct write, single writer) rather than wedging behind the stale entry.
+      const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
+      const seed = "The quick brown fox jumps over the lazy dog.\n";
+      await Bun.write(docPath, seed);
+
+      const ghost = Bun.serve({ port: 0, fetch: () => new Response("x") });
+      const port = ghost.port;
+      ghost.stop(true); // port now guaranteed closed — probes get ConnectionRefused
+
+      const cfg = join(process.env.XDG_CONFIG_HOME!, "acm");
+      mkdirSync(cfg, { recursive: true });
+      await Bun.write(
+        join(cfg, "instances.json"),
+        JSON.stringify({
+          [String(port)]: { port, doc: docPath, pid: process.pid, startedAt: "2026-06-16T00:00:00Z" },
+        }),
+      );
+
+      const proc = Bun.spawn(["bun", "cli.ts", "suggest", "lazy", "sleepy", "--doc", docPath], {
+        cwd: process.cwd(),
+        env: { ...process.env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const exit = await proc.exited;
+
+      expect(exit).toBe(0); // dead editor never blocks the CLI
+      expect(await disk(docPath)).toContain("SUGGEST: sleepy"); // the edit landed directly
+    },
+    20_000,
+  );
+
+  test(
+    "a registry entry whose port accepts but never answers (UNREACHABLE) → CLI hard-fails, no direct write",
+    async () => {
+      // The core #38 guarantee end-to-end: an indeterminate editor (alive but
+      // wedged/slow — here a black-holed socket) must produce exit ≠ 0 with the
+      // doc byte-identical, never a silent direct write.
+      const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
+      const seed = "The quick brown fox jumps over the lazy dog.\n";
+      await Bun.write(docPath, seed);
+
+      const blackhole = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+      const cfg = join(process.env.XDG_CONFIG_HOME!, "acm");
+      mkdirSync(cfg, { recursive: true });
+      await Bun.write(
+        join(cfg, "instances.json"),
+        JSON.stringify({
+          [String(blackhole.port)]: { port: blackhole.port, doc: docPath, pid: process.pid, startedAt: "2026-06-16T00:00:00Z" },
+        }),
+      );
+
+      const proc = Bun.spawn(["bun", "cli.ts", "suggest", "lazy", "sleepy", "--doc", docPath], {
+        cwd: process.cwd(),
+        // Shrink the agent-write ceiling so this test doesn't cost 10 real seconds.
+        env: { ...process.env, ACM_AGENT_WRITE_TIMEOUT_MS: "1500" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const exit = await proc.exited;
+      blackhole.stop(true);
+
+      expect(exit).not.toBe(0); // hard failure, not a fabricated success
+      expect(await disk(docPath)).toBe(seed); // nothing written
+    },
+    20_000,
+  );
 });
 
 describe("#38 — a true same-line overlap is an honest conflict, human never loses", () => {
