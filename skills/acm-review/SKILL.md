@@ -288,7 +288,8 @@ acm restore <sha>                 # restore the doc to a history version (snapsh
 
 Typical loop: `acm threads --json` to see open threads → `acm reply` / `acm suggest`
 per thread (or one `acm reply --batch edits.json`) → `acm accept`/`reject` to act on
-suggestions. `--author <name>` stamps the voice (default `claude`).
+suggestions. `--author <name>` stamps the voice (default `claude`) on the
+single-thread verbs; on `--batch` the author lives inside each `insert` string.
 
 ## HTTP API / direct file (fallbacks)
 
