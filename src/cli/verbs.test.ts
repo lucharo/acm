@@ -16,7 +16,9 @@ let doc: string;
 let edits: string;
 
 function run(...args: string[]) {
-  const p = Bun.spawnSync(["bun", CLI, ...args, "--doc", doc], { cwd: resolve(import.meta.dir, "../..") });
+  const env = { ...process.env };
+  delete env.ACM_AUTHOR; // tests assert the default @claude author
+  const p = Bun.spawnSync(["bun", CLI, ...args, "--doc", doc], { cwd: resolve(import.meta.dir, "../.."), env });
   return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
 }
 
@@ -35,6 +37,12 @@ describe("acm reply dispatch", () => {
     expect(r.code).toBe(0);
     expect(readFileSync(doc, "utf8")).toContain("<<}{>>@claude: yes — resolving<<}");
     expect(r.out).toContain("acm reply: replied to");
+  });
+
+  test("comment alias threads the same single reply (and stays registered in VERBS)", () => {
+    const r = run("comment", "is this clear?", "ack");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toContain("<<}{>>@claude: ack<<}");
   });
 
   test("reply --batch applies the edits.json batch", () => {
