@@ -8,6 +8,7 @@
 import {
   scanTokens,
   groupThreads,
+  commentKey,
   formatComment,
   suggestionThreadEdit,
   resolveAnchorEdit,
@@ -138,12 +139,16 @@ export interface ThreadSummary {
   authors: string[];
   count: number; // messages in the thread
   applicable: boolean; // has an applyable SUGGEST
+  seen: boolean; // the human has read every comment in the thread (GUI "seen" state)
   preview: string; // first comment, trimmed
 }
 
 /** Read/verify surface: every thread with its anchor span, authors, count, and
- *  whether it carries an applyable suggestion. Drives `acm threads [--json]`. */
-export function threadsSummary(content: string): ThreadSummary[] {
+ *  whether it carries an applyable suggestion. Drives `acm threads [--json]`.
+ *  `seenKeys` is the human's persisted seen-set (content keys via commentKey,
+ *  from ~/.config/acm/settings.json); a thread counts as seen only when EVERY
+ *  comment in it is — the same rule the GUI uses. */
+export function threadsSummary(content: string, seenKeys: Set<string> = new Set()): ThreadSummary[] {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
   const applicable = applicableSuggestionIds(content, tokens);
@@ -160,6 +165,7 @@ export function threadsSummary(content: string): ThreadSummary[] {
       authors: [...new Set(th.comments.map((c) => c.author ?? "?"))],
       count: th.comments.length,
       applicable: th.comments.some((c) => applicable.has(c.id)),
+      seen: th.comments.every((c) => seenKeys.has(commentKey(c))),
       preview: (th.comments[0]?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
     };
   });

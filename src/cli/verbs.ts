@@ -151,16 +151,24 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   // ── Read-only verb ──────────────────────────────────────────────────────────
   if (cmd === "threads") {
     const content = await Bun.file(docPath).text();
-    const summary = threadsSummary(content);
+    // The human's persisted seen-set: the same ~/.config/acm/settings.json the GUI
+    // hydrates from (GET /api/settings is a plain read of this file), so agents see
+    // what the human has already read — no live server needed. Read-only here; only
+    // the GUI marks seen.
+    const cfg = await readConfig<{ seen?: unknown }>("settings.json", {});
+    const seenKeys = new Set(Array.isArray(cfg.seen) ? (cfg.seen as string[]) : []);
+    const summary = threadsSummary(content, seenKeys);
     if (f.json) {
       console.log(JSON.stringify(summary, null, 2));
       return;
     }
     for (const t of summary) {
       const anchor = t.anchor ? `⟦${t.anchor.slice(0, 40)}⟧ ` : "";
-      console.log(`#${t.id} (${t.count}) @${t.authors.join(" @")}${t.applicable ? " [SUGGEST]" : ""}  ${anchor}${t.preview}`);
+      const marks = `${t.applicable ? " [SUGGEST]" : ""}${t.seen ? " [seen]" : ""}`;
+      console.log(`#${t.id} (${t.count}) @${t.authors.join(" @")}${marks}  ${anchor}${t.preview}`);
     }
-    console.log(`\n${summary.length} threads`);
+    const unseen = summary.filter((t) => !t.seen).length;
+    console.log(`\n${summary.length} threads, ${unseen} unseen`);
     return;
   }
 

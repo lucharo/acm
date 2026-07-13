@@ -191,4 +191,15 @@ describe("threadsSummary", () => {
     expect(t.applicable).toBe(true);
     expect(t.anchor).toBe("span with {++new++} bits");
   });
+
+  test("seen requires EVERY comment's key in the set (GUI rule); default is unseen", () => {
+    const key = (author: string, body: string) => `${author}\u0000${body}`;
+    // Only the first of the lazy-dog thread's two comments is seen → thread unseen;
+    // the fully-covered fox thread → seen. No set at all → everything unseen.
+    const seenKeys = new Set([key("luis", "define?"), key("luis", "too vivid?")]);
+    const s = threadsSummary(DOC, seenKeys);
+    expect(s.find((t) => t.anchor === "quick brown fox")!.seen).toBe(true);
+    expect(s.find((t) => t.anchor === "lazy dog")!.seen).toBe(false);
+    expect(threadsSummary(DOC).every((t) => !t.seen)).toBe(true);
+  });
 });

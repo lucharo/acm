@@ -995,6 +995,16 @@ export function nestedCommentDetail(content: string, from: number): NestedCommen
   return { outerAuthor: outer.author, outerPreview: clean(outer.body).slice(0, 130), inners, splitWord };
 }
 
+/** Content identity of a comment for "seen" tracking, keyed by author+body so it
+ *  survives the positional-id shifts that edits cause. NUL separator (written as
+ *  an escape, not a raw byte: a raw NUL makes every tool treat this file as
+ *  binary): un-typeable, so "a b"+"c" can never collide with "a"+"b c". The escape
+ *  keeps the exact runtime string — stored seen-keys (localStorage + ~/.config/acm)
+ *  stay valid. Shared by the GUI (useSeenState) and the CLI (`acm threads`). */
+export function commentKey(c: { author: string | null; body: string }): string {
+  return `${c.author ?? ""}\u0000${c.body}`;
+}
+
 export function groupThreads(comments: CommentToken[], text: string): CommentThread[] {
   const sorted = [...comments].sort((a, b) => a.from - b.from);
   const threads: CommentThread[] = [];

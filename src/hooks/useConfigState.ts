@@ -30,14 +30,9 @@ function putConfig(patch: Record<string, unknown>): void {
 // "Seen" is a lightweight, NON-destructive state (unlike Resolve, which strips the
 // markup from the file). It lives client-side in localStorage, keyed by comment
 // CONTENT (author+body) so it survives the positional-id shifts that edits cause —
-// the file is never touched.
-export function commentKey(c: { author: string | null; body: string }): string {
-  // NUL separator (written as an escape, not a raw byte: a raw NUL makes every
-  // tool treat this file as binary): un-typeable, so "a b"+"c" can never collide
-  // with "a"+"b c". The escape keeps the exact runtime string - stored seen-keys
-  // (localStorage + ~/.config/acm) stay valid.
-  return `${c.author ?? ""}\u0000${c.body}`;
-}
+// the file is never touched. The key lives in lib/criticmarkup so the CLI
+// (`acm threads`) computes the same identity; re-exported here for the GUI.
+export { commentKey } from "../lib/criticmarkup";
 function loadSeen(): Set<string> {
   try {
     return new Set<string>(JSON.parse(localStorage.getItem("acm-seen") ?? "[]"));

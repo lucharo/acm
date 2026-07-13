@@ -215,6 +215,10 @@ Skip any section the human is still actively rewriting.
   finished rewrite; the writer's own passages stay their hand.
 - **Skip already-answered threads.** Work only the raw, unanswered ones (last comment isn't
   you, and no prior `@claude`/`[Claude]` note). Don't re-litigate settled threads.
+- **Pace by what the human has read.** Each thread in `acm threads` carries a `seen` flag
+  (`[seen]` in the text listing) — the human's persisted review state from the GUI. Many
+  unseen threads means they haven't caught up; prefer answering/refining those over opening
+  new ones. Read-only: only the human's editor marks seen.
 - **Fresh eyes for the final pass.** Before the doc ships, spawn a read-only copy-editor
   subagent with an explicit voice-preservation brief (list the author's deliberate
   choices: dialect/variant, intentional fragments, their own em-dashes) returning
@@ -247,7 +251,7 @@ with no editor up they write the file directly. Either way the editor reflects t
 result within ~1s — and they refuse rather than clobber on conflict.
 
 ```
-acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST]
+acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen]
 acm comment "<phrase>" "<text>"   # reply to the thread whose comment matches <phrase>
 acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
 acm suggest … --group <id>        # tag the suggestion as part of group <id> (a SET applied as one unit)
