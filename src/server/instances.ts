@@ -59,10 +59,12 @@ export async function liveInstances(): Promise<InstanceEntry[]> {
  *  attempts): a single short-timeout fetch false-negatives under CPU contention
  *  (a cold bun process is still transpiling while the fetch clock runs), and a
  *  false "dead" here lets a mutating verb direct-write past a LIVE editor — the
- *  exact clobber #38 guards against. A refused connection is a definitive fast
- *  "dead" (nothing listens there), so it never retries. ANY HTTP answer — even a
- *  5xx — is proof of life: an erroring-but-alive server must still gate writes
- *  (the agent-write POST then fails loudly, which is the safe direction). */
+ *  exact clobber #38 guards against. Only a REFUSED connection is a definitive
+ *  fast "dead" (nothing listens there); every other failure — timeout, reset, a
+ *  transient client-side error — retries, because the safety asymmetry points
+ *  that way: a false "alive" fails loudly at the agent-write POST, a false
+ *  "dead" silently clobbers. ANY HTTP answer — even a 5xx — is proof of life:
+ *  an erroring-but-alive server must still gate writes. */
 export async function probeInstance(e: InstanceEntry): Promise<boolean> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -71,8 +73,7 @@ export async function probeInstance(e: InstanceEntry): Promise<boolean> {
       });
       return true;
     } catch (err) {
-      const timedOut = err instanceof DOMException && err.name === "TimeoutError";
-      if (!timedOut) return false; // refused/reset — nothing lives on that port
+      if ((err as { code?: string })?.code === "ConnectionRefused") return false;
       if (attempt < 2) await Bun.sleep(100);
     }
   }
