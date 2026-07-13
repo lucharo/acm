@@ -164,7 +164,7 @@ if (diags(after) > diags(before)) throw "write corrupted markup";
 The 2-line balance check (`{==` = `==}`, `{>>` = `<<}`, word-count delta vs backup) stays
 as a cheap pre-check only. A failure means a corrupted anchor — restore the backup rather
 than writing further.
-For very large reply sweeps (~20+ threads), one scripted write beats N `acm comment`
+For very large reply sweeps (~20+ threads), one scripted write beats N `acm reply`
 calls: build `{offset → reply}` from `groupThreads`, insert each `{>>@you: …<<}` at its
 `thread.to` sorted DESCENDING so earlier offsets stay valid, then re-scan + gate.
 (A 148-thread sweep landed this way in one write; its lone failure was a mis-keyed
@@ -184,10 +184,10 @@ const pending = groupThreads(comments, text).filter((th) => {
 ```
 
 Reply to each — an ack ("good call, resolve"), a decision ("go with X"), or a concrete
-`SUGGEST:` — via `acm comment` / `acm apply edits.json`, so every thread ends in your
+`SUGGEST:` — via `acm reply` / `acm reply --batch edits.json`, so every thread ends in your
 voice. **Be confident and proactive:** you don't only respond where they commented — add
 standalone `acm suggest` cards wherever you spot an error, a typo, or an unclear bit;
-they anchor on any unique span, no thread needed. **`acm comment` can NOT do this** —
+they anchor on any unique span, no thread needed. **`acm reply` can NOT do this** —
 it's reply-only (anchors by matching an EXISTING comment's text, so it 0-matches on bare
 prose; a standalone-note verb is tracked in lucharo/acm#45). To leave a bare note on
 uncommented prose, insert `{==span==}{>>@you: note<<}` via a direct write (see the
@@ -270,7 +270,7 @@ result within ~1s — and they refuse rather than clobber on conflict.
 
 ```
 acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen]
-acm comment "<phrase>" "<text>"   # reply to the thread whose comment matches <phrase>
+acm reply "<phrase>" "<text>"     # reply to the thread whose comment matches <phrase> (alias: comment)
 acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
 acm suggest … --group <id>        # tag the suggestion as part of group <id> (a SET applied as one unit)
 acm accept "<phrase>"             # accept the suggestion matching <phrase> (keep new)
@@ -278,7 +278,7 @@ acm reject "<phrase>"             # reject it (keep the original span)
 acm accept --group <id>           # accept EVERY suggestion in the group, one atomic write
 acm reject --group <id>           # reject the whole group (keep every original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>
-acm apply <edits.json>            # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
+acm reply --batch <edits.json>    # batch reply-append; [{id,match,insert}]; idempotent (re-runs skip)
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
 acm import <file.docx> [out.md]   # Word → CriticMarkup .md (tracked changes + comments); validates the result
 acm heal                          # repair markup that renders raw (multi-block anchors, trapped/nested comments); snapshot-first
@@ -286,8 +286,8 @@ acm history [n]                   # the doc's version history (auto-recorded by 
 acm restore <sha>                 # restore the doc to a history version (snapshots + records the current state first)
 ```
 
-Typical loop: `acm threads --json` to see open threads → `acm comment` / `acm suggest`
-per thread (or one `acm apply edits.json` for a batch) → `acm accept`/`reject` to act on
+Typical loop: `acm threads --json` to see open threads → `acm reply` / `acm suggest`
+per thread (or one `acm reply --batch edits.json`) → `acm accept`/`reject` to act on
 suggestions. `--author <name>` stamps the voice (default `claude`).
 
 ## HTTP API / direct file (fallbacks)

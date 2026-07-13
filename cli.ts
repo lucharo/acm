@@ -49,12 +49,12 @@ Usage:
 Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
 running ACM editor; snapshot before every write):
   acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]
-  acm comment "<phrase>" "<text>"   Reply to the thread matching <phrase>
+  acm reply "<phrase>" "<text>"     Reply to the thread matching <phrase> (alias: comment)
   acm suggest "<span>" "<new>"      Anchor a SUGGEST: on the unique prose <span>
   acm accept "<phrase>"             Accept the suggestion matching <phrase>
   acm reject "<phrase>"             Reject it (keep the original span)
   acm resolve "<phrase>"            Strip the thread matching <phrase>
-  acm apply <edits.json>            Batch reply-append (idempotent); [{id,match,insert}]
+  acm reply --batch <edits.json>    Batch reply-append (idempotent); [{id,match,insert}]
   acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
   acm heal                          Repair markup that renders raw; snapshot-first
   acm import <file.docx> [out.md]   Word → CriticMarkup .md (needs the converter)
@@ -126,7 +126,7 @@ if (process.argv[2] === "skill") {
   installSkill();
   process.exit(0);
 }
-// Agent edit/read verbs (threads/comment/suggest/accept/reject/resolve/apply/spell).
+// Agent edit/read verbs (threads/reply/comment/suggest/accept/reject/resolve/spell).
 if (isAgentVerb(process.argv[2])) {
   // Give `acm spell` its Hunspell dicts when running as the compiled binary (where
   // node_modules isn't beside the executable). The generated module's file-imports

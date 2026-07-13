@@ -26,7 +26,7 @@ import { loadSpellEngine } from "./spellEngine";
 import type { SpellEngine } from "./spellEngine";
 import type { SpellVariant } from "../lib/viewSettings";
 
-const VERBS = new Set(["apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore", "spell"]);
+const VERBS = new Set(["reply", "apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore", "spell"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -35,6 +35,7 @@ interface Flags {
   doc?: string;
   author?: string;
   group?: string;
+  batch?: string;
   json: boolean;
   positional: string[];
 }
@@ -45,6 +46,7 @@ function parseFlags(argv: string[]): Flags {
     if (a === "--doc") f.doc = argv[++i];
     else if (a === "--author") f.author = argv[++i];
     else if (a === "--group") f.group = argv[++i];
+    else if (a === "--batch") f.batch = argv[++i];
     else if (a === "--json") f.json = true;
     else f.positional.push(a);
   }
@@ -184,9 +186,20 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   let note: string;
   try {
     switch (cmd) {
-      case "apply": {
-        const editsPath = f.positional[0];
-        if (!editsPath) throw new Error("usage: acm apply <edits.json> [--doc <file>]");
+      case "apply": // deprecated spelling of `reply --batch` — "apply" belongs to accepting SUGGEST cards
+      case "reply": {
+        if (cmd === "apply") console.error("acm apply is deprecated — use `acm reply --batch <edits.json>`");
+        if (cmd === "reply" && !f.batch) {
+          // Bare form: reply to one thread — same anchoring as `acm comment`.
+          const [phrase, text] = f.positional;
+          if (!phrase || !text)
+            throw new Error('usage: acm reply "<phrase>" "<text>" | acm reply --batch <edits.json>  [--doc] [--author]');
+          after = addComment(before, phrase, author, text);
+          note = `replied to "${phrase.slice(0, 40)}" as @${author}`;
+          break;
+        }
+        const editsPath = cmd === "apply" ? f.positional[0] : f.batch;
+        if (!editsPath) throw new Error("usage: acm reply --batch <edits.json> [--doc <file>]");
         const edits = JSON.parse(await Bun.file(resolve(editsPath)).text()) as {
           id: string;
           match: string;
