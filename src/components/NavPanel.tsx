@@ -99,6 +99,48 @@ function preview(token: CritToken): string {
   }
 }
 
+/** The ✓/✗ pair shared by inline-token accept/reject and SUGGEST-card
+ *  apply/reject — one markup source so the two can't drift. aria-labels
+ *  distinguish the three ✓ meanings in the list for screen readers. */
+function AcceptRejectPair(props: {
+  onAccept: () => void;
+  onReject: () => void;
+  acceptLabel: string;
+  rejectLabel: string;
+  acceptTitle: string;
+  rejectTitle: string;
+}) {
+  const { onAccept, onReject, acceptLabel, rejectLabel, acceptTitle, rejectTitle } = props;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAccept();
+        }}
+        className="rounded px-1 py-0.5 text-xs text-[var(--crit-ins)] hover:bg-[var(--crit-ins-bg)]"
+        title={acceptTitle}
+        aria-label={acceptLabel}
+      >
+        ✓
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onReject();
+        }}
+        className="rounded px-1 py-0.5 text-xs text-[var(--crit-del)] hover:bg-[var(--crit-del-bg)]"
+        title={rejectTitle}
+        aria-label={rejectLabel}
+      >
+        ✗
+      </button>
+    </>
+  );
+}
+
 function matchesFilter(
   token: CritToken,
   filter: FilterMode,
@@ -250,56 +292,24 @@ export default function NavPanel(props: NavPanelProps) {
                     {/* inline controls */}
                     <div className="flex shrink-0 items-center gap-0.5">
                       {isSuggestion(token) && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAccept(token);
-                            }}
-                            className="rounded px-1 py-0.5 text-xs text-[var(--crit-ins)] hover:bg-[var(--crit-ins-bg)]"
-                            title="Accept"
-                          >
-                            ✓
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onReject(token);
-                            }}
-                            className="rounded px-1 py-0.5 text-xs text-[var(--crit-del)] hover:bg-[var(--crit-del-bg)]"
-                            title="Reject"
-                          >
-                            ✗
-                          </button>
-                        </>
+                        <AcceptRejectPair
+                          onAccept={() => onAccept(token)}
+                          onReject={() => onReject(token)}
+                          acceptLabel="Accept suggestion"
+                          rejectLabel="Reject suggestion"
+                          acceptTitle="Accept"
+                          rejectTitle="Reject"
+                        />
                       )}
                       {suggestCard && isComment(token) && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onApplySuggestion(token);
-                            }}
-                            className="rounded px-1 py-0.5 text-xs text-[var(--crit-ins)] hover:bg-[var(--crit-ins-bg)]"
-                            title="Apply this edit — replace the highlighted span with the proposed wording"
-                          >
-                            ✓
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onRejectSuggestionEdit(token);
-                            }}
-                            className="rounded px-1 py-0.5 text-xs text-[var(--crit-del)] hover:bg-[var(--crit-del-bg)]"
-                            title="Reject suggestion — keep the original wording"
-                          >
-                            ✗
-                          </button>
-                        </>
+                        <AcceptRejectPair
+                          onAccept={() => onApplySuggestion(token)}
+                          onReject={() => onRejectSuggestionEdit(token)}
+                          acceptLabel="Apply suggestion"
+                          rejectLabel="Reject suggestion"
+                          acceptTitle="Apply this edit — replace the highlighted span with the proposed wording"
+                          rejectTitle="Reject suggestion — keep the original wording"
+                        />
                       )}
                       {!suggestCard && isComment(token) && (
                         <button
@@ -310,6 +320,7 @@ export default function NavPanel(props: NavPanelProps) {
                           }}
                           className="rounded px-1 py-0.5 text-[10px] font-medium text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
                           title="Resolve comment"
+                          aria-label="Resolve comment"
                         >
                           ✓
                         </button>
