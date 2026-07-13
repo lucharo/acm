@@ -93,15 +93,17 @@ _Avoid_: fix (reserved for spelling), repair.
 
 **Prose**:
 The document text as it reads with every suggestion accepted and all comments
-removed — what word count, pagination, and spell check operate on.
+removed — what word count and pagination operate on. (Spell check is looser: it
+skips comments but still checks pending deletions and the old side of a
+substitution, so it runs on the buffer-minus-comments, not on prose proper.)
 _Avoid_: content, body text.
 
 ## Reading & instances
 
 **Page view**:
 The document rendered as A4 sheets: the sheet styling, the page-break markers,
-and the page tally are one concept. (The UI still splits them in two settings;
-merging them is decided and tracked.)
+and the page tally are one concept. (The UI still splits them into two settings —
+`page` and `pageBreaks`; merging them is tracked in #40.)
 _Avoid_: page breaks (as a separate setting), sheet mode.
 
 **Page**:
