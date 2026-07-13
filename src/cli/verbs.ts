@@ -238,14 +238,14 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       case "reject": {
         if (f.group) {
           // Whole-group resolution (#21): every member edit lands in ONE write.
-          const r = resolveSuggestionGroup(before, f.group, cmd);
+          const r = resolveSuggestionGroup(before, f.group, op);
           after = r.content;
           note = `${cmd}ed suggestion group "${f.group}" — ${r.applied} edits${r.skipped ? `, ${r.skipped} skipped` : ""}`;
           break;
         }
         const [phrase] = f.positional;
         if (!phrase) throw new Error(`usage: acm ${cmd} "<phrase>" | acm ${cmd} --group <id>  [--doc]`);
-        after = resolveSuggestion(before, phrase, cmd);
+        after = resolveSuggestion(before, phrase, op);
         note = `${cmd}ed the suggestion matching "${phrase.slice(0, 40)}"`;
         break;
       }
