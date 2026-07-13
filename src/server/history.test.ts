@@ -8,14 +8,14 @@ const dir = mkdtempSync(join(tmpdir(), "acm-history-"));
 const doc = join(dir, "essay.md");
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-describe("doc history (git shadow journal)", () => {
+describe("doc history (git shadow record)", () => {
   test("records versions, skips no-ops, lists newest-first, restores byte-faithfully", async () => {
     const v1 = "# Essay\n\nFirst version with {>>@l: a note<<} here.\n";
     writeFileSync(doc, v1);
     const sha1 = await recordHistory(doc, "open");
     expect(sha1).not.toBeNull();
 
-    // Unchanged content → no new journal entry.
+    // Unchanged content → no new history entry.
     expect(await recordHistory(doc, "edit")).toBeNull();
 
     const v2 = "# Essay\n\nSecond version, the note resolved.\n";
@@ -34,12 +34,12 @@ describe("doc history (git shadow journal)", () => {
     expect(await showVersion(doc, sha1!)).toBe(v1);
     expect(await showVersion(doc, "not-a-ref")).toBeNull();
 
-    // The doc dir stays clean: journal lives under .acm/, no nested .git.
+    // The doc dir stays clean: history lives under .acm/, no nested .git.
     expect(existsSync(join(dir, ".git"))).toBe(false);
     expect(existsSync(join(dir, ".acm", "history.git"))).toBe(true);
   });
 
-  test("a doc INSIDE an existing git repo: journal works, enclosing repo unaffected", async () => {
+  test("a doc INSIDE an existing git repo: history works, enclosing repo unaffected", async () => {
     const repo = mkdtempSync(join(tmpdir(), "acm-enclosing-"));
     try {
       const run = (args: string[]) => Bun.spawnSync(["git", "-C", repo, ...args]);

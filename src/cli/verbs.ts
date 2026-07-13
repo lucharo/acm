@@ -100,12 +100,12 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
 
   const docPath = await docPathFrom(f);
 
-  // ── History: the git shadow journal (server records; these read/restore) ─────
+  // ── History: the git shadow record (server records; these read/restore) ──────
   if (cmd === "history") {
     const n = f.positional[0] ? Number(f.positional[0]) : 20;
     const entries = await listHistory(docPath, Number.isFinite(n) && n > 0 ? n : 20);
     if (entries.length === 0) {
-      console.log("acm history: no journal yet — it builds while an ACM server is editing this doc");
+      console.log("acm history: no history yet — it builds while an ACM server is editing this doc");
       return;
     }
     for (const e of entries) console.log(e);
@@ -120,11 +120,11 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     }
     const content = await showVersion(docPath, ref);
     if (content === null) {
-      console.error(`acm restore: ${ref} not found in the journal (see \`acm history\`)`);
+      console.error(`acm restore: ${ref} not found in the history (see \`acm history\`)`);
       process.exit(1);
     }
     const snap = await snapshot(docPath, "restore"); // keep the pre-restore state
-    await recordHistory(docPath, "pre-restore"); // and journal it, so restore is reversible
+    await recordHistory(docPath, "pre-restore"); // and record it in the history, so restore is reversible
     await Bun.write(docPath, content);
     console.log(`acm restore: doc restored to ${ref}`);
     if (snap) console.log(`  pre-restore backup → ${snap}`);

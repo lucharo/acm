@@ -71,7 +71,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // of interleaved human+agent writes can bump several versions while a save is in
   // flight, so keep plenty (prose docs are small; a few dozen copies is cheap). Past
   // the window we 409 "stale" and the editor recovers by adopting disk. The git
-  // journal (60s debounce) is far too coarse to serve as the merge base.
+  // history (60s debounce) is far too coarse to serve as the merge base.
   const KEEP_VERSIONS = 32;
   const contentByVersion = new Map<number, string>([[0, initialContent]]);
   function recordVersion(content: string) {
@@ -84,9 +84,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
   let humanSel: { from: number; to: number; at: number } | null = null;
   const PRESENCE_TTL_MS = 4000;
 
-  // Doc history (#11): a git shadow journal in <docDir>/.acm/history.git.
+  // Doc history (#11): a git shadow record in <docDir>/.acm/history.git.
   // Baseline at boot, then a commit after each QUIET PERIOD of writes (saves
-  // land every 500ms while typing — journal entries shouldn't). Crashes lose at
+  // land every 500ms while typing — history entries shouldn't). Crashes lose at
   // most the last minute; agent verbs additionally snapshot before every write.
   // Declared BEFORE the route handlers that call it (no TDZ reliance).
   void recordHistory(docPath, "open");
@@ -395,7 +395,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
       watcher.close();
       if (debounce) clearTimeout(debounce);
       if (historyTimer) clearTimeout(historyTimer);
-      void recordHistory(docPath, "close"); // best-effort final journal entry
+      void recordHistory(docPath, "close"); // best-effort final history entry
       server.stop();
     },
   };
