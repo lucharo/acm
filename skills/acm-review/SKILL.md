@@ -152,8 +152,10 @@ Using the same import pattern as above:
 
 ```ts
 import { validateMarkup, nestedCommentIssues, groupThreads, scanTokens } from "<acm>/src/lib/criticmarkup";
-const text = await Bun.file(DOC).text();
-if (validateMarkup(text).length || nestedCommentIssues(text).length) throw "corrupted markup";
+// DELTA, not absolute: live docs can carry pre-existing diagnostics the human made
+// (that's what `acm heal` is for) — only YOUR write adding new ones is corruption.
+const diags = (t: string) => validateMarkup(t).length + nestedCommentIssues(t).length;
+if (diags(after) > diags(before)) throw "write corrupted markup";
 // …and check groupThreads(…).length moved by exactly the delta you intended.
 ```
 
