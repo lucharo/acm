@@ -1151,6 +1151,8 @@ function Workspace({
               onAccept={acceptToken}
               onReject={rejectToken}
               onResolve={resolveComment}
+              onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
+              onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
             />
           </aside>
         ) : null}
