@@ -214,6 +214,19 @@ describe("Google Docs imports", () => {
     });
   });
 
+  test("omits tracked-deleted text while retaining inserted text in comment bodies", () => {
+    const result = convertDocx(
+      docx(
+        `<w:p><w:r><w:t>Text.</w:t></w:r><w:commentRangeStart w:id="10"/><w:commentRangeEnd w:id="10"/></w:p>`,
+        `<w:comment w:id="10" w:author="Editor"><w:p><w:r><w:t>Keep </w:t></w:r><w:del><w:r><w:delText>removed</w:delText></w:r></w:del><w:ins><w:r><w:t>inserted</w:t></w:r></w:ins></w:p></w:comment>`,
+      ),
+    );
+    const comments = scanTokens(result.markdown).filter((token) => token.type === "comment");
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ author: "Editor", body: "Keep inserted" });
+  });
+
   test("refuses an output path that could overwrite the source DOCX", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acm-docx-output-"));
     temporaryDirectories.push(dir);

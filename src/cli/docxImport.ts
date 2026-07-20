@@ -140,9 +140,10 @@ function textWithin(element: XmlElement): string {
       const wordElement = child as XmlElement;
       switch (wordElement.localName) {
         case "t":
-        case "delText":
           text += wordElement.textContent ?? "";
           break;
+        case "delText":
+          break; // resolved comment text excludes tracked deletions
         case "tab":
           text += "\t";
           break;
