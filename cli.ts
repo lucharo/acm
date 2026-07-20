@@ -57,7 +57,8 @@ running ACM editor; snapshot before every write):
   acm reply --batch <edits.json>    Batch reply-append (idempotent); [{id,match,insert}]
   acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
   acm heal                          Repair markup that renders raw; snapshot-first
-  acm import <file.docx> [out.md]   Word → CriticMarkup .md (needs the converter)
+  acm import <Google Docs URL|file.docx> [out.md]
+                                     Google Docs/Word → CriticMarkup, including comments
   acm spell [list] [--json]         List flagged words: count, suggestions, line
   acm spell add <word…>             Keep words in your personal dictionary
   acm spell ignore <word…>          Stop flagging words in THIS doc only

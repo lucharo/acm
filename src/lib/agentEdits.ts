@@ -42,13 +42,21 @@ export function findThread(content: string, phrase: string): CommentThread {
   return hits[0];
 }
 
-/** The single SUGGEST: comment whose body contains `phrase` (matches the proposed
- *  wording or the SUGGEST text). Throws unless exactly one matches. */
+/** The single SUGGEST card matched by `phrase`. Prefer the comment body (the
+ *  proposed wording); when that yields no match, fall back to the anchor prose.
+ *  The fallback is what makes an empty-replacement deletion addressable. */
 function findSuggestionComment(content: string, phrase: string): CommentToken {
-  const hits = scanTokens(content).filter(
-    (t): t is CommentToken =>
-      t.type === "comment" && suggestionReplacement(t.body) !== null && t.body.includes(phrase),
+  const tokens = scanTokens(content);
+  const suggestions = tokens.filter(
+    (t): t is CommentToken => t.type === "comment" && suggestionReplacement(t.body) !== null,
   );
+  const bodyHits = suggestions.filter((comment) => comment.body.includes(phrase));
+  const hits = bodyHits.length > 0
+    ? bodyHits
+    : suggestions.filter((comment) => {
+        const anchor = anchorHighlightFor(content, comment, tokens);
+        return anchor?.type === "highlight" && anchor.inner.includes(phrase);
+      });
   if (hits.length !== 1) {
     throw new AmbiguityError(`"${phrase.slice(0, 48)}" matched ${hits.length} suggestions (need exactly 1)`);
   }

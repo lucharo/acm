@@ -155,6 +155,12 @@ describe("resolveSuggestion accept/reject", () => {
     expect(out).toContain("And a tired claim ends it.");
     expect(out).not.toContain("SUGGEST");
   });
+  test("an empty-replacement suggestion can be accepted by its anchor phrase", () => {
+    const doc =
+      "Keep this, but remove {==the redundant trailing clause==}{>>@claude: SUGGEST: <<}.";
+    const out = resolveSuggestion(doc, "redundant trailing clause", "accept");
+    expect(out).toBe("Keep this, but remove .");
+  });
 });
 
 describe("resolveThread", () => {

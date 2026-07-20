@@ -24,13 +24,15 @@ prod doc="seed/sample-essay.md":
 build:
     bun run build
 
-# Typecheck + unit tests (the validation gate)
+# Full release gate: types, all tests, compiled binary, and a no-node_modules smoke.
 check:
     bun run typecheck
-    bun test src/lib
+    bun run test
+    bun run build:bin
+    bun run test:bin
 
 test:
-    bun test src/lib
+    bun run test
 
 typecheck:
     bun run typecheck

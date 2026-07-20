@@ -17,7 +17,8 @@
     "start": "bun run server.ts",
     "preview": "bun run server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/lib src/editor src/cli src/server"
+    "test": "bun test src/lib src/editor src/cli src/server",
+    "test:bin": "bun run scripts/smoke-bin.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -28,8 +29,10 @@
     "@lezer/common": "^1.2.3",
     "@lezer/highlight": "^1.2.3",
     "@lezer/markdown": "^1.6.4",
+    "@xmldom/xmldom": "^0.9.10",
     "dictionary-en": "^4.0.0",
     "dictionary-en-gb": "^3.0.0",
+    "fflate": "^0.8.3",
     "nspell": "^2.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

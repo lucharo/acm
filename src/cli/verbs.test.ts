@@ -6,6 +6,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { strToU8, zipSync } from "fflate";
 
 const CLI = resolve(import.meta.dir, "../../cli.ts");
 const DOC = 'Prose under review.{>>@luis: is this clear?<<}\n';
@@ -82,5 +83,49 @@ describe("acm reply dispatch", () => {
     const r = run("reply", "only-a-phrase");
     expect(r.code).toBe(1);
     expect(r.err).toContain('usage: acm reply "<phrase>" "<text>"');
+  });
+});
+
+describe("acm import", () => {
+  test("imports an exported Google Doc DOCX with comments without an external converter", () => {
+    const source = join(dir, "review.docx");
+    const output = join(dir, "review.md");
+    const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>
+          <w:p>
+            <w:commentRangeStart w:id="7"/>
+            <w:r><w:t>Keep this sentence.</w:t></w:r>
+            <w:commentRangeEnd w:id="7"/>
+          </w:p>
+        </w:body>
+      </w:document>`;
+    const commentsXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:comment w:id="7" w:author="Luis"><w:p><w:r><w:t>Make this clearer.</w:t></w:r></w:p></w:comment>
+      </w:comments>`;
+    writeFileSync(
+      source,
+      zipSync({
+        "word/document.xml": strToU8(documentXml),
+        "word/comments.xml": strToU8(commentsXml),
+      }),
+    );
+
+    const env: Record<string, string | undefined> = { ...process.env, HOME: dir };
+    delete env.ACM_CONVERTER;
+    const p = Bun.spawnSync(["bun", CLI, "import", source, output], {
+      cwd: resolve(import.meta.dir, "../.."),
+      env,
+      timeout: 15_000,
+    });
+
+    expect(p.exitCode).toBe(0);
+    expect(p.stderr.toString()).toBe("");
+    expect(readFileSync(output, "utf8")).toBe(
+      "{==Keep this sentence.==}{>>@Luis: Make this clearer.<<}\n",
+    );
+    expect(p.stdout.toString()).toContain("comments: 1 (1 anchored, 0 point)");
+    expect(p.stdout.toString()).toContain("markup diagnostics: 0 (clean)");
   });
 });
