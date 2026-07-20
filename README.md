@@ -28,6 +28,20 @@ bun run build:bin          # → dist/acm  (one ~56MB executable, SPA embedded)
 ./dist/acm path/to/doc.md
 ```
 
+**Import from Google Docs** — a link-accessible Google Doc can be fetched as a
+DOCX export, or you can download the DOCX yourself for a private document:
+
+```bash
+acm import 'https://docs.google.com/document/d/…/edit'
+acm import path/to/google-doc-export.docx
+acm import path/to/google-doc-export.docx review.md
+```
+
+The generated CriticMarkup Markdown keeps prose, headings, bullet lists,
+comments with their authors and best-effort anchors, plus tracked insertions
+and deletions. Private Docs deliberately do not trigger a Google login flow;
+download them as `.docx` and use the local-file form.
+
 **Agent-review skill** — the editable copy lives in `~/.agents/skills/acm-review/`;
 `~/.claude/skills/acm-review` is a symlink to it (never overwritten on reinstall):
 
@@ -102,4 +116,4 @@ src/App.tsx          Integration: the buffer is ground truth; local edits deboun
 
 ## Non-goals
 
-One doc per window. No workspace or project management (a picker for opening a doc is fine; doc collections are not). No accounts or access levels — sharing, if it ever lands, is your own tunnel exposing your local instance (ADR-0006). No cloud, no multiplayer cursors, no export pipeline (it's already a `.md`).
+One doc per window. No workspace or project management (a picker for opening a doc is fine; doc collections are not). No accounts or access levels — sharing, if it ever lands, is your own tunnel exposing your local instance (ADR-0006). No cloud and no multiplayer cursors. Import is a one-shot conversion into the local `.md`; ACM does not retain a Google connection or synchronize changes.

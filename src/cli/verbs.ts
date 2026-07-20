@@ -25,6 +25,7 @@ import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup, healDocu
 import { loadSpellEngine } from "./spellEngine";
 import type { SpellEngine } from "./spellEngine";
 import type { SpellVariant } from "../lib/viewSettings";
+import { importDocument } from "./docxImport";
 
 const VERBS = new Set(["reply", "apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore", "spell"]);
 export function isAgentVerb(cmd?: string): boolean {
@@ -602,36 +603,25 @@ function printFlagged(engine: SpellEngine, text: string, json: boolean): void {
   );
 }
 
-// ── acm import <file.docx> [out.md] — docx → CriticMarkup via the converter ───
-// The validated converter (uv single-file script, stdlib only) lives outside this
-// repo alongside its adversarial validation harness; point ACM_CONVERTER at a
-// different copy if yours is elsewhere.
+// ── acm import <Google Docs URL|file.docx> [out.md] → CriticMarkup ────────────
 async function runImport(f: Flags): Promise<void> {
   const [src, outArg] = f.positional;
-  if (!src || !/\.docx$/i.test(src)) {
-    console.error("usage: acm import <file.docx> [out.md]");
+  if (!src) {
+    console.error("usage: acm import <Google Docs URL|file.docx> [out.md]");
     process.exit(1);
   }
-  const srcPath = resolve(src);
-  if (!(await Bun.file(srcPath).exists())) {
-    console.error(`acm import: file not found: ${src}`);
+  let imported: Awaited<ReturnType<typeof importDocument>>;
+  try {
+    imported = await importDocument(src, outArg);
+  } catch (error) {
+    console.error(`acm import: ${(error as Error).message}`);
     process.exit(1);
   }
-  const out = resolve(outArg ?? src.replace(/\.docx$/i, ".md"));
-  const converter =
-    process.env.ACM_CONVERTER ?? `${process.env.HOME}/Projects/acm-seed/convert.py`;
-  if (!(await Bun.file(converter).exists())) {
-    console.error(`acm import: converter not found at ${converter} — set ACM_CONVERTER`);
-    process.exit(1);
-  }
-  const proc = Bun.spawn(["uv", "run", converter, srcPath, out], {
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  if ((await proc.exited) !== 0) process.exit(1);
-  const content = await Bun.file(out).text();
-  const diags = validateMarkup(content);
-  console.log(`acm import: ${out}`);
+  const diags = validateMarkup(imported.markdown);
+  console.log(`acm import: ${imported.outputPath}`);
+  console.log(
+    `  comments: ${imported.comments} (${imported.highlights} anchored, ${imported.comments - imported.highlights} point)`,
+  );
   console.log(
     `  markup diagnostics: ${diags.length === 0 ? "0 (clean)" : `${diags.length} — open in ACM and click Review`}`,
   );

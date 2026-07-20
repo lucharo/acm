@@ -64,4 +64,24 @@ describe("doc history (git shadow record)", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  test("history lists only versions of the requested document", async () => {
+    const shared = mkdtempSync(join(tmpdir(), "acm-shared-history-"));
+    try {
+      const first = join(shared, "first.md");
+      const second = join(shared, "second.md");
+      writeFileSync(first, "First document.\n");
+      writeFileSync(second, "Second document.\n");
+      expect(await recordHistory(first, "first-open")).not.toBeNull();
+      const secondSha = await recordHistory(second, "second-open");
+      expect(secondSha).not.toBeNull();
+
+      const firstHistory = await listHistory(first);
+      expect(firstHistory).toHaveLength(1);
+      expect(firstHistory[0]).toContain("first-open:");
+      expect(await showVersion(first, secondSha!)).toBeNull();
+    } finally {
+      rmSync(shared, { recursive: true, force: true });
+    }
+  });
 });

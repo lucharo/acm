@@ -50,6 +50,27 @@ export interface AcmServer {
   stop: () => void;
 }
 
+function isLoopbackHost(host: string | null): boolean {
+  if (!host) return false;
+  try {
+    const hostname = new URL(`http://${host}`).hostname;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return true; // CLI/curl requests are local but do not send Origin.
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.protocol === "http:" && originUrl.host.toLowerCase() === req.headers.get("host")?.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 /** Boot an ACM server instance against one document. Returns the running server. */
 export function startServer(opts: StartServerOptions): AcmServer {
   const docPath = resolve(opts.docPath);
@@ -169,6 +190,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // the next free port). The friendly "die with a message" treatment is applied
   // only at the direct-run entry point below (serveOrDie), not to every caller.
   const server = Bun.serve({
+    hostname: "127.0.0.1",
     port,
     // Hard body cap aligned with the asset route's 32 MB intent (plus header
     // room) — a chunked upload with no Content-Length aborts here instead of
@@ -176,6 +198,12 @@ export function startServer(opts: StartServerOptions): AcmServer {
     maxRequestBodySize: 33 * 1024 * 1024,
 
     async fetch(req) {
+      if (!isLoopbackHost(req.headers.get("host"))) {
+        return new Response("Forbidden: ACM accepts loopback requests only", { status: 403 });
+      }
+      if (!isAllowedOrigin(req)) {
+        return new Response("Forbidden: cross-origin requests are not allowed", { status: 403 });
+      }
       const url = new URL(req.url);
       const { pathname } = url;
 

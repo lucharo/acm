@@ -273,14 +273,14 @@ acm threads [--json]              # read/verify: each thread's anchor, authors, 
 acm reply "<phrase>" "<text>"     # reply to the thread whose comment matches <phrase> (alias: comment)
 acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
 acm suggest … --group <id>        # tag the suggestion as part of group <id> (a SET applied as one unit)
-acm accept "<phrase>"             # accept the suggestion matching <phrase> (keep new)
-acm reject "<phrase>"             # reject it (keep the original span)
+acm accept "<phrase>"             # accept by proposed wording; deletion cards also match anchor prose
+acm reject "<phrase>"             # reject by proposed wording or deletion-card anchor (keep original)
 acm accept --group <id>           # accept EVERY suggestion in the group, one atomic write
 acm reject --group <id>           # reject the whole group (keep every original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>
 acm reply --batch <edits.json>    # batch reply-append; [{id,match,insert}] where insert is VERBATIM markup (e.g. "{>>@you: …<<}"); idempotent (re-runs skip)
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
-acm import <file.docx> [out.md]   # Word → CriticMarkup .md (tracked changes + comments); validates the result
+acm import <Google-Docs-URL|file.docx> [out.md]  # one-shot import with comments/tracked changes; validates the result
 acm heal                          # repair markup that renders raw (multi-block anchors, trapped/nested comments); snapshot-first
 acm history [n]                   # the doc's version history (auto-recorded by the editor; git shadow repo in .acm/)
 acm restore <sha>                 # restore the doc to a history version (snapshots + records the current state first)

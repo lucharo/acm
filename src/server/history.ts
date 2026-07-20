@@ -105,6 +105,8 @@ export async function listHistory(docPath: string, n = 20): Promise<string[]> {
     "log",
     `-${n}`,
     "--pretty=format:%h  %ar  %s",
+    "--",
+    basename(docPath),
   ]);
   return log.ok && log.out ? log.out.split("\n") : [];
 }
@@ -112,6 +114,18 @@ export async function listHistory(docPath: string, n = 20): Promise<string[]> {
 /** The doc's content at `ref` (e.g. a short SHA from listHistory), or null. */
 export async function showVersion(docPath: string, ref: string): Promise<string | null> {
   if (!existsSync(gitDirFor(docPath))) return null;
-  const show = await git(docPath, ["show", `${ref}:${basename(docPath)}`]);
+  const name = basename(docPath);
+  const touched = await git(docPath, [
+    "diff-tree",
+    "--root",
+    "--no-commit-id",
+    "--name-only",
+    "-r",
+    ref,
+    "--",
+    name,
+  ]);
+  if (!touched.ok || !touched.out.split("\n").includes(name)) return null;
+  const show = await git(docPath, ["show", `${ref}:${name}`]);
   return show.ok ? show.raw : null;
 }

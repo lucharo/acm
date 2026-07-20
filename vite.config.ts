@@ -61,8 +61,10 @@ export default defineConfig({
   server: {
     port: devPort,
     proxy: {
-      "/api": { target: `http://localhost:${apiPort}`, changeOrigin: true },
-      "/ws": { target: `ws://localhost:${apiPort}`, ws: true },
+      // Keep the browser-facing Host intact so the backend's same-origin guard
+      // compares it with Origin correctly. The backend binds IPv4 explicitly.
+      "/api": { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false },
+      "/ws": { target: `ws://127.0.0.1:${apiPort}`, ws: true, changeOrigin: false },
     },
     watch: { ignored: [docFile, "**/seed/**"] },
   },

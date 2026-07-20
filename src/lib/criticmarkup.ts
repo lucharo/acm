@@ -1149,7 +1149,7 @@ function suggestionAnchorStart(content: string, hl: CritToken): number {
  * the thread ROOT and use the highlight the root is anchored to. So a suggestion
  * dropped anywhere in a conversation still targets the span the thread is about.
  */
-function threadAnchorHighlightFor(
+export function threadAnchorHighlightFor(
   content: string,
   comment: CommentToken,
   tokens?: CritToken[],
