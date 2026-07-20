@@ -144,6 +144,8 @@ function textWithin(element: XmlElement): string {
           break;
         case "delText":
           break; // resolved comment text excludes tracked deletions
+        case "del":
+          break; // skip the whole revision, including deleted tabs and breaks
         case "tab":
           text += "\t";
           break;

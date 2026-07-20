@@ -218,7 +218,7 @@ describe("Google Docs imports", () => {
     const result = convertDocx(
       docx(
         `<w:p><w:r><w:t>Text.</w:t></w:r><w:commentRangeStart w:id="10"/><w:commentRangeEnd w:id="10"/></w:p>`,
-        `<w:comment w:id="10" w:author="Editor"><w:p><w:r><w:t>Keep </w:t></w:r><w:del><w:r><w:delText>removed</w:delText></w:r></w:del><w:ins><w:r><w:t>inserted</w:t></w:r></w:ins></w:p></w:comment>`,
+        `<w:comment w:id="10" w:author="Editor"><w:p><w:r><w:t>Keep </w:t></w:r><w:del><w:r><w:tab/><w:delText>removed</w:delText><w:br/><w:cr/></w:r></w:del><w:ins><w:r><w:t>inserted</w:t></w:r></w:ins></w:p></w:comment>`,
       ),
     );
     const comments = scanTokens(result.markdown).filter((token) => token.type === "comment");
