@@ -161,6 +161,17 @@ describe("resolveSuggestion accept/reject", () => {
     const out = resolveSuggestion(doc, "redundant trailing clause", "accept");
     expect(out).toBe("Keep this, but remove .");
   });
+  test("an empty-replacement reply suggestion can be accepted or rejected by its thread anchor", () => {
+    const doc =
+      "Keep {==the discussed clause==}{>>@luis: Does this belong?<<}{>>@claude: SUGGEST: <<} here.";
+
+    expect(resolveSuggestion(doc, "discussed clause", "accept")).toBe(
+      "Keep {>>@luis: Does this belong?<<} here.",
+    );
+    expect(resolveSuggestion(doc, "discussed clause", "reject")).toBe(
+      "Keep {==the discussed clause==}{>>@luis: Does this belong?<<} here.",
+    );
+  });
 });
 
 describe("resolveThread", () => {

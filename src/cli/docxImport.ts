@@ -6,6 +6,7 @@ import {
 } from "@xmldom/xmldom";
 import { strFromU8, unzipSync } from "fflate";
 import { resolve } from "node:path";
+import { formatComment as formatCriticComment } from "../lib/criticmarkup";
 
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -167,8 +168,7 @@ function parseComments(xml?: string): Map<string, ImportedComment> {
 }
 
 function formatComment(comment: ImportedComment | undefined): string {
-  const author = comment?.author ? `@${comment.author}: ` : "";
-  return `{>>${author}${comment?.body ?? ""}<<}`;
+  return formatCriticComment(comment?.author ?? "", comment?.body ?? "");
 }
 
 function directWordChild(element: XmlElement, name: string): XmlElement | undefined {
@@ -233,6 +233,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
 
   const tokens: ImportToken[] = [];
   const openComments = new Map<string, number>();
+  const unsafeComments = new Set<string>();
   let commentCount = 0;
   let highlightCount = 0;
   let trackedChangeDepth = 0;
@@ -270,7 +271,12 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
           break;
         case "commentRangeStart":
           if (!openComments.has(wordAttribute(element, "id"))) {
-            openComments.set(wordAttribute(element, "id"), tokens.length);
+            const id = wordAttribute(element, "id");
+            if (openComments.size > 0) {
+              unsafeComments.add(id);
+              for (const openId of openComments.keys()) unsafeComments.add(openId);
+            }
+            openComments.set(id, tokens.length);
           }
           break;
         case "commentRangeEnd": {
@@ -279,6 +285,11 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
           const note = formatComment(comments.get(id));
           if (start === undefined) {
             tokens.push({ kind: "text", value: note });
+          } else if (unsafeComments.has(id)) {
+            openComments.delete(id);
+            unsafeComments.delete(id);
+            if (trackedChangeDepth > 0) deferredNotes.push(note);
+            else tokens.push({ kind: "text", value: note });
           } else if (trackedChangeDepth > 0) {
             openComments.delete(id);
             deferredNotes.push(note);
@@ -294,7 +305,10 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
             const span = anchor
               .map((token) => (token.kind === "text" ? token.value : "\n\n"))
               .join("");
-            const anchored = Boolean(span.trim()) && balancedTrackedChanges(span);
+            const anchored = Boolean(span.trim())
+              && balancedTrackedChanges(span)
+              && !span.includes("{==")
+              && !span.includes("{>>");
             tokens.splice(start, tokens.length - start, ...kept, {
               kind: "text",
               value: anchored ? `{==${span}==}${note}` : `${span}${note}`,
@@ -307,6 +321,13 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
         case "t":
         case "delText":
           tokens.push({ kind: "text", value: element.textContent ?? "" });
+          break;
+        case "tab":
+          tokens.push({ kind: "text", value: "\t" });
+          break;
+        case "br":
+        case "cr":
+          tokens.push({ kind: "text", value: "\n" });
           break;
         default:
           walk(element);

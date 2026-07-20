@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { strToU8, zipSync } from "fflate";
 import { convertDocx, downloadGoogleDocsDocx, googleDocsExportUrl, importDocument } from "./docxImport";
+import { scanTokens } from "../lib/criticmarkup";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -94,6 +95,14 @@ describe("Google Docs imports", () => {
     );
   });
 
+  test("preserves Word tabs and both line-break element forms", () => {
+    const result = convertDocx(
+      docx(`<w:p><w:r><w:t>first</w:t><w:tab/><w:t>second</w:t><w:br/><w:t>third</w:t><w:cr/><w:t>fourth</w:t></w:r></w:p>`),
+    );
+
+    expect(result.markdown).toBe("first\tsecond\nthird\nfourth\n");
+  });
+
   test("anchors a multi-paragraph comment to its final paragraph", () => {
     const result = convertDocx(
       docx(
@@ -150,6 +159,43 @@ describe("Google Docs imports", () => {
     );
 
     expect(result.markdown).toBe("Text survives.\n\n{>>@Editor: Unclosed range.<<}\n");
+  });
+
+  test.each([
+    {
+      name: "nested",
+      body: `<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>outer </w:t></w:r><w:commentRangeStart w:id="2"/><w:r><w:t>inner</w:t></w:r><w:commentRangeEnd w:id="2"/><w:commentRangeEnd w:id="1"/></w:p>`,
+      expected: "outer inner{>>@Inner: Inner note.<<}{>>@Outer: Outer note.<<}\n",
+    },
+    {
+      name: "overlapping",
+      body: `<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>first </w:t></w:r><w:commentRangeStart w:id="2"/><w:r><w:t>shared</w:t></w:r><w:commentRangeEnd w:id="1"/><w:r><w:t> second</w:t></w:r><w:commentRangeEnd w:id="2"/></w:p>`,
+      expected: "first shared{>>@Outer: Outer note.<<} second{>>@Inner: Inner note.<<}\n",
+    },
+  ])("degrades $name comment ranges to valid point comments", ({ body, expected }) => {
+    const result = convertDocx(
+      docx(
+        body,
+        `<w:comment w:id="1" w:author="Outer"><w:p><w:r><w:t>Outer note.</w:t></w:r></w:p></w:comment>
+         <w:comment w:id="2" w:author="Inner"><w:p><w:r><w:t>Inner note.</w:t></w:r></w:p></w:comment>`,
+      ),
+    );
+
+    expect(result.markdown).toBe(expected);
+    expect(scanTokens(result.markdown).filter((token) => token.type === "comment")).toHaveLength(2);
+  });
+
+  test("keeps a literal comment close marker inside the imported comment body", () => {
+    const result = convertDocx(
+      docx(
+        `<w:p><w:r><w:t>Text.</w:t></w:r><w:commentRangeStart w:id="7"/><w:commentRangeEnd w:id="7"/></w:p>`,
+        `<w:comment w:id="7" w:author="Editor"><w:p><w:r><w:t>Use &lt;&lt;} literally.</w:t></w:r></w:p></w:comment>`,
+      ),
+    );
+    const comments = scanTokens(result.markdown).filter((token) => token.type === "comment");
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ author: "Editor", body: "Use <<} literally." });
   });
 
   test("refuses an output path that could overwrite the source DOCX", async () => {

@@ -16,6 +16,7 @@ import {
   suggestionReplacement,
   applicableSuggestionIds,
   anchorHighlightFor,
+  threadAnchorHighlightFor,
   wrappableSpan,
   suggestionGroupEdits,
   applyRangedEdits,
@@ -54,7 +55,7 @@ function findSuggestionComment(content: string, phrase: string): CommentToken {
   const hits = bodyHits.length > 0
     ? bodyHits
     : suggestions.filter((comment) => {
-        const anchor = anchorHighlightFor(content, comment, tokens);
+        const anchor = threadAnchorHighlightFor(content, comment, tokens);
         return anchor?.type === "highlight" && anchor.inner.includes(phrase);
       });
   if (hits.length !== 1) {
