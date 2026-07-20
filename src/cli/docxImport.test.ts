@@ -198,6 +198,22 @@ describe("Google Docs imports", () => {
     expect(comments[0]).toMatchObject({ author: "Editor", body: "Use <<} literally." });
   });
 
+  test("preserves tabs and line breaks inside imported comment bodies", () => {
+    const result = convertDocx(
+      docx(
+        `<w:p><w:r><w:t>Text.</w:t></w:r><w:commentRangeStart w:id="8"/><w:commentRangeEnd w:id="8"/></w:p>`,
+        `<w:comment w:id="8" w:author="Editor"><w:p><w:r><w:t>first</w:t><w:tab/><w:t>second</w:t><w:br/><w:t>third</w:t><w:cr/><w:t>fourth</w:t></w:r></w:p></w:comment>`,
+      ),
+    );
+    const comments = scanTokens(result.markdown).filter((token) => token.type === "comment");
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      author: "Editor",
+      body: "first\tsecond\nthird\nfourth",
+    });
+  });
+
   test("refuses an output path that could overwrite the source DOCX", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acm-docx-output-"));
     temporaryDirectories.push(dir);

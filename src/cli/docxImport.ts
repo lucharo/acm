@@ -133,9 +133,30 @@ function wordElements(root: XmlDocument | XmlElement, name: string): XmlElement[
 }
 
 function textWithin(element: XmlElement): string {
-  return wordElements(element, "t")
-    .map((node) => node.textContent ?? "")
-    .join("");
+  let text = "";
+  const walk = (node: XmlNode): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType !== 1) continue;
+      const wordElement = child as XmlElement;
+      switch (wordElement.localName) {
+        case "t":
+        case "delText":
+          text += wordElement.textContent ?? "";
+          break;
+        case "tab":
+          text += "\t";
+          break;
+        case "br":
+        case "cr":
+          text += "\n";
+          break;
+        default:
+          walk(wordElement);
+      }
+    }
+  };
+  walk(element);
+  return text;
 }
 
 function parseXml(xml: string, filename: string): XmlDocument {
