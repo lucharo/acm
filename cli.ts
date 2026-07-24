@@ -5,16 +5,12 @@
 //
 // The doc is chosen EXPLICITLY here — no ACM_DOC env indirection — so two sessions
 // can't silently diverge onto different copies. Serves the prebuilt SPA from the
-// install's ./dist (run `bun run build` once for source/`bun link` use; the
-// compiled binary embeds it).
+// checkout's ./dist in source mode; the installed standalone binary embeds it.
 
-import { existsSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
-import { resolve, join } from "node:path";
-import { homedir } from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { startServer } from "./server";
 import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
-// @ts-ignore — Bun inlines this file's text (and embeds it in the standalone binary).
-import SKILL_TEXT from "./skills/acm-review/SKILL.md" with { type: "text" };
 
 interface Args {
   file?: string;
@@ -44,7 +40,6 @@ function printHelp() {
 Usage:
   acm [file.md]      Open (creating if missing) a CriticMarkup document
   acm                Open a new untitled document
-  acm skill          Install the agent-review skill (~/.claude + ~/.agents)
 
 Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
 running ACM editor; snapshot before every write):
@@ -73,34 +68,6 @@ Options:
   -h, --help         Show this help`);
 }
 
-/** Install the bundled agent-review skill. The real (editable) copy lives under
- *  ~/.agents/skills/acm-review; ~/.claude/skills/acm-review is a symlink to it.
- *  Never overwrites an existing copy — the skill is pure preference, no updates. */
-function installSkill() {
-  const agentsDir = join(homedir(), ".agents", "skills", "acm-review");
-  const agentsFile = join(agentsDir, "SKILL.md");
-  mkdirSync(agentsDir, { recursive: true });
-  if (existsSync(agentsFile)) {
-    console.log(`acm: skill already present (keeping your edits): ${agentsFile}`);
-  } else {
-    writeFileSync(agentsFile, SKILL_TEXT);
-    console.log(`acm: installed agent-review skill → ${agentsFile}`);
-  }
-  const claudeSkills = join(homedir(), ".claude", "skills");
-  const claudeLink = join(claudeSkills, "acm-review");
-  try {
-    mkdirSync(claudeSkills, { recursive: true });
-    if (!existsSync(claudeLink)) {
-      symlinkSync(agentsDir, claudeLink);
-      console.log(`acm: linked → ${claudeLink}`);
-    } else {
-      console.log(`acm: ~/.claude skill already present: ${claudeLink}`);
-    }
-  } catch (e) {
-    console.log(`acm: could not link into ~/.claude/skills — ${(e as Error).message}`);
-  }
-}
-
 function openBrowser(url: string) {
   const cmd =
     process.platform === "darwin"
@@ -122,11 +89,13 @@ function uniqueUntitled(): string {
   return p;
 }
 
-// Subcommands.
 if (process.argv[2] === "skill") {
-  installSkill();
-  process.exit(0);
+  console.error("`acm skill` has been replaced by the standard skills manager.");
+  console.error("From the ACM repository, run `bun run setup` to install or refresh acm-review.");
+  console.error("That setup delegates agent paths and symlinks to `npx skills add`.");
+  process.exit(2);
 }
+
 // Agent edit/read verbs (threads/reply/comment/suggest/accept/reject/resolve/spell).
 if (isAgentVerb(process.argv[2])) {
   // Give `acm spell` its Hunspell dicts when running as the compiled binary (where

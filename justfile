@@ -26,10 +26,7 @@ build:
 
 # Full release gate: types, all tests, compiled binary, and a no-node_modules smoke.
 check:
-    bun run typecheck
-    bun run test
-    bun run build:bin
-    bun run test:bin
+    bun run check
 
 test:
     bun run test
@@ -41,9 +38,6 @@ typecheck:
 bin:
     bun run build:bin
 
-# Install the global `acm` CLI: link this checkout's source onto PATH (bun link)
-# and build the SPA it serves. After pulling/merging changes, `just install`
-# again (or just `just build`) so the served UI matches the source.
+# Convenience alias for the canonical clean-machine setup flow.
 install:
-    bun run build
-    bun link
+    bun run setup

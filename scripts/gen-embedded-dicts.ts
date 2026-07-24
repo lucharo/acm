@@ -1,7 +1,7 @@
 // ── gen-embedded-dicts ─────────────────────────────────────────────────────────
 // Generates src/cli/dicts.generated.ts: four `import … with { type: "file" }`
 // statements (en/gb × aff/dic) plus a variant→paths map. Bun resolves these
-// file-imports to the real path on disk (dev / `bun link`) AND embeds the bytes into
+// file-imports to the real path on disk in source mode AND embeds the bytes into
 // the standalone executable under `bun build --compile` — so `acm spell` finds its
 // Hunspell dictionaries inside the compiled binary, where node_modules isn't present.
 //

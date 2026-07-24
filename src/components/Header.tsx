@@ -339,10 +339,8 @@ export default function Header(props: HeaderProps) {
                   Agent-review skill
                 </div>
                 <p className="text-[11px] leading-snug text-[var(--muted)]">
-                  Run <code className="rounded bg-[var(--line)] px-1 text-[var(--ink)]">acm skill</code> to
-                  install, then edit{" "}
-                  <code className="rounded bg-[var(--line)] px-1 text-[var(--ink)]">~/.agents/skills/acm-review/SKILL.md</code>{" "}
-                  to customize how agents review.
+                  Run <code className="rounded bg-[var(--line)] px-1 text-[var(--ink)]">bun run setup</code> from
+                  the ACM repository to install or refresh it through the standard skills manager.
                 </p>
               </div>
               </>

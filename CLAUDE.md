@@ -3,7 +3,7 @@
 ## Everything must work in the compiled standalone binary
 
 Features must work in the compiled binary (`bun run build:bin` → `dist/acm`), not just
-`bun link` / `bun cli.ts` source mode. `bun build --compile` does **not** embed runtime
+`bun cli.ts` source mode. `bun build --compile` does **not** embed runtime
 filesystem reads — e.g. `readFileSync`/`Bun.file` on a path resolved out of
 `node_modules` at runtime — so anything that reads its data that way works from source
 but silently breaks in `dist/acm` (no `node_modules` beside the executable).

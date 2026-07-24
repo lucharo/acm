@@ -8,11 +8,31 @@ The single source of truth is **one CriticMarkup `.md` file on disk**. The human
 
 ## Install & use
 
-```bash
-bun install
-bun run build:embed        # build the SPA + embed it for the CLI
-bun link                   # put `acm` on your PATH (~/.bun/bin/acm)
+From the repository root, run the one canonical setup command:
 
+```bash
+bun run setup
+```
+
+Setup requires Node 22.20 or newer for the pinned `npx skills add` command. It
+verifies the pinned Bun version and Node toolchain, installs the locked dependencies, builds a
+standalone `acm` binary, installs it in a user-local directory already on
+`PATH` (normally `~/.local/bin`), installs the agent-review skill through the
+standard `skills` CLI, and verifies both are discoverable. Re-run the same
+command after pulling changes.
+`just install` is a convenience alias. To choose the binary directory explicitly:
+
+```bash
+ACM_INSTALL_DIR="$HOME/.local/bin" bun run setup
+```
+
+If the managed skill was edited locally, setup stops before making changes.
+`bun run setup --force` first preserves that skill directory under
+`~/.agents/skill-backups/` as a timestamped backup, then refreshes it.
+
+Then use ACM from anywhere:
+
+```bash
 acm path/to/doc.md         # open the editor on that file (creates it if missing)
 acm                        # open a new untitled doc
 acm --help                 # options: --port <n>, --no-open
@@ -42,16 +62,18 @@ comments with their authors and best-effort anchors, plus tracked insertions
 and deletions. Private Docs deliberately do not trigger a Google login flow;
 download them as `.docx` and use the local-file form.
 
-**Agent-review skill** — the editable copy lives in `~/.agents/skills/acm-review/`;
-`~/.claude/skills/acm-review` is a symlink to it (never overwritten on reinstall):
+**Agent-review skill** — setup delegates path and adapter management to the
+standard `skills` CLI. It installs one global universal copy and enables it for
+Codex and Claude Code. To run that step independently from the repository root:
 
 ```bash
-acm skill
+npx --yes skills@1.5.20 add . --skill acm-review --agent codex claude-code --global --yes
 ```
 
 **Development** (hot-reload):
 
 ```bash
+bun install --frozen-lockfile
 bun run dev                # Vite (:12000) + Bun server (:12001) — open http://localhost:12000
 ```
 

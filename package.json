@@ -2,23 +2,27 @@
   "name": "acm",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "bun@1.3.14",
   "type": "module",
   "description": "Agent CriticMarkup — a local single-document editor for human + AI prose collaboration over a CriticMarkup .md file.",
   "bin": {
     "acm": "./cli.ts"
   },
   "scripts": {
+    "setup": "bun run scripts/setup.ts",
     "dev": "bun run scripts/dev.ts",
     "vite": "vite",
     "server": "bun --watch server.ts",
     "build": "vite build",
     "build:embed": "vite build && bun run scripts/gen-embedded.ts && bun run scripts/gen-embedded-dicts.ts",
-    "build:bin": "bun run build:embed && bun build --compile --outfile dist/acm ./cli.ts",
+    "build:bin": "bun run build:embed && bun run scripts/build-bin.ts",
     "start": "bun run server.ts",
     "preview": "bun run server.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test src/lib src/editor src/cli src/server",
-    "test:bin": "bun run scripts/smoke-bin.ts"
+    "test:bin": "bun run scripts/smoke-bin.ts",
+    "test:setup": "bun test scripts/setup.test.ts",
+    "check": "bun run scripts/check.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

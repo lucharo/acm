@@ -1,7 +1,7 @@
 // ── gen-embedded ──────────────────────────────────────────────────────────────
 // Scans the built ./dist and generates src/server/embedded.generated.ts: one
 // `import … with { type: "file" }` per asset plus a Map<urlPath → bunFilePath>.
-// Bun resolves these file-imports to the real path on disk (dev / `bun link`) AND
+// Bun resolves these file-imports to the real path on disk in source mode AND
 // embeds them into the standalone executable under `bun build --compile`, so the
 // SAME serving code works both ways. Run via `bun run build:embed` after vite build.
 

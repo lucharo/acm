@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { strToU8, zipSync } from "fflate";
 
-const binary = resolve(import.meta.dir, "../dist/acm");
+const binary = resolve(import.meta.dir, `../dist/${process.platform === "win32" ? "acm.exe" : "acm"}`);
 const dir = mkdtempSync(join(tmpdir(), "acm-bin-smoke-"));
 
 try {

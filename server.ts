@@ -38,8 +38,8 @@ export interface StartServerOptions {
   port: number;
   /** Directory holding the built SPA to serve in production (default ./dist). */
   staticDir?: string;
-  /** Embedded SPA assets (url-path → bun file path) — used by the compiled binary
-   *  / `bun link` install. When set, takes precedence over staticDir. */
+  /** Embedded SPA assets (url-path → bun file path) — used by the compiled binary.
+   *  When set, takes precedence over staticDir. */
   staticAssets?: Map<string, string>;
 }
 
@@ -358,8 +358,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
         });
       }
 
-      // Production: serve the SPA. Prefer embedded assets (compiled binary / bun
-      // link); else the filesystem staticDir. SPA fallback → index.html.
+      // Production: serve the SPA. Prefer compiled-in assets; otherwise use the
+      // filesystem staticDir. SPA fallback → index.html.
       const urlKey = pathname === "/" ? "/index.html" : pathname;
       if (staticAssets) {
         const filePath = staticAssets.get(urlKey) ?? staticAssets.get("/index.html");
