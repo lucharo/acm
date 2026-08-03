@@ -18,6 +18,16 @@ function tableNode(source: string): SyntaxNode | null {
   return table;
 }
 
+function descendantNames(node: SyntaxNode): string[] {
+  const names: string[] = [];
+  const visit = (current: SyntaxNode) => {
+    names.push(current.name);
+    for (let child = current.firstChild; child; child = child.nextSibling) visit(child);
+  };
+  visit(node);
+  return names;
+}
+
 describe("Markdown table model", () => {
   test("extracts a standard GFM pipe table", () => {
     const source = "| Name | Quantity |\n| --- | --- |\n| Tea | 2 |\n| Coffee | 1 |";
@@ -49,6 +59,58 @@ describe("Markdown table model", () => {
       "center",
       "right",
     ]);
+  });
+
+  test("keeps a top-level ordinary table eligible for preview", () => {
+    const source = "| A | B |\n| --- | --- |\n| x | y |";
+    const state = EditorState.create({ doc: source });
+    const node = tableNode(source);
+
+    expect(node?.parent?.name).toBe("Document");
+    expect(tablePreviewForNode(state.doc, node!, [], false)).not.toBeNull();
+  });
+
+  test("keeps tables containing any CriticMarkup raw and editable", () => {
+    const source = [
+      "| Kind | Value |",
+      "| --- | --- |",
+      "| insertion | {++new++} |",
+      "| highlight | {==mark==} |",
+      "| comment | {>>@reviewer: note<<} |",
+      "| substitution | {~~old~>new~~} |",
+    ].join("\n");
+    const state = EditorState.create({ doc: source });
+    const node = tableNode(source);
+
+    expect(node?.parent?.name).toBe("Document");
+    expect(descendantNames(node!).filter((name) => /^CM(?:Insert|Highlight|Comment|Substitute)$/.test(name))).toEqual([
+      "CMInsert",
+      "CMHighlight",
+      "CMComment",
+      "CMSubstitute",
+    ]);
+    expect(tablePreviewForNode(state.doc, node!, [], false)).toBeNull();
+    expect(state.doc.toString()).toBe(source);
+  });
+
+  test("keeps blockquote- and list-nested tables raw", () => {
+    const sources = [
+      "> | A | B |\n> | --- | --- |\n> | x | y |",
+      "- item\n\n  | A | B |\n  | --- | --- |\n  | x | y |",
+    ];
+    const parsed = sources.map((source) => {
+      const state = EditorState.create({ doc: source });
+      const node = tableNode(source);
+      return {
+        parent: node?.parent?.name,
+        preview: tablePreviewForNode(state.doc, node!, [], false),
+        source: state.doc.toString(),
+      };
+    });
+
+    expect(parsed.map(({ parent }) => parent)).toEqual(["Blockquote", "ListItem"]);
+    expect(parsed.map(({ preview }) => preview)).toEqual([null, null]);
+    expect(parsed.map(({ source }) => source)).toEqual(sources);
   });
 
   test("does not recognise pipe prose or malformed table text", () => {

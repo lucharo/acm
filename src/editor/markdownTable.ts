@@ -59,6 +59,21 @@ function normaliseRow(cells: string[], columnCount: number): string[] {
   return row;
 }
 
+function hasCriticMarkup(node: SyntaxNode): boolean {
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name.startsWith("CM") || hasCriticMarkup(child)) return true;
+  }
+  return false;
+}
+
+function isPreviewEligible(node: SyntaxNode): boolean {
+  return (
+    node.name === "Table" &&
+    node.parent?.name === "Document" &&
+    !hasCriticMarkup(node)
+  );
+}
+
 export function extractMarkdownTable(
   doc: SliceableDocument,
   node: SyntaxNode,
@@ -97,6 +112,10 @@ export function tablePreviewForNode(
   selections: readonly SelectionRange[],
   hasFocus: boolean,
 ): MarkdownTableModel | null {
+  // Replacing a container-nested table would discard its quote/list structure,
+  // while replacing CriticMarkup would hide its established decorations and
+  // controls. Keep both forms raw; only plain top-level tables are previewed.
+  if (!isPreviewEligible(node)) return null;
   if (
     hasFocus &&
     selections.some((selection) => selection.to >= node.from && selection.from <= node.to)
