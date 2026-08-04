@@ -166,6 +166,39 @@ export const acmTheme: Extension = EditorView.theme(
       fontSize: "0.85em",
       fontFamily: "ui-monospace, monospace",
     },
+    // Parsed GFM table (markdownPreview.ts TableWidget). The fixed layout and
+    // anywhere wrapping keep wide content inside the prose column.
+    ".cm-md-table-wrap": {
+      boxSizing: "border-box",
+      width: "100%",
+      maxWidth: "100%",
+      overflow: "hidden",
+      cursor: "text",
+    },
+    ".cm-md-table": {
+      width: "100%",
+      maxWidth: "100%",
+      tableLayout: "fixed",
+      borderCollapse: "collapse",
+      fontFamily: "var(--editor-font)",
+      fontSize: "0.94em",
+      lineHeight: "1.45",
+    },
+    ".cm-md-table th, .cm-md-table td": {
+      border: "1px solid var(--line-strong)",
+      padding: "0.38em 0.55em",
+      verticalAlign: "top",
+      overflowWrap: "anywhere",
+      wordBreak: "break-word",
+    },
+    ".cm-md-table th": {
+      backgroundColor: "var(--line)",
+      fontWeight: "700",
+      color: "var(--ink)",
+    },
+    ".cm-md-table td": {
+      backgroundColor: "var(--panel)",
+    },
     // Substitution arrow rendered in place of `~>`.
     ".cm-md-sub-arrow": {
       color: "var(--muted)",

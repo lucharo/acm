@@ -1,13 +1,16 @@
 // ── Markdown live-preview ─────────────────────────────────────────────────────
-// Makes the buffer LOOK rendered while staying plain text. Two responsibilities,
-// split into two ViewPlugins (each with its OWN RangeSetBuilder) because a mark
-// and a replace over the SAME node range overlap and crash a single builder:
+// Makes the buffer LOOK rendered while staying plain text. Inline preview has two
+// responsibilities, split into two ViewPlugins (each with its OWN RangeSetBuilder)
+// because a mark and a replace over the SAME node range crash a single builder:
 //
 //   1. STYLE plugin  — Decoration.mark to size headings, embolden strong, etc.,
 //      plus a line decoration giving blockquote lines a left rule.
 //   2. HIDE plugin    — Decoration.replace (empty) to hide the syntax markers
 //      (#, **, _, `, >, list bullets, link [] () ) UNLESS the cursor/selection is
 //      on that line, in which case the markers are revealed for editing.
+//
+// Tables use a third component: a StateField provides block replacements (which
+// ViewPlugins cannot), revealing the raw table whenever focus + selection enter it.
 //
 // Both only walk `view.visibleRanges` and rebuild on doc / viewport / selection
 // changes. CriticMarkup nodes are skipped entirely — criticMarkupView.ts owns
@@ -18,8 +21,11 @@
 import { syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
-import type { Extension, Range } from "@codemirror/state";
+import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import type { EditorState, Extension, Range } from "@codemirror/state";
+
+import { tablePreviewForNode } from "./markdownTable";
+import type { MarkdownTableModel, TableAlignment } from "./markdownTable";
 
 // CriticMarkup delimiter nodes we hide (like Markdown markers) so suggestions read
 // as rendered prose: green inserted text, struck deletions, etc. — not raw `{++…++}`.
@@ -108,6 +114,66 @@ class ImageWidget extends WidgetType {
   }
 }
 
+/** Renders a parsed GFM table while its source range is inactive. The widget
+ *  only reads the model; the Markdown buffer remains the single source of truth. */
+class TableWidget extends WidgetType {
+  constructor(readonly model: MarkdownTableModel) {
+    super();
+  }
+  eq(other: TableWidget) {
+    return other.model.from === this.model.from && other.model.source === this.model.source;
+  }
+  toDOM(view: EditorView) {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-md-table-wrap";
+    wrap.title = "Click to edit Markdown table";
+
+    const table = document.createElement("table");
+    table.className = "cm-md-table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    this.model.header.forEach((value, index) => {
+      headRow.appendChild(tableCell("th", value, this.model.alignments[index]));
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    if (this.model.rows.length > 0) {
+      const body = document.createElement("tbody");
+      for (const row of this.model.rows) {
+        const rowElement = document.createElement("tr");
+        row.forEach((value, index) => {
+          rowElement.appendChild(tableCell("td", value, this.model.alignments[index]));
+        });
+        body.appendChild(rowElement);
+      }
+      table.appendChild(body);
+    }
+    wrap.appendChild(table);
+
+    // A block replacement has no editable DOM text. Put the selection at the
+    // table start, then focus the editor; the focus state rebuild reveals all
+    // original Markdown for direct editing.
+    wrap.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: this.model.from }, scrollIntoView: true });
+      view.focus();
+    });
+    return wrap;
+  }
+}
+
+function tableCell(
+  tag: "th" | "td",
+  value: string,
+  alignment: TableAlignment | undefined,
+): HTMLTableCellElement {
+  const cell = document.createElement(tag);
+  cell.textContent = value;
+  if (alignment) cell.style.textAlign = alignment;
+  return cell;
+}
+
 // Marks that, when present as a node's child, denote raw markdown syntax we hide.
 // NB: ListMark is NOT here — it's special-cased in buildHide (rendered as a bullet
 // for unordered lists, left visible for ordered) rather than hidden outright.
@@ -194,6 +260,9 @@ function buildStyle(view: EditorView): DecorationSet {
         const name = node.name;
         // Don't descend into CriticMarkup — its view owns styling there.
         if (name.startsWith("CM")) return false;
+        // Inactive tables are one block widget; active tables deliberately stay
+        // raw, without nested preview styling obscuring the editable source.
+        if (name === "Table") return false;
 
         const hClass = headingClass(name);
         if (hClass) {
@@ -266,6 +335,11 @@ function buildHide(view: EditorView): DecorationSet {
           return false;
         }
         if (name.startsWith("CM")) return; // container node — descend to its delimiters
+
+        // Table rendering lives in a StateField because block replacements may
+        // not be supplied by a ViewPlugin. Never emit nested hide ranges: when
+        // active, every cell and delimiter must remain raw and editable.
+        if (name === "Table") return false;
 
         // Images: replace the whole `![alt](url)` with the rendered image (off
         // the active line). `return false` throughout — the node's LinkMark/URL
@@ -343,5 +417,87 @@ const hideViewPlugin = ViewPlugin.fromClass(
   },
 );
 
-/** The live-preview extension: style marks + marker-hiding, as two plugins. */
-export const markdownPreview: Extension = [styleViewPlugin, hideViewPlugin];
+interface TablePreviewState {
+  focused: boolean;
+  decorations: DecorationSet;
+}
+
+const setTablePreviewFocus = StateEffect.define<boolean>();
+
+function buildTablePreviews(
+  state: EditorState,
+  focused: boolean,
+): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "Table") return;
+      const model = tablePreviewForNode(
+        state.doc,
+        node.node,
+        state.selection.ranges,
+        focused,
+      );
+      if (model) {
+        ranges.push(
+          Decoration.replace({
+            widget: new TableWidget(model),
+            block: true,
+            inclusive: false,
+          }).range(node.from, node.to),
+        );
+      }
+      return false;
+    },
+  });
+
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const range of ranges) builder.add(range.from, range.to, range.value);
+  return builder.finish();
+}
+
+const tablePreviewField = StateField.define<TablePreviewState>({
+  create(state) {
+    return { focused: false, decorations: buildTablePreviews(state, false) };
+  },
+  update(value, transaction) {
+    let focused = value.focused;
+    for (const effect of transaction.effects) {
+      if (effect.is(setTablePreviewFocus)) focused = effect.value;
+    }
+    if (
+      transaction.docChanged ||
+      transaction.selection ||
+      focused !== value.focused ||
+      syntaxTree(transaction.state) !== syntaxTree(transaction.startState)
+    ) {
+      return {
+        focused,
+        decorations: buildTablePreviews(transaction.state, focused),
+      };
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+});
+
+const tableFocusHandlers = EditorView.domEventHandlers({
+  focus(_event, view) {
+    if (!view.state.field(tablePreviewField).focused) {
+      view.dispatch({ effects: setTablePreviewFocus.of(true) });
+    }
+  },
+  blur(_event, view) {
+    if (view.state.field(tablePreviewField).focused) {
+      view.dispatch({ effects: setTablePreviewFocus.of(false) });
+    }
+  },
+});
+
+/** The live-preview extension: inline styling/hiding plus block table previews. */
+export const markdownPreview: Extension = [
+  styleViewPlugin,
+  hideViewPlugin,
+  tablePreviewField,
+  tableFocusHandlers,
+];

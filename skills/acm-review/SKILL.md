@@ -49,6 +49,21 @@ references/footnotes, which live in free prose, just write the markdown link inl
 
 Decision: **free prose → inline `{~~~>~~}`. Commented/anchored text → `SUGGEST:`.**
 
+### Human-authored prose stays approval-gated
+
+When the human asks for comments or suggestions, or the document is explicitly
+human-authored, **never add substantive prose as a direct document edit**. New headings,
+paragraphs, lists and tables are proposals until the human accepts them.
+
+- Free-standing additions become `{++insertion suggestions++}`. A suggestion may span
+  several lines, but split at blank paragraphs so every construct remains parseable.
+- Changes to existing anchored prose use `SUGGEST:`; use a group when several edits form
+  one decision.
+- Direct edits are reserved for mechanical markup repair or content the human explicitly
+  told you to apply, not merely content they asked you to draft or add for review.
+- After the write, verify that proposed prose is represented by suggestion tokens rather
+  than ordinary Markdown, so the human can accept or reject every contribution.
+
 **Three rules learned the hard way:**
 
 1. **One comment = one suggestion.** A `SUGGEST:` comment's body is ONLY the
