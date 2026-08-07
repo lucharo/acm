@@ -21,13 +21,25 @@ import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
 import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
-import { readConfig, writeConfig } from "./src/server/config";
+import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
 import { saveAsset, resolveUnderDocDir } from "./src/server/asset";
 import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
-
-const SETTINGS_FILE = "settings.json";
+import { isDecisionEvent, type DecisionEvent } from "./src/lib/decision";
+import {
+  appendDecisionEvent as appendDecisionEventToStore,
+  appendDecisionEvents as appendDecisionEventsToStore,
+  readDecisionHistory,
+} from "./src/server/decisions";
+import { isAllowedOrigin, isLoopbackHost, serveAppAsset } from "./src/server/http";
+import { mergeConfigPatch } from "./src/lib/seenState";
+import { documentUpdateLockPath, withFileUpdateLock } from "./src/server/fileLock";
+import {
+  clearDecisionRecoveryEvents as clearDecisionRecoveryEventsInStore,
+  readDecisionRecoveryEvents as readDecisionRecoveryEventsFromStore,
+  storeDecisionRecoveryEvents as storeDecisionRecoveryEventsInStore,
+} from "./src/server/decisionRecovery";
 
 const DOC_TOPIC = "doc";
 
@@ -41,34 +53,30 @@ export interface StartServerOptions {
   /** Embedded SPA assets (url-path → bun file path) — used by the compiled binary.
    *  When set, takes precedence over staticDir. */
   staticAssets?: Map<string, string>;
+  /** Test seam for the external filesystem boundary. */
+  appendDecisionEvent?: (docPath: string, event: DecisionEvent) => Promise<{ appended: boolean }>;
+  appendDecisionEvents?: (
+    docPath: string,
+    events: readonly DecisionEvent[],
+  ) => Promise<{ appended: number }>;
+  /** Test seams for the server-owned committed-decision recovery boundary. */
+  readDecisionRecoveryEvents?: (docPath: string) => Promise<DecisionEvent[]>;
+  storeDecisionRecoveryEvents?: (
+    docPath: string,
+    events: readonly DecisionEvent[],
+  ) => Promise<{ stored: number; quarantinedPath?: string }>;
+  clearDecisionRecoveryEvents?: (
+    docPath: string,
+    events: readonly DecisionEvent[],
+  ) => Promise<{ removed: number; remaining: number; quarantinedPath?: string }>;
 }
 
 export interface AcmServer {
   server: ReturnType<typeof Bun.serve>;
   port: number;
   docPath: string;
+  serverEpoch: string;
   stop: () => void;
-}
-
-function isLoopbackHost(host: string | null): boolean {
-  if (!host) return false;
-  try {
-    const hostname = new URL(`http://${host}`).hostname;
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
-  } catch {
-    return false;
-  }
-}
-
-function isAllowedOrigin(req: Request): boolean {
-  const origin = req.headers.get("origin");
-  if (!origin) return true; // CLI/curl requests are local but do not send Origin.
-  try {
-    const originUrl = new URL(origin);
-    return originUrl.protocol === "http:" && originUrl.host.toLowerCase() === req.headers.get("host")?.toLowerCase();
-  } catch {
-    return false;
-  }
 }
 
 /** Boot an ACM server instance against one document. Returns the running server. */
@@ -78,7 +86,26 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const docName = basename(docPath);
   const staticDir = opts.staticDir ?? "./dist";
   const staticAssets = opts.staticAssets;
+  const appendDecisionEvent = opts.appendDecisionEvent ?? appendDecisionEventToStore;
+  const appendDecisionEvents =
+    opts.appendDecisionEvents ??
+    (opts.appendDecisionEvent
+      ? async (path: string, events: readonly DecisionEvent[]) => {
+          let appended = 0;
+          for (const event of events) {
+            if ((await appendDecisionEvent(path, event)).appended) appended += 1;
+          }
+          return { appended };
+        }
+      : appendDecisionEventsToStore);
+  const readDecisionRecoveryEvents =
+    opts.readDecisionRecoveryEvents ?? readDecisionRecoveryEventsFromStore;
+  const storeDecisionRecoveryEvents =
+    opts.storeDecisionRecoveryEvents ?? storeDecisionRecoveryEventsInStore;
+  const clearDecisionRecoveryEvents =
+    opts.clearDecisionRecoveryEvents ?? clearDecisionRecoveryEventsInStore;
   const { port } = opts;
+  const serverEpoch = crypto.randomUUID();
 
   // ── Source-of-truth state ───────────────────────────────────────────────────
   let version = 0;
@@ -130,7 +157,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
   }
 
   function pushUpdate(content: string) {
-    const msg: ServerMessage = { type: "update", content, version };
+    const msg: ServerMessage = { type: "update", content, version, serverEpoch };
     server.publish(DOC_TOPIC, JSON.stringify(msg));
   }
 
@@ -152,25 +179,32 @@ export function startServer(opts: StartServerOptions): AcmServer {
     | { ok: false; reason: "overlap" | "containment"; content: string; version: number };
 
   async function commitWrite(mine: string, base: string, guards?: string[]): Promise<CommitResult> {
-    const theirs = await Bun.file(docPath).text(); // disk is the authoritative "theirs"
-    let toWrite: string;
-    if (theirs === base || mine === theirs) {
-      toWrite = mine; // nobody moved under us (or we'd write exactly what's there)
-    } else {
-      const m = merge3(mine, base, theirs);
-      if (!m.clean) return { ok: false, reason: "overlap", content: theirs, version };
-      if (guards && !guards.every((g) => m.result.includes(g)))
-        return { ok: false, reason: "containment", content: theirs, version };
-      toWrite = m.result;
-    }
-    if (toWrite === theirs) return { ok: true, content: theirs, version }; // no-op
-    await Bun.write(docPath, toWrite);
-    lastKnownHash = Bun.hash(toWrite); // hash the BYTES WRITTEN so the watcher drops our echo
-    version++;
-    recordVersion(toWrite);
-    pushUpdate(toWrite); // broadcast the FINAL (possibly merged) bytes to every client
-    recordHistorySoon("edit");
-    return { ok: true, content: toWrite, version };
+    return withFileUpdateLock(
+      documentUpdateLockPath(docPath),
+      `document ${docPath}`,
+      async () => {
+        const theirs = await Bun.file(docPath).text(); // disk is the authoritative "theirs"
+        let toWrite: string;
+        if (theirs === base || mine === theirs) {
+          toWrite = mine; // nobody moved under us (or we'd write exactly what's there)
+        } else {
+          const m = merge3(mine, base, theirs);
+          if (!m.clean) return { ok: false, reason: "overlap", content: theirs, version };
+          if (guards && !guards.every((g) => m.result.includes(g))) {
+            return { ok: false, reason: "containment", content: theirs, version };
+          }
+          toWrite = m.result;
+        }
+        if (toWrite === theirs) return { ok: true, content: theirs, version }; // no-op
+        await Bun.write(docPath, toWrite);
+        lastKnownHash = Bun.hash(toWrite); // hash the BYTES WRITTEN so the watcher drops our echo
+        version++;
+        recordVersion(toWrite);
+        pushUpdate(toWrite); // broadcast the FINAL (possibly merged) bytes to every client
+        recordHistorySoon("edit");
+        return { ok: true, content: toWrite, version };
+      },
+    );
   }
 
   // Parse a JSON request body, or null when it's malformed/empty — so a bad body
@@ -183,6 +217,64 @@ export function startServer(opts: StartServerOptions): AcmServer {
     }
   }
   const badJson = () => new Response("Bad request: invalid JSON", { status: 400 });
+  const decisionEventsFrom = (body: Record<string, unknown>): DecisionEvent[] | null => {
+    if (body.decisionEvents === undefined) return [];
+    if (!Array.isArray(body.decisionEvents) || !body.decisionEvents.every(isDecisionEvent)) return null;
+    return body.decisionEvents;
+  };
+  const persistDecisionEvents = async (events: DecisionEvent[]): Promise<void> => {
+    await appendDecisionEvents(docPath, events);
+  };
+  const retainCommittedDecisionEvents = async (events: DecisionEvent[]) => {
+    const recoverable = events.filter((event) => event.source === "gui");
+    if (recoverable.length === 0) {
+      return { status: "skipped" as const, reason: "cli-compensation" as const };
+    }
+    try {
+      const result = await storeDecisionRecoveryEvents(docPath, recoverable);
+      return {
+        status: "stored" as const,
+        ...(result.quarantinedPath
+          ? { quarantinedPath: result.quarantinedPath }
+          : {}),
+      };
+    } catch (error) {
+      return {
+        status: "failed" as const,
+        message: (error as Error).message,
+      };
+    }
+  };
+  const clearCommittedDecisionEvents = async (events: DecisionEvent[]) => {
+    try {
+      const result = await clearDecisionRecoveryEvents(docPath, events);
+      if (result.quarantinedPath) {
+        return {
+          status: "quarantined" as const,
+          path: result.quarantinedPath,
+        };
+      }
+      return null;
+    } catch (error) {
+      return {
+        status: "failed" as const,
+        message: (error as Error).message,
+      };
+    }
+  };
+  const decisionDocumentMatches = (body: Record<string, unknown>): boolean =>
+    body.documentPath === docPath;
+  const decisionDocumentMismatch = () =>
+    Response.json(
+      {
+        audit: {
+          status: "failed",
+          code: "document-mismatch",
+          retryable: false,
+        },
+      },
+      { status: 409 },
+    );
 
   // ── HTTP + WebSocket server ──────────────────────────────────────────────────
   // A busy port surfaces here as a thrown EADDRINUSE — we let it propagate so
@@ -212,11 +304,15 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
+      if (pathname === "/api/session" && req.method === "GET") {
+        return Response.json({ mode: "document", path: docPath });
+      }
+
       // GET /api/doc → current snapshot. `path` lets the client key per-document
       // config (the spellIgnore lists) — existing consumers destructure past it.
       if (pathname === "/api/doc" && req.method === "GET") {
         const content = await Bun.file(docPath).text();
-        return Response.json({ content, version, path: docPath });
+        return Response.json({ content, version, path: docPath, serverEpoch });
       }
 
       // PUT /api/doc → the human editor's save. Reconciles against the base the
@@ -226,6 +322,12 @@ export function startServer(opts: StartServerOptions): AcmServer {
       if (pathname === "/api/doc" && req.method === "PUT") {
         const body = await jsonBody(req);
         if (!body) return badJson();
+        const decisionEvents = decisionEventsFrom(body);
+        if (!decisionEvents) return new Response("Bad request: invalid decision events", { status: 400 });
+        if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
+        if (body.serverEpoch !== serverEpoch) {
+          return Response.json({ conflict: "server-epoch" }, { status: 409 });
+        }
         const { content, baseVersion } = body as { content: string; baseVersion: number };
         return withLock(async () => {
           const base = contentByVersion.get(baseVersion);
@@ -237,8 +339,112 @@ export function startServer(opts: StartServerOptions): AcmServer {
           }
           const r = await commitWrite(content, base);
           if (!r.ok) return Response.json({ content: r.content, version: r.version, conflict: r.reason }, { status: 409 });
-          return Response.json({ version: r.version, content: r.content });
+          try {
+            await persistDecisionEvents(decisionEvents);
+          } catch {
+            const recovery = await retainCommittedDecisionEvents(decisionEvents);
+            return Response.json(
+              {
+                version: r.version,
+                content: r.content,
+                audit: {
+                  status: "failed",
+                  code: "decision-persistence",
+                  retryable: true,
+                  decisionEvents,
+                  recovery,
+                },
+              },
+              { status: 500 },
+            );
+          }
+          const recovery = await clearCommittedDecisionEvents(decisionEvents);
+          return Response.json({
+            version: r.version,
+            content: r.content,
+            ...(decisionEvents.length > 0
+              ? {
+                  audit: {
+                    status: "persisted",
+                    decisionEventIds: decisionEvents.map((event) => event.id),
+                    ...(recovery ? { recovery } : {}),
+                  },
+                }
+              : {}),
+          });
         });
+      }
+
+      // Durable, inspectable audit history for successful review decisions.
+      if (pathname === "/api/decisions" && req.method === "POST") {
+        const body = await jsonBody(req);
+        if (!body) return badJson();
+        const decisionEvents = decisionEventsFrom(body);
+        if (!decisionEvents) {
+          return new Response("Bad request: invalid decision events", { status: 400 });
+        }
+        if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
+        return withLock(async () => {
+          try {
+            await persistDecisionEvents(decisionEvents);
+          } catch (err) {
+            const recovery = await retainCommittedDecisionEvents(decisionEvents);
+            return Response.json(
+              {
+                audit: {
+                  status: "failed",
+                  code: "decision-persistence",
+                  retryable: true,
+                  decisionEvents,
+                  message: (err as Error).message,
+                  recovery,
+                },
+              },
+              { status: 500 },
+            );
+          }
+          const recovery = await clearCommittedDecisionEvents(decisionEvents);
+          return Response.json({
+            audit: {
+              status: "persisted",
+              decisionEventIds: decisionEvents.map((event) => event.id),
+              ...(recovery ? { recovery } : {}),
+            },
+          });
+        });
+      }
+
+      if (pathname === "/api/decisions" && req.method === "GET") {
+        try {
+          const history = await readDecisionHistory(docPath);
+          return Response.json({
+            decisionEvents: history.decisionEvents,
+            ...(history.issues.length > 0 ? { decisionHistoryIssues: history.issues } : {}),
+          });
+        } catch (err) {
+          return Response.json(
+            { error: { code: "decision-history-unreadable", message: (err as Error).message } },
+            { status: 500 },
+          );
+        }
+      }
+
+      if (pathname === "/api/decision-recovery" && req.method === "GET") {
+        try {
+          return Response.json({
+            decisionEvents: await readDecisionRecoveryEvents(docPath),
+          });
+        } catch (error) {
+          return Response.json(
+            {
+              error: {
+                code: "decision-recovery-unreadable",
+                message: (error as Error).message,
+              },
+            },
+            { status: 500 },
+          );
+        }
       }
 
       // POST /api/comment → in-app comment via the shared grammar. Reads under the
@@ -247,6 +453,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
       if (pathname === "/api/comment" && req.method === "POST") {
         const body = await jsonBody(req);
         if (!body) return badJson();
+        if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
         const { anchor, text, author } = body as { anchor: number; text: string; author: string };
         return withLock(async () => {
           const before = await Bun.file(docPath).text();
@@ -266,6 +473,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
       if (pathname === "/api/agent-write" && req.method === "POST") {
         const body = await jsonBody(req);
         if (!body) return badJson();
+        const decisionEvents = decisionEventsFrom(body);
+        if (!decisionEvents) return new Response("Bad request: invalid decision events", { status: 400 });
+        if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
         const { base, content } = body as { base: string; content: string };
         return withLock(async () => {
           const span = changedSpan(base, content);
@@ -278,7 +488,35 @@ export function startServer(opts: StartServerOptions): AcmServer {
           }
           const r = await commitWrite(content, base, changedFragments(base, content));
           if (!r.ok) return Response.json({ conflict: r.reason }, { status: 409 });
-          return Response.json({ version: r.version, content: r.content });
+          try {
+            await persistDecisionEvents(decisionEvents);
+          } catch {
+            return Response.json(
+              {
+                version: r.version,
+                content: r.content,
+                audit: {
+                  status: "failed",
+                  code: "decision-persistence",
+                  retryable: true,
+                  decisionEvents,
+                },
+              },
+              { status: 500 },
+            );
+          }
+          return Response.json({
+            version: r.version,
+            content: r.content,
+            ...(decisionEvents.length > 0
+              ? {
+                  audit: {
+                    status: "persisted",
+                    decisionEventIds: decisionEvents.map((event) => event.id),
+                  },
+                }
+              : {}),
+          });
         });
       }
 
@@ -337,37 +575,29 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return Response.json(saved);
       }
 
-      // GET /api/settings → persisted view settings + "seen" state (or {} on a
+      // GET /api/settings → persisted view settings + per-document "seen" state (or {} on a
       // fresh install). The browser keeps localStorage as an instant cache; this
       // file is the source of truth across instances/restarts.
       if (pathname === "/api/settings" && req.method === "GET") {
         return Response.json(await readConfig<Record<string, unknown>>(SETTINGS_FILE, {}));
       }
 
-      // PUT /api/settings → MERGE a partial patch ({settings} or {seen}) into the
-      // stored config. Merge (not replace) so the two independent client writers —
-      // settings (App) and seen (Workspace) — never clobber each other's key.
+      // PUT /api/settings → MERGE a partial patch ({settings} or one
+      // {seenByDocument} slice) into the stored config. Nested seen slices merge
+      // one level deep so open documents do not clobber each other's state.
       // Serialized via withLock so concurrent patches can't lose a read-modify-write.
       if (pathname === "/api/settings" && req.method === "PUT") {
         const patch = await jsonBody(req);
         if (!patch) return badJson();
         return withLock(async () => {
-          const current = await readConfig<Record<string, unknown>>(SETTINGS_FILE, {});
-          await writeConfig(SETTINGS_FILE, { ...current, ...patch });
+          await updateConfig<Record<string, unknown>>(SETTINGS_FILE, {}, (current) =>
+            mergeConfigPatch(current, patch),
+          );
           return Response.json({ ok: true });
         });
       }
 
-      // Production: serve the SPA. Prefer compiled-in assets; otherwise use the
-      // filesystem staticDir. SPA fallback → index.html.
-      const urlKey = pathname === "/" ? "/index.html" : pathname;
-      if (staticAssets) {
-        const filePath = staticAssets.get(urlKey) ?? staticAssets.get("/index.html");
-        return filePath ? new Response(Bun.file(filePath)) : new Response("Not found", { status: 404 });
-      }
-      const asset = Bun.file(`${staticDir}${urlKey}`);
-      if (await asset.exists()) return new Response(asset);
-      return new Response(Bun.file(`${staticDir}/index.html`));
+      return serveAppAsset(pathname, staticDir, staticAssets);
     },
 
     websocket: {
@@ -407,18 +637,24 @@ export function startServer(opts: StartServerOptions): AcmServer {
     }, 100);
   });
 
-  console.log(`ACM server on http://localhost:${port} — doc: ${docPath}`);
+  const boundPort = server.port ?? port;
+  console.log(`ACM server on http://localhost:${boundPort} — doc: ${docPath}`);
 
   // Register in ~/.config/acm/instances.json so `acm` verbs can resolve "the doc
   // open in the editor" without --doc/ACM_DOC. Fire-and-forget; liveness (pid
   // probing) is the authority, so no unregister-on-exit bookkeeping is needed.
-  void registerInstance(port, docPath);
+  void registerInstance(boundPort, docPath).catch(() => {
+    console.error(
+      "ACM warning: could not update the optional running-instance registry.",
+    );
+  });
 
 
   return {
     server,
-    port,
+    port: boundPort,
     docPath,
+    serverEpoch,
     stop: () => {
       watcher.close();
       if (debounce) clearTimeout(debounce);

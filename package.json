@@ -19,7 +19,7 @@
     "start": "bun run server.ts",
     "preview": "bun run server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/lib src/editor src/cli src/server",
+    "test": "bun test src",
     "test:bin": "bun run scripts/smoke-bin.ts",
     "test:setup": "bun test scripts/setup.test.ts",
     "check": "bun run scripts/check.ts"
@@ -37,6 +37,7 @@
     "dictionary-en": "^4.0.0",
     "dictionary-en-gb": "^3.0.0",
     "fflate": "^0.8.3",
+    "lucide-react": "^1.30.0",
     "nspell": "^2.1.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

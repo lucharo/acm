@@ -12,7 +12,7 @@ human sees it rendered live.
 
 ## The file is the API
 
-The document path is whatever the human opened (`acm <file>`). The file is the source
+The document path is whatever the human opened (`acm edit <file>`). The file is the source
 of truth — read it freely, and write through the `acm` verbs (below). The running ACM
 UI reflects your changes within ~1s. No database, no special format beyond CriticMarkup.
 
@@ -309,14 +309,19 @@ single-thread verbs; on `--batch` the author lives inside each `insert` string.
 ## HTTP API / direct file (fallbacks)
 
 When a server is running:
-- `GET /api/doc` → `{content, version}` — read the live doc.
-- `POST /api/comment` `{anchor, text, author}` — drop a comment via the shared grammar.
-- `POST /api/agent-write` `{base, content}` — the **agent write path**: the server
+- `GET /api/doc` → `{content, version, path, serverEpoch}` — read the live doc.
+- `POST /api/comment` `{documentPath, anchor, text, author}` — drop a comment via
+  the shared grammar.
+- `POST /api/agent-write` `{documentPath, base, content}` — the **agent write path**: the server
   3-way merges your `content` against disk (so the human's concurrent edits survive)
   and runs a **cursor guard** — `409 {conflict:"cursor"}` if the human's caret sits in
   your edited span, `409` on a same-span overlap too. This is what the `acm` verbs POST.
-- `PUT /api/doc` `{content, baseVersion}` (409 on conflict) — the **human editor's**
-  save, reconciled against the base it started from. Not the agent path.
+- `PUT /api/doc` `{documentPath, content, baseVersion, serverEpoch}` (409 on conflict) — the
+  **human editor's** save, reconciled against the base it started from. The epoch
+  must be copied from the latest GET so a restarted server cannot mistake an old
+  version number for its own. Every mutating document request must copy the exact
+  `path` from that GET as `documentPath`; missing or mismatched paths are rejected
+  before writing. Not the agent path.
 
 Reading the file directly is always fine. **Writing the file directly is only safe when
 no server is running** — a blind write while an editor is live skips the merge + cursor

@@ -25,6 +25,7 @@ import {
   healDocument,
   pageBreakLines,
   wrappableSpan,
+  isStandaloneInsertion,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -83,6 +84,51 @@ describe("scanTokens — single constructs", () => {
       expect(t.author).toBeNull();
       expect(t.body).toBe("just a note");
     }
+  });
+});
+
+// ── standalone insertions (#54) ──────────────────────────────────────────────
+
+describe("standalone insertions", () => {
+  test("recognizes a single-line addition only when it owns its whole line", () => {
+    const standalone = "before\n{++# Heading++}\nafter";
+    const [token] = scanTokens(standalone);
+
+    expect(token.type).toBe("insert");
+    expect(isStandaloneInsertion(standalone, token)).toBe(true);
+    expect(token.raw).toBe("{++# Heading++}");
+
+    const inline = "before {++# Heading++} after";
+    const [inlineToken] = scanTokens(inline);
+    expect(inlineToken.type).toBe("insert");
+    expect(isStandaloneInsertion(inline, inlineToken)).toBe(false);
+  });
+
+  test("recognizes multiline headings, lists, links, inline formatting, and blank lines", () => {
+    const inner = "# Heading\n\n- **first**\n- [second](https://example.com) with `code`";
+    const content = `intro\n{++${inner}++}\noutro`;
+    const [token] = scanTokens(content);
+
+    expect(token).toMatchObject({ type: "insert", inner });
+    expect(isStandaloneInsertion(content, token)).toBe(true);
+    expect(content.slice(token.from, token.to)).toBe(token.raw);
+  });
+
+  test("does not relax no-swallow protection for inline, dangling, or nested additions", () => {
+    expect(scanTokens("inline {++one\n\ntwo++} prose")).toEqual([]);
+    expect(scanTokens("inline {++one\r\n\r\ntwo++} prose")).toEqual([]);
+    expect(scanTokens("{++dangling\n\nprose")).toEqual([]);
+    expect(scanTokens("{++outer\n\n{--nested--}\n\nouter++}")).toEqual([
+      expect.objectContaining({ type: "delete", inner: "nested" }),
+    ]);
+  });
+
+  test("accept keeps exact multiline inner bytes and reject removes the whole token", () => {
+    const inner = "# Heading\n\n- [link](url)\n\n**strong** and `code`";
+    const raw = `{++${inner}++}`;
+
+    expect(applySuggestion(raw, "accept")).toBe(inner);
+    expect(applySuggestion(raw, "reject")).toBe("");
   });
 });
 
@@ -233,6 +279,17 @@ describe("formatComment", () => {
     expect(formatComment("   ", "note")).toBe("{>>note<<}");
   });
 
+  test("delimiter-shaped and control characters in an author round-trip safely", () => {
+    const author = "Luis<<}ops:\nreview";
+
+    const raw = formatComment(author, "hello");
+    const [comment] = scanTokens(raw) as [CommentToken];
+
+    expect(scanTokens(raw)).toHaveLength(1);
+    expect(comment).toMatchObject({ author, body: "hello", raw });
+    expect(validateMarkup(raw)).toEqual([]);
+  });
+
   test("round-trips through scanTokens", () => {
     const raw = formatComment("editor", "a fine point");
     const [t] = scanTokens(raw) as [CommentToken];
@@ -251,6 +308,30 @@ describe("formatComment", () => {
     expect(tokens[0].raw).toBe(raw);
     expect(tokens[0].from).toBe(0);
     expect(tokens[0].to).toBe(raw.length);
+  });
+
+  test("serializes multiline pasted text deterministically and round-trips every byte", () => {
+    const body = "  first line\r\n\r\nsecond \\ path with {>> literal <<}  ";
+
+    const raw = formatComment("Luis", body);
+
+    expect(raw).toBe(
+      "{>>@Luis: ~acm1~  first line\\r\\n\\r\\nsecond \\\\ path with \\u007b>> literal <<\\u007d  <<}",
+    );
+    expect(formatComment("Luis", body)).toBe(raw);
+    const [comment] = scanTokens(raw) as [CommentToken];
+    expect(comment).toMatchObject({ author: "Luis", body });
+    expect(validateMarkup(raw)).toEqual([]);
+  });
+
+  test("an existing literal codec-looking prefix remains comment content", () => {
+    const body = "~acm1~ordinary text";
+    const [comment] = scanTokens(`{>>@Luis: ${body}<<}`) as [CommentToken];
+
+    expect(comment.body).toBe(body);
+    const formatted = formatComment("Luis", body);
+    expect(formatted).toBe("{>>@Luis: ~acm1~~acm1~ordinary text<<}");
+    expect((scanTokens(formatted)[0] as CommentToken).body).toBe(body);
   });
 });
 
@@ -609,6 +690,19 @@ describe("pageBreakLines", () => {
 // ── healDocument — in-place repair of converter-era leaks ─────────────────────
 
 describe("healDocument", () => {
+  test("recovers a legacy blank-line comment without discarding its body", () => {
+    const malformed = "Before {>>@Luis: first line\n\nsecond line<<} after";
+
+    const healed = healDocument(malformed);
+
+    expect(healed).toBe("Before {>>@Luis: ~acm1~first line\\n\\nsecond line<<} after");
+    expect(scanTokens(healed).filter(isComment)).toEqual([
+      expect.objectContaining({ author: "Luis", body: "first line\n\nsecond line" }),
+    ]);
+    expect(validateMarkup(healed)).toEqual([]);
+    expect(healDocument(healed)).toBe(healed);
+  });
+
   test("a multi-block anchor re-anchors on its final block; earlier paragraphs stay prose", () => {
     const doc = "{==First para of the span.\n\nSecond para. ==}{>>@l: note<<} tail";
     const healed = healDocument(doc);
@@ -951,6 +1045,19 @@ describe("groupCards — suggestions + comment threads as one ordered set", () =
     expect(cards).toHaveLength(1);
     expect(cards[0].kind).toBe("suggestion");
     expect(cards[0].comments).toHaveLength(0);
+  });
+  test("marks only whole-line insertions as standalone rail previews", () => {
+    const standalone = "Before\n\n{++## Proposed section\n\n- First item++}\n\nAfter";
+    const inline = "Before {++new wording++} after";
+
+    expect(groupCards(scanTokens(standalone), standalone)[0]).toMatchObject({
+      kind: "suggestion",
+      standalone: true,
+    });
+    expect(groupCards(scanTokens(inline), inline)[0]).toMatchObject({
+      kind: "suggestion",
+      standalone: false,
+    });
   });
 });
 

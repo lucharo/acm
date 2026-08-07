@@ -1,13 +1,19 @@
 // ── Persisted review state: view settings + the "seen" set ────────────────────
 // Both follow the same shape: localStorage is the INSTANT cache (no fetch
 // flash), ~/.config/acm/settings.json (via the server) is the cross-instance
-// truth. Each writer PUTs only its own key (settings | seen) and the server
+// truth. Each writer PUTs only its own key (settings | seenByDocument slice) and the server
 // merges, so they never clobber each other; hydration gates the first PUT so
 // the server isn't overwritten before it's been read.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FONT_STACKS, loadSettings } from "../lib/viewSettings";
 import type { ViewSettings } from "../lib/viewSettings";
+import {
+  legacySeenQuarantinePatch,
+  seenLocalStorageKey,
+  seenPatchForDocument,
+  seenStateForDocument,
+} from "../lib/seenState";
 
 export async function fetchConfig(): Promise<Record<string, unknown> | null> {
   try {
@@ -17,26 +23,107 @@ export async function fetchConfig(): Promise<Record<string, unknown> | null> {
     return null;
   }
 }
-function putConfig(patch: Record<string, unknown>): void {
-  void fetch("/api/settings", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  }).catch(() => {});
+export async function putConfig(patch: Record<string, unknown>): Promise<boolean> {
+  try {
+    const response = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
+export function reconcileViewSettings(
+  local: ViewSettings,
+  server: Partial<ViewSettings> | null,
+  localDirty: boolean,
+): ViewSettings {
+  if (localDirty) return local;
+  return server ? { ...local, ...server } : local;
+}
+
+const SETTINGS_DIRTY_KEY = "acm-settings-dirty";
+const LEGACY_SEEN_KEY = "acm-seen";
+const LEGACY_SEEN_QUARANTINE_KEY = "acm-seen:legacy-quarantine";
+
+interface SettingsPersistenceDependencies {
+  write: (patch: Record<string, unknown>) => Promise<boolean>;
+  storage: Pick<Storage, "setItem" | "removeItem">;
+  onSaveError: (failed: boolean) => void;
+}
+
+/** Keep only the newest local settings revision authoritative. A response from
+ * an older request must not clear the dirty marker or overwrite the visible
+ * error state after the user has made another choice. */
+export function createSettingsPersistence({
+  write,
+  storage,
+  onSaveError,
+}: SettingsPersistenceDependencies) {
+  let revision = 0;
+  let writeTail: Promise<void> = Promise.resolve();
+  const markChanged = () => {
+    revision += 1;
+    storage.setItem(SETTINGS_DIRTY_KEY, "1");
+    return revision;
+  };
+  return {
+    markChanged,
+    async persist(next: ViewSettings): Promise<boolean> {
+      const requestRevision = markChanged();
+      const save = writeTail.then(() => write({ settings: next }));
+      writeTail = save.then(
+        () => undefined,
+        () => undefined,
+      );
+      const saved = await save;
+      if (requestRevision === revision) {
+        if (saved) storage.removeItem(SETTINGS_DIRTY_KEY);
+        onSaveError(!saved);
+      }
+      return saved;
+    },
+  };
+}
 
 // ── "Seen" comment tracking (declutter between review rounds) ──────────────────
 // "Seen" is a lightweight, NON-destructive state (unlike Resolve, which strips the
-// markup from the file). It lives client-side in localStorage, keyed by comment
-// CONTENT (author+body) so it survives the positional-id shifts that edits cause —
-// the file is never touched. The key itself (commentKey) lives in lib/criticmarkup
-// so the CLI (`acm threads`) computes the same identity as the GUI.
-function loadSeen(): Set<string> {
+// markup from the file). Comment identities remain content-based so positional
+// edits do not reset them, while the containing cache/config slice is keyed by
+// document path so identical comments in different files never share state.
+export function loadSeen(
+  documentPath: string,
+  currentDocumentKeys: ReadonlySet<string>,
+  storage: Pick<Storage, "getItem"> = localStorage,
+): { seen: Set<string>; legacy: boolean } {
   try {
-    return new Set<string>(JSON.parse(localStorage.getItem("acm-seen") ?? "[]"));
+    const scoped = storage.getItem(seenLocalStorageKey(documentPath));
+    const legacy = scoped === null ? storage.getItem("acm-seen") : null;
+    const value = JSON.parse(scoped ?? legacy ?? "[]") as unknown;
+    const parsed = Array.isArray(value)
+      ? [...new Set(value.filter((key): key is string => typeof key === "string"))]
+      : [];
+    const keys = scoped === null ? [] : parsed;
+    return { seen: new Set(keys), legacy: scoped === null && legacy !== null };
   } catch {
-    return new Set();
+    return { seen: new Set(), legacy: false };
+  }
+}
+
+export function quarantineLegacySeenStorage(
+  storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> = localStorage,
+): boolean {
+  try {
+    const legacy = storage.getItem(LEGACY_SEEN_KEY);
+    if (legacy === null) return true;
+    storage.setItem(LEGACY_SEEN_QUARANTINE_KEY, legacy);
+    storage.removeItem(LEGACY_SEEN_KEY);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -60,6 +147,21 @@ export function useViewSettings() {
   // View settings live here so theme/font apply to the loading screen too. Initialised
   // from localStorage (instant, no flash) and reconciled with the server file below.
   const [settings, setSettings] = useState<ViewSettings>(loadSettings);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const [settingsSaveError, setSettingsSaveError] = useState(false);
+  const settingsPersistence = useRef<ReturnType<typeof createSettingsPersistence> | null>(null);
+  if (!settingsPersistence.current) {
+    settingsPersistence.current = createSettingsPersistence({
+      write: putConfig,
+      storage: localStorage,
+      onSaveError: setSettingsSaveError,
+    });
+  }
+  const persistSettings = useCallback(
+    (next: ViewSettings) => settingsPersistence.current!.persist(next),
+    [],
+  );
   useEffect(() => {
     const root = document.documentElement;
     // "system" resolves to the OS preference and TRACKS it live; the CSS only
@@ -78,20 +180,35 @@ export function useViewSettings() {
     }
   }, [settings]);
   const onChangeSettings = useCallback(
-    (patch: Partial<ViewSettings>) => setSettings((s) => ({ ...s, ...patch })),
+    (patch: Partial<ViewSettings>) => {
+      settingsPersistence.current!.markChanged();
+      setSettings((s) => ({ ...s, ...patch }));
+    },
     [],
   );
   // On mount: adopt the server's settings (cross-instance truth); if it has none,
   // migrate this browser's localStorage settings up to the server. Gate the sync
   // PUT until after this so we don't clobber the server before reading it.
   const settingsHydrated = useRef(false);
+  const skipNextSettingsSync = useRef(false);
   useEffect(() => {
     let cancelled = false;
-    void fetchConfig().then((cfg) => {
+    void fetchConfig().then(async (cfg) => {
       if (cancelled) return;
-      if (cfg && cfg.settings) setSettings((s) => ({ ...s, ...(cfg.settings as Partial<ViewSettings>) }));
-      else putConfig({ settings: loadSettings() }); // first run → migrate
+      const local = loadSettings();
+      const localDirty = localStorage.getItem(SETTINGS_DIRTY_KEY) === "1";
+      const serverSettings =
+        cfg && cfg.settings ? (cfg.settings as Partial<ViewSettings>) : null;
+      const reconciled = reconcileViewSettings(local, serverSettings, localDirty);
       settingsHydrated.current = true;
+      if (!localDirty && serverSettings) {
+        skipNextSettingsSync.current = true;
+        setSettings(reconciled);
+      } else {
+        // A failed prior write (or first run) keeps the local choice authoritative
+        // across a cold start and retries it against the server truth.
+        await persistSettings(reconciled);
+      }
     });
     return () => {
       cancelled = true;
@@ -99,38 +216,76 @@ export function useViewSettings() {
   }, []);
   useEffect(() => {
     if (!settingsHydrated.current) return;
-    const t = setTimeout(() => putConfig({ settings }), 300);
+    if (skipNextSettingsSync.current) {
+      skipNextSettingsSync.current = false;
+      return;
+    }
+    const t = setTimeout(() => void persistSettings(settings), 300);
     return () => clearTimeout(t);
-  }, [settings]);
-  return { settings, onChangeSettings };
+  }, [settings, persistSettings]);
+  const retrySettings = useCallback(() => {
+    void persistSettings(settingsRef.current);
+  }, [persistSettings]);
+  return { settings, onChangeSettings, settingsSaveError, retrySettings };
 }
 
-/** The "seen" set: localStorage-seeded, server-reconciled. */
-export function useSeenState() {
+/** The per-document "seen" set: localStorage-seeded, server-reconciled. */
+export function useSeenState(
+  documentPath: string,
+  currentDocumentKeys: ReadonlySet<string>,
+) {
+  const documentKeysRef = useRef(currentDocumentKeys);
+  documentKeysRef.current = currentDocumentKeys;
   // cache; ~/.config/acm/settings.json is the cross-instance truth (synced below).
-  const [seen, setSeen] = useState<Set<string>>(loadSeen);
+  const [seen, setSeen] = useState<Set<string>>(
+    () => loadSeen(documentPath, currentDocumentKeys).seen,
+  );
   useEffect(() => {
-    localStorage.setItem("acm-seen", JSON.stringify([...seen]));
-  }, [seen]);
-  // On mount: adopt the server's seen set, or migrate localStorage up on first run.
+    localStorage.setItem(seenLocalStorageKey(documentPath), JSON.stringify([...seen]));
+  }, [documentPath, seen]);
+  // On mount: adopt this document's server slice, or migrate the legacy flat
+  // state / scoped local cache into one explicit slice.
   const seenHydrated = useRef(false);
+  const skipNextSeenSync = useRef(false);
   useEffect(() => {
     let cancelled = false;
     void fetchConfig().then((cfg) => {
       if (cancelled) return;
-      if (cfg && Array.isArray(cfg.seen)) setSeen(new Set(cfg.seen as string[]));
-      else putConfig({ seen: [...loadSeen()] });
+      const server = seenStateForDocument(
+        cfg,
+        documentPath,
+        documentKeysRef.current,
+      );
+      const local = loadSeen(documentPath, documentKeysRef.current);
+      if (local.legacy) quarantineLegacySeenStorage();
+      const next = server.source === "none" ? local.seen : new Set(server.keys);
       seenHydrated.current = true;
+      skipNextSeenSync.current = true;
+      setSeen(next);
+      if (server.source !== "document") {
+        const patch = seenPatchForDocument(documentPath, [...next]);
+        if (server.source === "legacy") {
+          Object.assign(patch, legacySeenQuarantinePatch(cfg));
+        }
+        void putConfig(patch);
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [documentPath]);
   useEffect(() => {
     if (!seenHydrated.current) return;
-    const t = setTimeout(() => putConfig({ seen: [...seen] }), 300);
+    if (skipNextSeenSync.current) {
+      skipNextSeenSync.current = false;
+      return;
+    }
+    const t = setTimeout(
+      () => putConfig(seenPatchForDocument(documentPath, [...seen])),
+      300,
+    );
     return () => clearTimeout(t);
-  }, [seen]);
+  }, [documentPath, seen]);
   return { seen, setSeen };
 }
 

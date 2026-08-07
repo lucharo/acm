@@ -3,22 +3,64 @@
 // the deprecated `apply` alias). Spawned as real CLI runs because usage errors
 // process.exit; every doc is a temp file passed via --doc, so no editor probing.
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { strToU8, zipSync } from "fflate";
+import {
+  directAuditFailureGuidance,
+  isAgentVerb,
+  rollBackUnauditedLiveWrite,
+  writeDirectWithAudit,
+} from "./verbs";
+import {
+  appendDecisionEvent,
+  appendDecisionEvents,
+  decisionLogPath,
+  listDecisionEvents,
+} from "../server/decisions";
+import { readDecisionRecoveryEvents } from "../server/decisionRecovery";
+import type { DecisionEvent } from "../lib/decision";
+import { commentKey, groupThreads, scanTokens } from "../lib/criticmarkup";
+import type { CommentToken } from "../lib/types";
 
 const CLI = resolve(import.meta.dir, "../../cli.ts");
 const DOC = 'Prose under review.{>>@luis: is this clear?<<}\n';
 const EDITS = [{ id: "t1", match: "is this clear?", insert: "{>>@claude: yes<<}" }];
+const DECISION: DecisionEvent = {
+  id: "decision-cli-001",
+  timestamp: "2026-08-04T12:00:00.000Z",
+  action: "resolve",
+  actor: "Luis",
+  source: "cli",
+  target: { kind: "thread", id: "thread-1", threadId: "thread-1" },
+  anchor: "Prose under review.",
+  originalText: "Prose under review.{>>@luis: is this clear?<<}",
+  proposedText: null,
+  resultingText: "Prose under review.",
+};
+const SECOND_DECISION: DecisionEvent = {
+  ...DECISION,
+  id: "decision-cli-002",
+  target: { kind: "thread", id: "thread-2", threadId: "thread-2" },
+};
 
 let dir: string;
 let doc: string;
 let edits: string;
+const previousXdg = process.env.XDG_CONFIG_HOME;
 
 function run(...args: string[]) {
   const env = { ...process.env };
   delete env.ACM_AUTHOR; // tests assert the default @claude author
+  env.XDG_CONFIG_HOME = join(dir, "config");
   // timeout bounds a dispatch regression: if a verb ever falls out of VERBS,
   // cli.ts treats it as a filename and starts a long-lived server — spawnSync
   // would block forever and wedge the suite instead of failing. Fail fast.
@@ -28,12 +70,527 @@ function run(...args: string[]) {
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "acm-verbs-"));
+  process.env.XDG_CONFIG_HOME = join(dir, "config");
   doc = join(dir, "doc.md");
   edits = join(dir, "edits.json");
   writeFileSync(doc, DOC);
   writeFileSync(edits, JSON.stringify(EDITS));
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = previousXdg;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("decisions stays on the agent-verb path", () => {
+  expect(isAgentVerb("decisions")).toBe(true);
+});
+
+test("a compensating live rollback stays bound to the original document", async () => {
+  let received: unknown = null;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      received = await request.json();
+      return Response.json({ version: 2, content: "before\n" });
+    },
+  });
+
+  const restored = await rollBackUnauditedLiveWrite(
+    server.port!,
+    "/docs/original.md",
+    "before\n",
+    "after\n",
+    "after\n",
+  );
+  server.stop();
+
+  expect(restored).toBe(true);
+  expect(received).toEqual({
+    base: "after\n",
+    content: "before\n",
+    documentPath: "/docs/original.md",
+    decisionEvents: [],
+  });
+});
+
+test("a compensating rollback preserves a disjoint concurrent human edit", async () => {
+  let received: unknown = null;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      received = await request.json();
+      return Response.json({ version: 3, content: "old wording\nstable\nhuman after\n" });
+    },
+  });
+
+  const restored = await rollBackUnauditedLiveWrite(
+    server.port!,
+    "/docs/original.md",
+    "old wording\nstable\nhuman before\n",
+    "new wording\nstable\nhuman before\n",
+    "new wording\nstable\nhuman after\n",
+  );
+  server.stop();
+
+  expect(restored).toBe(true);
+  expect(received).toEqual({
+    base: "new wording\nstable\nhuman after\n",
+    content: "old wording\nstable\nhuman after\n",
+    documentPath: "/docs/original.md",
+    decisionEvents: [],
+  });
+});
+
+test("a compensating direct transaction preserves a disjoint concurrent file edit", async () => {
+  const before = "old wording\nstable\nhuman before\n";
+  const proposed = "new wording\nstable\nhuman before\n";
+  writeFileSync(doc, before);
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [DECISION],
+    async () => {
+      writeFileSync(doc, "new wording\nstable\nhuman after\n");
+      throw new Error("audit blocked");
+    },
+  );
+
+  expect(result).toEqual({
+    status: "audit-failed",
+    restored: true,
+    message: "audit blocked",
+  });
+  expect(readFileSync(doc, "utf8")).toBe("old wording\nstable\nhuman after\n");
+});
+
+test("a compensating direct transaction refuses an overlapping concurrent file edit", async () => {
+  const before = "old wording\nstable\n";
+  const proposed = "new wording\nstable\n";
+  const concurrent = "new wording revised again\nstable\n";
+  writeFileSync(doc, before);
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [DECISION],
+    async () => {
+      writeFileSync(doc, concurrent);
+      throw new Error("audit blocked");
+    },
+  );
+
+  expect(result).toEqual({
+    status: "audit-failed",
+    restored: false,
+    message: "audit blocked",
+  });
+  expect(readFileSync(doc, "utf8")).toBe(concurrent);
+});
+
+test("an uncertain direct audit error does not roll back an event already persisted", async () => {
+  const before = "old wording\n";
+  const proposed = "new wording\n";
+  writeFileSync(doc, before);
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [DECISION],
+    async (path, events) => {
+      await appendDecisionEvents(path, events);
+      throw new Error("lock cleanup failed after append");
+    },
+  );
+
+  expect(result).toEqual({ status: "written", content: proposed });
+  expect(readFileSync(doc, "utf8")).toBe(proposed);
+  expect(await listDecisionEvents(doc)).toEqual([DECISION]);
+});
+
+test("a partial direct audit is retried without reverting its document edit", async () => {
+  const before = "old wording\n";
+  const proposed = "new wording\n";
+  writeFileSync(doc, before);
+  let attempts = 0;
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [DECISION, SECOND_DECISION],
+    async (path, events) => {
+      attempts += 1;
+      if (attempts === 1) {
+        await appendDecisionEvent(path, events[0]);
+        throw new Error("audit interrupted after one event");
+      }
+      return appendDecisionEvents(path, events);
+    },
+  );
+
+  expect(result).toEqual({ status: "written", content: proposed });
+  expect(attempts).toBe(2);
+  expect(readFileSync(doc, "utf8")).toBe(proposed);
+  expect(await listDecisionEvents(doc)).toEqual([DECISION, SECOND_DECISION]);
+});
+
+test("a repeatedly failing partial audit keeps the applied prose instead of creating a ghost event", async () => {
+  const before = "old wording\n";
+  const proposed = "new wording\n";
+  writeFileSync(doc, before);
+  let attempts = 0;
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [DECISION, SECOND_DECISION],
+    async (path, events) => {
+      attempts += 1;
+      if (attempts === 1) await appendDecisionEvent(path, events[0]);
+      throw new Error("audit remains unavailable");
+    },
+  );
+
+  expect(result).toEqual({
+    status: "audit-failed",
+    restored: false,
+    message: "audit remains unavailable",
+    retainedForAuditConsistency: true,
+    auditRecovery: {
+      status: "stored",
+      decisionEventIds: [SECOND_DECISION.id],
+    },
+  });
+  expect(attempts).toBe(2);
+  expect(readFileSync(doc, "utf8")).toBe(proposed);
+  expect(await listDecisionEvents(doc)).toEqual([DECISION]);
+  expect(await readDecisionRecoveryEvents(doc)).toEqual([SECOND_DECISION]);
+  if (result.status !== "audit-failed") throw new Error("expected an audit failure");
+  expect(directAuditFailureGuidance(result)).toEqual([
+    "  document was retained because its decision-history state could not be safely reversed",
+    "  missing decision evidence was queued for retry by the next ACM editor; do not restore the backup",
+  ]);
+});
+
+test("a partial audit reports when its retry evidence cannot be stored", async () => {
+  const before = "old wording\n";
+  const proposed = "new wording\n";
+  writeFileSync(doc, before);
+  let attempts = 0;
+  const blockedConfig = join(dir, "blocked-config");
+  writeFileSync(blockedConfig, "not a directory");
+  process.env.XDG_CONFIG_HOME = blockedConfig;
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [DECISION, SECOND_DECISION],
+    async (path, events) => {
+      attempts += 1;
+      if (attempts === 1) await appendDecisionEvent(path, events[0]);
+      throw new Error("audit remains unavailable");
+    },
+  );
+
+  expect(result).toEqual({
+    status: "audit-failed",
+    restored: false,
+    message: "audit remains unavailable",
+    retainedForAuditConsistency: true,
+    auditRecovery: {
+      status: "failed",
+      decisionEventIds: [SECOND_DECISION.id],
+      message: expect.stringContaining("not a directory"),
+    },
+  });
+  expect(readFileSync(doc, "utf8")).toBe(proposed);
+  expect(await listDecisionEvents(doc)).toEqual([DECISION]);
+  if (result.status !== "audit-failed") throw new Error("expected an audit failure");
+  expect(directAuditFailureGuidance(result)).toEqual([
+    "  document was retained because its decision-history state could not be safely reversed",
+    expect.stringContaining(
+      "missing decision evidence could not be queued: ENOTDIR: not a directory",
+    ),
+  ]);
+});
+
+test("direct transactions serialize the document write and audit append", async () => {
+  const before = "first old\nstable\nsecond old\n";
+  writeFileSync(doc, before);
+  let auditEntered!: () => void;
+  const auditDidEnter = new Promise<void>((resolve) => {
+    auditEntered = resolve;
+  });
+  let releaseAudit!: () => void;
+  const auditMayFinish = new Promise<void>((resolve) => {
+    releaseAudit = resolve;
+  });
+
+  const first = writeDirectWithAudit(
+    doc,
+    before,
+    "first new\nstable\nsecond old\n",
+    [DECISION],
+    async () => {
+      auditEntered();
+      await auditMayFinish;
+      return { appended: 1 };
+    },
+  );
+  await auditDidEnter;
+  let secondFinished = false;
+  const second = writeDirectWithAudit(
+    doc,
+    before,
+    "first old\nstable\nsecond new\n",
+    [],
+  ).then((result) => {
+    secondFinished = true;
+    return result;
+  });
+  await Bun.sleep(20);
+
+  expect(secondFinished).toBe(false);
+  releaseAudit();
+  expect(await first).toEqual({
+    status: "written",
+    content: "first new\nstable\nsecond old\n",
+  });
+  expect(await second).toEqual({
+    status: "written",
+    content: "first new\nstable\nsecond new\n",
+  });
+  expect(readFileSync(doc, "utf8")).toBe("first new\nstable\nsecond new\n");
+});
+
+test("decisions --json reads the complete persisted event on a cold CLI start", async () => {
+  await appendDecisionEvent(doc, DECISION);
+
+  const result = run("decisions", "--json");
+
+  expect(result).toEqual({
+    code: 0,
+    out: `${JSON.stringify({ decisionEvents: [DECISION] }, null, 2)}\n`,
+    err: "",
+  });
+});
+
+test("decisions --json returns valid events plus complete corruption diagnostics", async () => {
+  await appendDecisionEvent(doc, DECISION);
+  appendFileSync(decisionLogPath(doc), "{broken\n");
+
+  const result = run("decisions", "--json");
+
+  expect(result).toEqual({
+    code: 0,
+    out: `${JSON.stringify(
+      {
+        decisionEvents: [DECISION],
+        decisionHistoryIssues: [
+          {
+            line: 2,
+            code: "invalid-json",
+            message: "Decision history line 2 contains invalid JSON.",
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    err: "",
+  });
+});
+
+test("decisions text output warns about corruption while listing valid events", async () => {
+  await appendDecisionEvent(doc, DECISION);
+  appendFileSync(decisionLogPath(doc), `${JSON.stringify({ id: "broken" })}\n`);
+
+  const result = run("decisions");
+
+  expect(result.code).toBe(0);
+  expect(result.out).toContain(`${DECISION.timestamp}  ${DECISION.actor}  ${DECISION.action}`);
+  expect(result.err).toBe(
+    "acm decisions: warning: Decision history line 2 is not a valid decision event.\n",
+  );
+});
+
+test("threads reads the same per-document seen slice as the GUI", () => {
+  const content = "{==Same prose==}{>>@maya: Same comment<<}\n";
+  const first = doc;
+  const second = join(dir, "second.md");
+  writeFileSync(first, content);
+  writeFileSync(second, content);
+  const configDir = join(dir, "config", "acm");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, "settings.json"),
+    JSON.stringify({
+      seenByDocument: {
+        [resolve(first)]: [commentKey({ author: "maya", body: "Same comment" })],
+        [resolve(second)]: [],
+      },
+    }),
+  );
+
+  doc = first;
+  const seen = run("threads");
+  doc = second;
+  const unseen = run("threads");
+
+  expect(seen.code).toBe(0);
+  expect(seen.out).toContain("[seen]");
+  expect(seen.out).toContain("1 threads, 0 unseen");
+  expect(unseen.code).toBe(0);
+  expect(unseen.out).not.toContain("[seen]");
+  expect(unseen.out).toContain("1 threads, 1 unseen");
+}, 15_000);
+
+test("accept persists a complete CLI decision only after the edit lands", async () => {
+  const before = "Before {==old words==}{>>@maya: SUGGEST: new words<<} after.\n";
+  writeFileSync(doc, before);
+  const comment = scanTokens(before).find(
+    (token): token is CommentToken => token.type === "comment",
+  )!;
+  const [thread] = groupThreads([comment], before);
+
+  const result = run("accept", "new words", "--author", "Reviewer");
+
+  expect(result.code).toBe(0);
+  expect(readFileSync(doc, "utf8")).toBe("Before new words after.\n");
+  expect(await listDecisionEvents(doc)).toEqual([
+    {
+      id: expect.any(String),
+      timestamp: expect.any(String),
+      action: "accept",
+      actor: "Reviewer",
+      source: "cli",
+      target: { kind: "suggestion", id: comment.id, threadId: thread.id },
+      anchor: "old words",
+      originalText: "old words",
+      proposedText: "new words",
+      resultingText: "new words",
+    },
+  ]);
+});
+
+test("a direct CLI audit failure restores the document instead of losing its decision", async () => {
+  const before = "Before {==old words==}{>>@maya: SUGGEST: new words<<} after.\n";
+  writeFileSync(doc, before);
+  mkdirSync(join(dir, ".acm"), { recursive: true });
+  // A file where the decisions directory must be makes the append fail after
+  // the document write, exercising the real direct-CLI boundary.
+  writeFileSync(join(dir, ".acm", "decisions"), "blocked");
+
+  const result = run("accept", "new words", "--author", "Reviewer");
+
+  expect(result.code).not.toBe(0);
+  expect(readFileSync(doc, "utf8")).toBe(before);
+  expect(result.err).toContain("decision history could not be persisted");
+  expect(result.err).toContain("document was restored");
+});
+
+test("resolve persists the removed thread markup and retained anchor prose", async () => {
+  const before = "Before {==wording==}{>>@maya: Discuss this<<} after.\n";
+  writeFileSync(doc, before);
+  const comment = scanTokens(before).find(
+    (token): token is CommentToken => token.type === "comment",
+  )!;
+  const [thread] = groupThreads([comment], before);
+
+  const result = run("resolve", "Discuss this", "--author", "Reviewer");
+
+  expect(result.code).toBe(0);
+  expect(readFileSync(doc, "utf8")).toBe("Before wording after.\n");
+  expect(await listDecisionEvents(doc)).toEqual([
+    {
+      id: expect.any(String),
+      timestamp: expect.any(String),
+      action: "resolve",
+      actor: "Reviewer",
+      source: "cli",
+      target: {
+        kind: "thread",
+        id: thread.id,
+        threadId: thread.id,
+        commentId: comment.id,
+      },
+      anchor: "wording",
+      originalText: "{==wording==}{>>@maya: Discuss this<<}",
+      proposedText: null,
+      resultingText: "wording",
+    },
+  ]);
+});
+
+test("reject persists the declined proposal and retained original wording", async () => {
+  const before = "Before {==old words==}{>>@maya: SUGGEST: new words<<} after.\n";
+  writeFileSync(doc, before);
+  const comment = scanTokens(before).find(
+    (token): token is CommentToken => token.type === "comment",
+  )!;
+  const [thread] = groupThreads([comment], before);
+
+  const result = run("reject", "new words", "--author", "Reviewer");
+
+  expect(result.code).toBe(0);
+  expect(readFileSync(doc, "utf8")).toBe("Before old words after.\n");
+  expect(await listDecisionEvents(doc)).toEqual([
+    {
+      id: expect.any(String),
+      timestamp: expect.any(String),
+      action: "reject",
+      actor: "Reviewer",
+      source: "cli",
+      target: { kind: "suggestion", id: comment.id, threadId: thread.id },
+      anchor: "old words",
+      originalText: "old words",
+      proposedText: "new words",
+      resultingText: "old words",
+    },
+  ]);
+});
+
+test("accepting a suggestion group records every applied member with its group identity", async () => {
+  const before =
+    "First {==old one==}{>>@maya: SUGGEST[g:pair]: new one<<}.\n\n" +
+    "Second {==old two==}{>>@maya: SUGGEST[g:pair]: new two<<}.\n";
+  writeFileSync(doc, before);
+  const comments = scanTokens(before).filter(
+    (token): token is CommentToken => token.type === "comment",
+  );
+  const threads = groupThreads(comments, before);
+
+  const result = run("accept", "--group", "pair", "--author", "Reviewer");
+
+  expect(result.code).toBe(0);
+  expect(readFileSync(doc, "utf8")).toBe("First new one.\n\nSecond new two.\n");
+  expect(await listDecisionEvents(doc)).toEqual(
+    comments.map((comment, index) => ({
+      id: expect.any(String),
+      timestamp: expect.any(String),
+      action: "accept",
+      actor: "Reviewer",
+      source: "cli",
+      target: {
+        kind: "suggestion",
+        id: comment.id,
+        threadId: threads[index].id,
+        groupId: "pair",
+      },
+      anchor: index === 0 ? "old one" : "old two",
+      originalText: index === 0 ? "old one" : "old two",
+      proposedText: index === 0 ? "new one" : "new two",
+      resultingText: index === 0 ? "new one" : "new two",
+    })),
+  );
+});
 
 describe("acm reply dispatch", () => {
   test("bare reply threads a comment onto the matched thread (comment alias)", () => {
@@ -52,11 +609,50 @@ describe("acm reply dispatch", () => {
     expect(r.out).toContain("acm comment: replied to");
   });
 
+  test("a pasted blank-line reply survives CLI insertion and a cold file reload", () => {
+    const body = "first line\n\nsecond line";
+
+    const result = run("comment", "is this clear?", body);
+
+    expect(result.code).toBe(0);
+    const reloaded = readFileSync(doc, "utf8");
+    expect(reloaded).toContain("{>>@claude: ~acm1~first line\\n\\nsecond line<<}");
+    expect(
+      scanTokens(reloaded)
+        .filter((token): token is CommentToken => token.type === "comment")
+        .map((comment) => comment.body),
+    ).toEqual(["is this clear?", body]);
+  });
+
   test("reply --batch applies the edits.json batch", () => {
     const r = run("reply", "--batch", edits);
     expect(r.code).toBe(0);
     expect(r.out).toContain("applied 1/1");
     expect(readFileSync(doc, "utf8")).toContain("{>>@claude: yes<<}");
+  });
+
+  test("reply --batch canonicalises a multiline comment before a cold reload", () => {
+    writeFileSync(
+      edits,
+      JSON.stringify([
+        {
+          id: "multiline",
+          match: "is this clear?",
+          insert: "{>>@claude: First paragraph.\n\nSecond paragraph.<<}",
+        },
+      ]),
+    );
+
+    const result = run("reply", "--batch", edits);
+    const reloaded = readFileSync(doc, "utf8");
+    const added = scanTokens(reloaded).find(
+      (token): token is CommentToken =>
+        token.type === "comment" && token.author === "claude" && token.body.startsWith("First"),
+    );
+
+    expect(result.code).toBe(0);
+    expect(added?.body).toBe("First paragraph.\n\nSecond paragraph.");
+    expect(reloaded).not.toContain("{>>@claude: First paragraph.\n\nSecond paragraph.<<}");
   });
 
   test("reply --batch re-run skips idempotently", () => {

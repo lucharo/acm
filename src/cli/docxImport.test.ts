@@ -214,6 +214,30 @@ describe("Google Docs imports", () => {
     });
   });
 
+  test("preserves blank paragraphs inside imported comment bodies", () => {
+    const result = convertDocx(
+      docx(
+        `<w:p><w:r><w:t>Text.</w:t></w:r><w:commentRangeStart w:id="11"/><w:commentRangeEnd w:id="11"/></w:p>`,
+        `<w:comment w:id="11" w:author="Editor"><w:p><w:r><w:t>first</w:t></w:r></w:p><w:p/><w:p><w:r><w:t>third</w:t></w:r></w:p></w:comment>`,
+      ),
+    );
+    const [comment] = scanTokens(result.markdown).filter((token) => token.type === "comment");
+
+    expect(comment).toMatchObject({ author: "Editor", body: "first\n\n\n\nthird" });
+  });
+
+  test("preserves leading and trailing blank comment paragraphs", () => {
+    const result = convertDocx(
+      docx(
+        `<w:p><w:r><w:t>Text.</w:t></w:r><w:commentRangeStart w:id="12"/><w:commentRangeEnd w:id="12"/></w:p>`,
+        `<w:comment w:id="12" w:author="Editor"><w:p/><w:p><w:r><w:t>middle</w:t></w:r></w:p><w:p/></w:comment>`,
+      ),
+    );
+    const [comment] = scanTokens(result.markdown).filter((token) => token.type === "comment");
+
+    expect(comment).toMatchObject({ author: "Editor", body: "\n\nmiddle\n\n" });
+  });
+
   test("omits tracked-deleted text while retaining inserted text in comment bodies", () => {
     const result = convertDocx(
       docx(

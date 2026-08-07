@@ -1,4 +1,4 @@
-// ── The comment composer (header textarea) + one-click "Suggest edit" ─────────
+// ── Selection-anchored comment composer + one-click suggestion hand-off ──────
 // All composer state and the three actions that write comments into the buffer:
 // open (capture the selection + disclose anchor/point), post (span-anchored when
 // wrappable, else clamped point comment; optional mark-seen), and the canned
@@ -50,6 +50,14 @@ export function useComposer(
     setComposing(true);
   }, [viewRef]);
 
+  const cancelComposer = useCallback(() => {
+    setComposing(false);
+    setDraft("");
+    commentAnchor.current = null;
+    commentRange.current = null;
+    viewRef.current?.focus();
+  }, [viewRef]);
+
   const postComment = useCallback(
     // markSeen (⌘⇧↵): post the comment and immediately mark it seen — the
     // "suggest edits" flow where you've said your piece and want it out of your
@@ -57,11 +65,8 @@ export function useComposer(
     // if it joined an existing thread the others stay open.
     (markSeen = false) => {
       const v = viewRef.current;
-      const text = draft.trim();
-      if (!v || commentAnchor.current === null || !text) {
-        setComposing(false);
-        return;
-      }
+      const text = draft;
+      if (!v || commentAnchor.current === null || !text.trim()) return;
       const content = v.state.doc.toString();
       // Prefer the editor's LIVE selection (CodeMirror keeps it mapped through any
       // remote/agent edit that arrived while composing); fall back to the range captured
@@ -75,14 +80,21 @@ export function useComposer(
       if (range && wrappableSpan(content, range.from, range.to)) {
         const open = `{==${content.slice(range.from, range.to)}==}`;
         const marker = open + formatComment(author, text);
-        v.dispatch({ changes: { from: range.from, to: range.to, insert: marker } });
+        v.dispatch({
+          changes: { from: range.from, to: range.to, insert: marker },
+          selection: { anchor: range.from + marker.length },
+        });
         commentStart = range.from + open.length; // the `{>>` lands right after the highlight
       } else {
         const raw = range ? range.to : commentAnchor.current!;
         const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(raw, content.length)));
         const prev = at > 0 ? content.slice(at - 1, at) : "";
         const lead = at > 0 && !/\s/.test(prev) ? " " : "";
-        v.dispatch({ changes: { from: at, insert: lead + formatComment(author, text) } });
+        const marker = lead + formatComment(author, text);
+        v.dispatch({
+          changes: { from: at, insert: marker },
+          selection: { anchor: at + marker.length },
+        });
         commentStart = at + lead.length;
       }
       if (markSeen) {
@@ -100,32 +112,48 @@ export function useComposer(
     [draft, viewRef, author, setSeen],
   );
 
-  // One-click "Suggest edit" on the current selection: anchor a canned "suggest edit"
-  // comment at the selection + mark it seen, handing the span to the agent — no
-  // composer, no typing. Mirrors postComment's anchor/clamp logic.
+  // One-click "Make suggestion" on the current selection: anchor a canned
+  // "suggest edit" comment + mark it seen, handing the span to the agent — no
+  // composer or typing. Mirrors postComment's span/point fallback.
   const suggestEditOnSelection = useCallback(() => {
     const v = viewRef.current;
     if (!v) return;
     const sel = v.state.selection.main;
     if (sel.empty) return;
     const content = v.state.doc.toString();
-    const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(sel.to, content.length)));
-    const prev = at > 0 ? content.slice(at - 1, at) : "";
-    const lead = at > 0 && !/\s/.test(prev) ? " " : "";
-    v.dispatch({ changes: { from: at, insert: lead + formatComment(author, SUGGEST_EDIT_TEXT) } });
+    let commentStart: number;
+    if (wrappableSpan(content, sel.from, sel.to)) {
+      const open = `{==${content.slice(sel.from, sel.to)}==}`;
+      const marker = open + formatComment(author, SUGGEST_EDIT_TEXT);
+      v.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: marker },
+        selection: { anchor: sel.from + marker.length },
+      });
+      commentStart = sel.from + open.length;
+    } else {
+      const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(sel.to, content.length)));
+      const prev = at > 0 ? content.slice(at - 1, at) : "";
+      const lead = at > 0 && !/\s/.test(prev) ? " " : "";
+      const marker = lead + formatComment(author, SUGGEST_EDIT_TEXT);
+      v.dispatch({
+        changes: { from: at, insert: marker },
+        selection: { anchor: at + marker.length },
+      });
+      commentStart = at + lead.length;
+    }
     const fresh = scanTokens(v.state.doc.toString())
       .filter(isComment)
-      .find((c) => c.from === at + lead.length);
+      .find((c) => c.from === commentStart);
     if (fresh) setSeen((p) => new Set(p).add(commentKey(fresh)));
   }, [viewRef, author, setSeen]);
 
   return {
     composing,
-    setComposing,
     draft,
     setDraft,
     composerAnchored,
     openComposer,
+    cancelComposer,
     postComment,
     suggestEditOnSelection,
   };

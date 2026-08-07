@@ -1,5 +1,5 @@
 // ── Shared contract for Agent CriticMarkup (ACM) ──────────────────────────────
-// Imported by the editor, the sidebar/nav, the sync layer, and the server.
+// Imported by the editor, review surfaces, the sync layer, and the server.
 // This file is the single source of truth for the data shapes that cross module
 // boundaries. Do not redefine these types elsewhere.
 
@@ -110,6 +110,8 @@ export type SidebarCard =
       from: number;
       to: number;
       suggestion: SuggestionToken;
+      /** Whole-line insertion already rendered as a rich block in the document. */
+      standalone: boolean;
       comments: CommentToken[]; // replies adjacent to the suggestion (may be empty)
     };
 
@@ -117,14 +119,20 @@ export type SidebarCard =
 export interface DocState {
   content: string;
   version: number;
+  /** Unique identity for this server lifetime; versions restart from zero per epoch. */
+  serverEpoch: string;
+  /** Resolved path identifying the document served by this ACM instance. */
+  path: string;
 }
 
 /** Messages pushed from the Bun server to the browser over the WebSocket.
  *  State-based: every push carries the full document snapshot + version. */
-export type ServerMessage = { type: "update"; content: string; version: number };
-
-/** Filters offered by the nav panel. */
-export type FilterMode = "all" | "comments" | "suggestions" | "unresolved";
+export type ServerMessage = {
+  type: "update";
+  content: string;
+  version: number;
+  serverEpoch: string;
+};
 
 /** Severity of a bottom-right toast (Toast.tsx / imageInsert.ts / App). */
 export type ToastKind = "info" | "error";

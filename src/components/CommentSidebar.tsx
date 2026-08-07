@@ -16,18 +16,24 @@
 // Threads: comments sharing an anchor render as one card (root + replies).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import { MOD } from "../lib/platform";
 import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
+import { commentStatusOccluded } from "../lib/commentRail";
+import { visibleReviewCards } from "../lib/visibleReviewCards";
 import { authorColor, groupColor } from "./authorColor";
+import CommentComposer from "./CommentComposer";
+import { handleCommentKey } from "./commentKeys";
 
 interface CommentSidebarProps {
   view: EditorView | null;
   /** Comment threads AND suggestions, as one ordered set (see groupCards). */
   cards: SidebarCard[];
+  /** Whether standalone additions are already rendered as rich document blocks. */
+  richPreview: boolean;
   activeId: string | null;
   /** Comment-card ids whose every comment is marked "seen" (suggestions never here). */
   seenIds: Set<string>;
@@ -50,6 +56,8 @@ interface CommentSidebarProps {
   /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
    *  proposed wording. */
   onApplySuggestion: (comment: CommentToken) => void;
+  /** Apply the wording and close its complete discussion as one undoable action. */
+  onApplyAndResolveSuggestion: (comment: CommentToken) => void;
   /** Reject a structured `SUGGEST:` comment — keep the original span (mirror of Apply). */
   onRejectSuggestionEdit: (comment: CommentToken) => void;
   /** Ids of SUGGEST: comments with a resolvable anchor → their Apply is real.
@@ -63,6 +71,8 @@ interface CommentSidebarProps {
   groupMembersOf: Map<string, SuggestionGroupMember[]>;
   /** Accept/reject EVERY member of a group as one atomic edit. */
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+  /** Apply every non-conflicting member and resolve its discussion atomically. */
+  onGroupApplyAndResolve: (groupId: string) => void;
   /** Scroll a span into view + flash it — a group member row → its edit in the doc. */
   onLocate: (from: number, to: number) => void;
   /** Accept / reject a suggestion card's suggestion. */
@@ -70,6 +80,14 @@ interface CommentSidebarProps {
   onRejectSuggestion: (card: SidebarCard) => void;
   onFocusThread: (card: SidebarCard) => void;
   onCardContextMenu?: (card: SidebarCard, e: ReactMouseEvent) => void;
+  /** New-comment composer, anchored beside the current editor selection. */
+  composerOpen: boolean;
+  composerDraft: string;
+  composerAnchored: boolean;
+  onComposerDraftChange: (value: string) => void;
+  onPostComment: () => void;
+  onPostCommentSeen: () => void;
+  onCancelComposer: () => void;
   /** How far the lowest card sticks out BELOW the document's last line (px, ≥0).
    *  App applies it as extra scroller bottom padding so those cards stay
    *  scroll-reachable — without stretching the page sheet itself. */
@@ -78,34 +96,12 @@ interface CommentSidebarProps {
 
 const BUBBLE_GAP = 16;
 const CARD_LEFT = 18; // px from the column's left edge to the card
+const COMPOSER_ID = "__acm-comment-composer__";
 
 // Re-exported so existing `import { MOD } from "./CommentSidebar"` callers keep
 // working; the glyph itself now lives in lib/platform.
 export { MOD };
-
-// Keyboard model shared by the reply box AND the header composer, so both behave
-// identically. Bound to a multi-line <textarea>:
-//   ↵ / ⌘↵         → submit
-//   ⌘⇧↵ / Ctrl+⇧↵  → submit + mark seen
-//   ⇧↵             → new line (NOT intercepted — the textarea inserts it)
-//   Esc            → cancel
-export function handleCommentKey(
-  e: ReactKeyboardEvent,
-  onSubmit: () => void,
-  onSubmitSeen: () => void,
-  onCancel: () => void,
-) {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    onCancel();
-    return;
-  }
-  if (e.key !== "Enter") return;
-  const mod = e.metaKey || e.ctrlKey;
-  if (e.shiftKey && !mod) return; // ⇧↵ → new line (let the textarea handle it)
-  e.preventDefault();
-  (e.shiftKey && mod ? onSubmitSeen : onSubmit)();
-}
+export { handleCommentKey };
 
 interface CardLayout {
   anchorY: number; // document-space Y of the anchored line
@@ -123,10 +119,26 @@ function layoutsEqual(a: Map<string, CardLayout>, b: Map<string, CardLayout>): b
   return true;
 }
 
+export function standaloneAdditionTitle(source: string): string {
+  const firstLine = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return "Untitled addition";
+  const plain = firstLine
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^(?:[-+*]|\d+[.)])\s+/, "")
+    .replace(/!?(?:\[([^\]]+)\])\([^)]*\)/g, "$1")
+    .replace(/[*_`~]/g, "")
+    .trim();
+  return plain || "Untitled addition";
+}
+
 export default function CommentSidebar(props: CommentSidebarProps) {
   const {
     view,
     cards,
+    richPreview,
     activeId,
     seenIds,
     showSeen,
@@ -140,9 +152,11 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReplyAndSeen,
     onSuggestEdit,
     onApplySuggestion,
+    onApplyAndResolveSuggestion,
     suggestionGroupOf,
     groupMembersOf,
     onGroupEdit,
+    onGroupApplyAndResolve,
     onLocate,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
@@ -150,6 +164,13 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onRejectSuggestion,
     onFocusThread,
     onCardContextMenu,
+    composerOpen,
+    composerDraft,
+    composerAnchored,
+    onComposerDraftChange,
+    onPostComment,
+    onPostCommentSeen,
+    onCancelComposer,
     onContentExtent,
   } = props;
 
@@ -178,18 +199,23 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   // Threads actually shown: seen ones are HIDDEN by default (zero-inbox), revealed
   // (dimmed) only when "Show seen" is on. Cards mid-exit-animation stay rendered so
   // they can fade. Used for BOTH layout and render so hidden cards take no space.
-  const visibleCards = showSeen
-    ? cards
-    : cards.filter((t) => !seenIds.has(t.id) || exiting.has(t.id));
+  const visibleCards = visibleReviewCards(cards, seenIds, showSeen, exiting);
+
+  const composerFrom = composerOpen && view ? view.state.selection.main.to : 0;
+  const layoutItems = [
+    ...visibleCards.map((card) => ({ id: card.id, from: card.from })),
+    ...(composerOpen ? [{ id: COMPOSER_ID, from: composerFrom }] : []),
+  ];
 
   // Recompute the layout only when the STRUCTURE changes — the set of thread ids and
   // their anchor offsets — NOT on every keystroke. `threads` is a fresh array each
   // render (groupThreads rebuilds it), so depending on it re-measured constantly,
   // often against not-yet-settled editor geometry → the "all cards lift up" glitch.
   // `from` is included because typing ABOVE a comment legitimately shifts its anchor.
-  const structureKey = visibleCards.map((t) => `${t.id}:${t.from}`).join("|");
+  const structureKey = layoutItems.map((item) => `${item.id}:${item.from}`).join("|");
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const statusRef = useRef<HTMLDivElement | null>(null);
   const cardsTrackRef = useRef<HTMLDivElement | null>(null);
   const connTrackRef = useRef<SVGSVGElement | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -231,10 +257,29 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   const syncTransform = () => {
     const v = view;
     if (!v) return;
-    const t = `translate3d(0, ${-v.scrollDOM.scrollTop}px, 0)`;
+    const scrollTop = v.scrollDOM.scrollTop;
+    const t = `translate3d(0, ${-scrollTop}px, 0)`;
     if (cardsTrackRef.current) cardsTrackRef.current.style.transform = t;
     if (connTrackRef.current) connTrackRef.current.style.transform = t;
+    if (statusRef.current) {
+      const bounds = visibleCards.flatMap((card) => {
+        const position = layoutRef.current.get(card.id);
+        const element = cardRefs.current.get(card.id);
+        if (!position || !element) return [];
+        const top = position.cardY - scrollTop;
+        return [{ top, bottom: top + element.offsetHeight }];
+      });
+      const hidden = commentStatusOccluded(bounds);
+      statusRef.current.style.opacity = hidden ? "0" : "1";
+      statusRef.current.style.pointerEvents = hidden ? "none" : "auto";
+    }
   };
+
+  // The scroll listener is installed once per view, but card visibility can
+  // change without replacing that view. Keep its fast path pointed at the
+  // latest card set instead of retaining the callback from the first render.
+  const syncTransformRef = useRef(syncTransform);
+  syncTransformRef.current = syncTransform;
 
   // Expensive but rare: document-space anchors + card heights, greedy-stack, commit.
   const recompute = () => {
@@ -254,10 +299,10 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         if (contentRect.height === 0 || cRect.height === 0) return { valid: false as const };
         const padTop = view0.documentPadding.top;
         const docTop = contentRect.top + view0.scrollDOM.scrollTop - cRect.top + padTop;
-        const measured = visibleCards.map((t) => ({
-          id: t.id,
-          anchorY: docTop + view0.lineBlockAt(t.from).top,
-          height: cardRefs.current.get(t.id)?.offsetHeight ?? 0,
+        const measured = layoutItems.map((item) => ({
+          id: item.id,
+          anchorY: docTop + view0.lineBlockAt(item.from).top,
+          height: cardRefs.current.get(item.id)?.offsetHeight ?? 0,
         }));
         // Bottom of the LAST text line in column coords — the reference for how far
         // the card stack overflows the prose (independent of any applied spacer,
@@ -289,12 +334,13 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         const activeThread = activeId
           ? visibleCards.find((t) => t.id === activeId || t.comments.some((c) => c.id === activeId))
           : null;
+        const activeItemId = composerOpen ? COMPOSER_ID : activeThread?.id;
 
         let prevBottom = -Infinity;
         for (const m of sorted) {
           const greedyY = Math.max(m.anchorY, prevBottom + BUBBLE_GAP);
           prevBottom = greedyY + h(m);
-          const active = activeThread != null && m.id === activeThread.id;
+          const active = m.id === activeItemId;
           next.set(m.id, { anchorY: m.anchorY, cardY: active ? m.anchorY : greedyY });
         }
 
@@ -334,7 +380,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     // openControl: opening a group popover can change a card's height, so the
     // greedy stack must re-measure or following cards overlap.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds, openControl]);
+  }, [view, structureKey, repositionKey, replyingId, activeId, showSeen, seenIds, openControl, composerOpen, composerDraft]);
 
   // Wheel over the comment column scrolls the DOCUMENT. The column is a sibling
   // panel with no scrollable content of its own (cards are absolutely positioned
@@ -363,10 +409,10 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   useEffect(() => {
     if (!view) return;
     const scrollEl = view.scrollDOM;
-    syncTransform();
+    syncTransformRef.current();
     let settle: ReturnType<typeof setTimeout> | null = null;
     const onScroll = () => {
-      syncTransform();
+      syncTransformRef.current();
       if (settle) clearTimeout(settle);
       settle = setTimeout(() => recomputeRef.current(), 120);
     };
@@ -385,11 +431,15 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   const isActiveCard = (c: SidebarCard) =>
     c.id === activeId || c.comments.some((cc) => cc.id === activeId);
   const active = ordered.find(isActiveCard) ?? null;
-  const activeLayout = active ? layout.get(active.id) : null;
+  const activeLayout = composerOpen
+    ? layout.get(COMPOSER_ID) ?? null
+    : active
+      ? layout.get(active.id) ?? null
+      : null;
 
   function submitReply(card: SidebarCard, markSeen: boolean) {
-    const text = replyDraft.trim();
-    if (text) (markSeen ? onReplyAndSeen : onReply)(card, text);
+    const text = replyDraft;
+    if (text.trim()) (markSeen ? onReplyAndSeen : onReply)(card, text);
     setReplyingId(null);
     setReplyDraft("");
   }
@@ -398,7 +448,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     <div ref={containerRef} className="relative h-full w-full">
       {/* Zero-inbox counter: open (unseen) comments remaining (top-right, always shown).
           Click it to jump to the first open comment. */}
-      <div className="absolute right-3 top-3 z-20 select-none">
+      {!composerOpen ? <div ref={statusRef} className="absolute right-3 top-3 z-20 select-none transition-opacity duration-150">
         {unseenCount > 0 ? (
           <button
             type="button"
@@ -423,8 +473,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
             all caught up
           </span>
         )}
-      </div>
-      {ordered.length === 0 ? (
+      </div> : null}
+      {ordered.length === 0 && !composerOpen ? (
         <div className="px-3 pt-5 text-xs italic text-[var(--faint)]">
           {showSeen ? "No comments." : "No unseen comments."}
         </div>
@@ -438,14 +488,16 @@ export default function CommentSidebar(props: CommentSidebarProps) {
             style={{ overflow: "visible" }}
             aria-hidden="true"
           >
-            {active && activeLayout
+            {activeLayout
               ? (() => {
                   const startX = originX;
                   const startY = activeLayout.anchorY + 7;
                   const endX = CARD_LEFT;
                   const endY = activeLayout.cardY + 18;
                   const midX = startX + (endX - startX) * 0.5;
-                  const stroke = authorColor(active.comments[0]?.author ?? null);
+                  const stroke = composerOpen
+                    ? "var(--crit-comment)"
+                    : authorColor(active?.comments[0]?.author ?? null);
                   return (
                     <g>
                       <circle cx={startX} cy={startY} r={2} fill={stroke} opacity={0.85} />
@@ -466,6 +518,33 @@ export default function CommentSidebar(props: CommentSidebarProps) {
           {/* Cards — clipped so off-screen (translated) cards don't spill upward. */}
           <div className="absolute inset-0 overflow-hidden">
             <div ref={cardsTrackRef} className="absolute inset-x-0 top-0" style={{ willChange: "transform" }}>
+              {composerOpen ? (() => {
+                const composerLayout = layout.get(COMPOSER_ID);
+                return (
+                  <div
+                    ref={(element) => {
+                      if (element) cardRefs.current.set(COMPOSER_ID, element);
+                      else cardRefs.current.delete(COMPOSER_ID);
+                    }}
+                    className="absolute z-20"
+                    style={{
+                      top: composerLayout?.cardY ?? 0,
+                      left: CARD_LEFT,
+                      right: 10,
+                      visibility: composerLayout ? "visible" : "hidden",
+                    }}
+                  >
+                    <CommentComposer
+                      draft={composerDraft}
+                      anchored={composerAnchored}
+                      onDraftChange={onComposerDraftChange}
+                      onPost={onPostComment}
+                      onPostDone={onPostCommentSeen}
+                      onCancel={onCancelComposer}
+                    />
+                  </div>
+                );
+              })() : null}
               {ordered.map((card) => {
                 const l = layout.get(card.id);
                 const isActive = isActiveCard(card);
@@ -551,19 +630,30 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 {badge}
                               </span>
                             </div>
-                            <p className="mb-0.5 whitespace-pre-wrap text-[13px] leading-relaxed">
-                              {s.type === "substitute" ? (
-                                <>
-                                  <span className="text-[var(--crit-del)] line-through">{s.oldText}</span>
-                                  <span className="px-1 text-[var(--faint)]">→</span>
-                                  <span className="text-[var(--crit-ins)]">{s.newText}</span>
-                                </>
-                              ) : s.type === "insert" ? (
-                                <span className="text-[var(--crit-ins)]">{s.inner}</span>
-                              ) : (
-                                <span className="text-[var(--crit-del)] line-through">{s.inner}</span>
-                              )}
-                            </p>
+                            {s.type === "insert" && card.standalone && richPreview ? (
+                              <div className="mb-0.5 pr-8">
+                                <p className="truncate text-[13px] font-medium leading-relaxed text-[var(--ink)]">
+                                  {standaloneAdditionTitle(s.inner)}
+                                </p>
+                                <p className="mt-0.5 text-[11px] text-[var(--faint)]">
+                                  Rendered in document
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="mb-0.5 whitespace-pre-wrap text-[13px] leading-relaxed">
+                                {s.type === "substitute" ? (
+                                  <>
+                                    <span className="text-[var(--crit-del)] line-through">{s.oldText}</span>
+                                    <span className="px-1 text-[var(--faint)]">→</span>
+                                    <span className="text-[var(--crit-ins)]">{s.newText}</span>
+                                  </>
+                                ) : s.type === "insert" ? (
+                                  <span className="text-[var(--crit-ins)]">{s.inner}</span>
+                                ) : (
+                                  <span className="text-[var(--crit-del)] line-through">{s.inner}</span>
+                                )}
+                              </p>
+                            )}
                           </>
                         );
                       })()
@@ -655,10 +745,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 {repl.trim() ? repl : "(delete this span)"}
                               </p>
                               {applicableSuggestionIds.has(c.id) ? (
-                                // Symmetric with the inline ✓/✗: Apply takes the proposed
-                                // wording, Reject keeps the original span (both keep any
-                                // surrounding discussion).
-                                <div className="mt-1.5 flex items-center gap-1.5">
+                                // Apply remains non-destructive; the combined action makes
+                                // closing the discussion an explicit, undoable choice.
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                   <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); onApplySuggestion(c); }}
@@ -667,6 +756,14 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                   >
                                     <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                                     Apply
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); onApplyAndResolveSuggestion(c); }}
+                                    title="Apply this edit and resolve the complete discussion in one undoable action"
+                                    className="rounded-md border border-[var(--crit-ins)] px-2 py-0.5 text-[11px] font-medium text-[var(--crit-ins)]"
+                                  >
+                                    Apply &amp; resolve
                                   </button>
                                   <button
                                     type="button"
@@ -699,6 +796,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                     isOpen={openControl === c.id}
                                     onToggle={() => setOpenControl(openControl === c.id ? null : c.id)}
                                     onGroupEdit={onGroupEdit}
+                                    onGroupApplyAndResolve={onGroupApplyAndResolve}
                                     onLocate={onLocate}
                                   />
                                 );
@@ -838,13 +936,15 @@ function GroupActions({
   groupId,
   size,
   onGroupEdit,
+  onGroupApplyAndResolve,
 }: {
   groupId: string;
   size: number;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+  onGroupApplyAndResolve: (groupId: string) => void;
 }) {
   return (
-    <div className="mt-2 flex items-center gap-1.5">
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onGroupEdit(groupId, "accept"); }}
@@ -852,6 +952,14 @@ function GroupActions({
         className="rounded-md bg-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--panel)]"
       >
         Apply all {size}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(groupId); }}
+        title={`Apply all ${size} edits and resolve their discussions (one undo)`}
+        className="rounded-md border border-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-ins)]"
+      >
+        Apply &amp; resolve all
       </button>
       <button
         type="button"
@@ -872,6 +980,7 @@ function GroupSurface({
   isOpen,
   onToggle,
   onGroupEdit,
+  onGroupApplyAndResolve,
   onLocate,
 }: {
   groupId: string;
@@ -880,6 +989,7 @@ function GroupSurface({
   isOpen: boolean;
   onToggle: () => void;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
+  onGroupApplyAndResolve: (groupId: string) => void;
   onLocate: (from: number, to: number) => void;
 }) {
   // Group tag, colour-matched to the card's spine so identity is unmistakable.
@@ -925,7 +1035,12 @@ function GroupSurface({
           <div className="max-h-60 overflow-y-auto pr-0.5">
             <GroupMembers members={members} onLocate={onLocate} />
           </div>
-          <GroupActions groupId={groupId} size={size} onGroupEdit={onGroupEdit} />
+          <GroupActions
+            groupId={groupId}
+            size={size}
+            onGroupEdit={onGroupEdit}
+            onGroupApplyAndResolve={onGroupApplyAndResolve}
+          />
         </div>
       ) : null}
     </div>

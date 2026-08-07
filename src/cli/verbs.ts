@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
 import { liveInstances, probeInstanceState, isConnectionRefused } from "../server/instances";
 import { listHistory, showVersion, recordHistory } from "../server/history";
-import { readConfig, writeConfig } from "../server/config";
+import { readConfig, updateConfig } from "../server/config";
 import {
   AmbiguityError,
   appendToThread,
@@ -20,14 +20,39 @@ import {
   resolveSuggestionGroup,
   resolveThread,
   threadsSummary,
+  findSuggestionComment,
+  findThread,
 } from "../lib/agentEdits";
-import { scanTokens, applicableSuggestionIds, hardWrap, validateMarkup, healDocument } from "../lib/criticmarkup";
+import {
+  applicableSuggestionIds,
+  canonicalizeCommentMarker,
+  hardWrap,
+  healDocument,
+  scanTokens,
+  validateMarkup,
+} from "../lib/criticmarkup";
 import { loadSpellEngine } from "./spellEngine";
 import type { SpellEngine } from "./spellEngine";
 import type { SpellVariant } from "../lib/viewSettings";
+import { seenStateForDocument } from "../lib/seenState";
 import { importDocument } from "./docxImport";
+import {
+  appendDecisionEvents,
+  listDecisionEvents,
+  readDecisionHistory,
+} from "../server/decisions";
+import { storeDecisionRecoveryEvents } from "../server/decisionRecovery";
+import { documentUpdateLockPath, withFileUpdateLock } from "../server/fileLock";
+import {
+  decisionEventsAcknowledged,
+  structuredSuggestionDecision,
+  structuredSuggestionGroupDecisions,
+  threadResolveDecision,
+  type DecisionEvent,
+} from "../lib/decision";
+import { merge3 } from "../lib/merge";
 
-const VERBS = new Set(["reply", "apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "restore", "spell"]);
+const VERBS = new Set(["reply", "apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "decisions", "restore", "spell"]);
 export function isAgentVerb(cmd?: string): boolean {
   return !!cmd && VERBS.has(cmd);
 }
@@ -102,6 +127,212 @@ async function liveServerFor(docPath: string): Promise<{ port: number } | null> 
   return unreachable === null ? null : { port: unreachable };
 }
 
+async function persistDecisionEventsViaServer(
+  port: number,
+  documentPath: string,
+  events: readonly DecisionEvent[],
+): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/decisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ documentPath, decisionEvents: events }),
+      signal: AbortSignal.timeout(Number(process.env.ACM_AGENT_WRITE_TIMEOUT_MS) || 10_000),
+    });
+    const body = (await res.json().catch(() => null)) as
+      | { audit?: { status?: unknown; decisionEventIds?: unknown } }
+      | null;
+    return (
+      res.ok &&
+      body?.audit?.status === "persisted" &&
+      Array.isArray(body.audit.decisionEventIds) &&
+      body.audit.decisionEventIds.length === events.length &&
+      body.audit.decisionEventIds.every((id, index) => id === events[index].id)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function rollBackUnauditedLiveWrite(
+  port: number,
+  documentPath: string,
+  before: string,
+  proposed: string,
+  committed: string,
+): Promise<boolean> {
+  const inverse = merge3(before, proposed, committed);
+  if (!inverse.clean) return false;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/agent-write`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        base: committed,
+        content: inverse.result,
+        documentPath,
+        decisionEvents: [],
+      }),
+      signal: AbortSignal.timeout(Number(process.env.ACM_AGENT_WRITE_TIMEOUT_MS) || 10_000),
+    });
+    const body = (await res.json().catch(() => null)) as
+      | { version?: number; content?: string }
+      | null;
+    return res.ok && typeof body?.version === "number";
+  } catch {
+    return false;
+  }
+}
+
+export interface DirectAuditRecovery {
+  status: "stored" | "failed";
+  decisionEventIds: string[];
+  message?: string;
+}
+
+export interface DirectAuditFailure {
+  status: "audit-failed";
+  restored: boolean;
+  message: string;
+  retainedForAuditConsistency?: true;
+  auditRecovery?: DirectAuditRecovery;
+}
+
+export type DirectWriteResult =
+  | { status: "written"; content: string }
+  | { status: "conflict"; content: string }
+  | DirectAuditFailure;
+
+export function directAuditFailureGuidance(result: DirectAuditFailure): string[] {
+  if (result.retainedForAuditConsistency) {
+    const recovery = result.auditRecovery;
+    return [
+      "  document was retained because its decision-history state could not be safely reversed",
+      recovery?.status === "stored"
+        ? "  missing decision evidence was queued for retry by the next ACM editor; do not restore the backup"
+        : `  missing decision evidence could not be queued: ${recovery?.message ?? "unknown recovery failure"}; do not restore the backup`,
+    ];
+  }
+  return [
+    result.restored
+      ? "  document was restored; no review decision was applied"
+      : "  CRITICAL: document rollback also failed; restore the pre-edit backup before continuing",
+  ];
+}
+
+export async function writeDirectWithAudit(
+  documentPath: string,
+  before: string,
+  proposed: string,
+  decisionEvents: readonly DecisionEvent[],
+  persistDecisionEvents: (
+    docPath: string,
+    events: readonly DecisionEvent[],
+  ) => Promise<{ appended: number }> = appendDecisionEvents,
+): Promise<DirectWriteResult> {
+  return withFileUpdateLock(
+    documentUpdateLockPath(documentPath),
+    `document ${documentPath}`,
+    async () => {
+      const current = await Bun.file(documentPath).text();
+      const merged = merge3(proposed, before, current);
+      if (!merged.clean) return { status: "conflict", content: current };
+      await Bun.write(documentPath, merged.result);
+      if (decisionEvents.length === 0) {
+        return { status: "written", content: merged.result };
+      }
+
+      try {
+        await persistDecisionEvents(documentPath, decisionEvents);
+        return { status: "written", content: merged.result };
+      } catch (initialError) {
+        const readPersistedIds = async (): Promise<Set<string> | null> => {
+          try {
+            return new Set(
+              (await listDecisionEvents(documentPath)).map((event) => event.id),
+            );
+          } catch {
+            return null;
+          }
+        };
+        const allPersisted = (ids: Set<string> | null): boolean =>
+          ids !== null && decisionEvents.every((event) => ids.has(event.id));
+        const anyPersisted = (ids: Set<string> | null): boolean =>
+          ids === null || decisionEvents.some((event) => ids.has(event.id));
+
+        let persistedIds = await readPersistedIds();
+        if (allPersisted(persistedIds)) {
+          return { status: "written", content: merged.result };
+        }
+
+        const initialPersistedIds = persistedIds;
+        const missingEvents = initialPersistedIds === null
+          ? decisionEvents
+          : decisionEvents.filter((event) => !initialPersistedIds.has(event.id));
+        let auditError: unknown = initialError;
+        let retrySucceeded = false;
+        try {
+          await persistDecisionEvents(documentPath, missingEvents);
+          retrySucceeded = true;
+        } catch (retryError) {
+          auditError = retryError;
+        }
+
+        persistedIds = await readPersistedIds();
+        if (allPersisted(persistedIds) || (retrySucceeded && persistedIds === null)) {
+          return { status: "written", content: merged.result };
+        }
+        if (retrySucceeded) {
+          auditError = new Error("Decision history retry did not persist every decision event.");
+        }
+        if (anyPersisted(persistedIds)) {
+          const missingRecoveryEvents = persistedIds === null
+            ? decisionEvents
+            : decisionEvents.filter((event) => !persistedIds.has(event.id));
+          let auditRecovery: DirectAuditRecovery;
+          try {
+            await storeDecisionRecoveryEvents(documentPath, missingRecoveryEvents);
+            auditRecovery = {
+              status: "stored",
+              decisionEventIds: missingRecoveryEvents.map((event) => event.id),
+            };
+          } catch (recoveryError) {
+            auditRecovery = {
+              status: "failed",
+              decisionEventIds: missingRecoveryEvents.map((event) => event.id),
+              message: (recoveryError as Error).message,
+            };
+          }
+          return {
+            status: "audit-failed",
+            restored: false,
+            message: (auditError as Error).message,
+            retainedForAuditConsistency: true,
+            auditRecovery,
+          };
+        }
+
+        let restored = false;
+        try {
+          const committed = await Bun.file(documentPath).text();
+          const inverse = merge3(current, merged.result, committed);
+          if (inverse.clean) {
+            await Bun.write(documentPath, inverse.result);
+            restored = true;
+          }
+        } catch {
+          // The pre-edit snapshot remains the last recovery route.
+        }
+        return {
+          status: "audit-failed",
+          restored,
+          message: (auditError as Error).message,
+        };
+      }
+    },
+  );
+}
+
 export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   const f = parseFlags(argv);
   const author = f.author ?? process.env.ACM_AUTHOR ?? "claude";
@@ -132,6 +363,38 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     console.log(`\nrestore with: acm restore <sha>  (snapshots the current doc first)`);
     return;
   }
+  if (cmd === "decisions") {
+    const n = f.positional[0] ? Number(f.positional[0]) : 20;
+    const limit = Number.isFinite(n) && n > 0 ? n : 20;
+    const history = await readDecisionHistory(docPath);
+    const events = history.decisionEvents.slice(-limit).reverse();
+    if (f.json) {
+      console.log(
+        JSON.stringify(
+          {
+            decisionEvents: events,
+            ...(history.issues.length > 0 ? { decisionHistoryIssues: history.issues } : {}),
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    for (const issue of history.issues) {
+      console.error(`acm decisions: warning: ${issue.message}`);
+    }
+    if (events.length === 0) {
+      console.log("acm decisions: no review decisions recorded for this document");
+      return;
+    }
+    for (const event of events) {
+      const target = `${event.target.kind}:${event.target.id}`;
+      const anchor = event.anchor ? ` — ${event.anchor.slice(0, 60)}` : "";
+      console.log(`${event.timestamp}  ${event.actor}  ${event.action}  ${target}${anchor}`);
+    }
+    return;
+  }
   if (cmd === "restore") {
     const ref = f.positional[0];
     if (!ref) {
@@ -158,10 +421,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     // hydrates from (GET /api/settings is a plain read of this file), so agents see
     // what the human has already read — no live server needed. Read-only here; only
     // the GUI marks seen.
-    const cfg = await readConfig<{ seen?: unknown }>("settings.json", {});
-    const seenKeys = new Set(
-      Array.isArray(cfg.seen) ? cfg.seen.filter((k): k is string => typeof k === "string") : [],
-    );
+    const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
+    const seenKeys = new Set(seenStateForDocument(cfg, docPath).keys);
     const summary = threadsSummary(content, seenKeys);
     if (f.json) {
       console.log(JSON.stringify(summary, null, 2));
@@ -185,6 +446,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   const before = await Bun.file(docPath).text();
   let after: string;
   let note: string;
+  let decisionEvents: DecisionEvent[] = [];
   // Bare `reply` (no --batch) is a single-thread reply — the same operation as
   // `comment`; dispatch both spellings to one implementation (`cmd` keeps the
   // invoked name for messages).
@@ -207,7 +469,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         const errors: string[] = [];
         for (const e of edits) {
           try {
-            const r = appendToThread(content, e.match, e.insert); // re-scans each time → offsets fresh
+            const marker = canonicalizeCommentMarker(e.insert);
+            const r = appendToThread(content, e.match, marker); // re-scans each time → offsets fresh
             content = r.content;
             (r.skipped ? skipped : applied).push(e.id);
           } catch (err) {
@@ -241,19 +504,36 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
           // Whole-group resolution (#21): every member edit lands in ONE write.
           const r = resolveSuggestionGroup(before, f.group, op);
           after = r.content;
+          decisionEvents = structuredSuggestionGroupDecisions(
+            before,
+            f.group,
+            op,
+            op,
+            author,
+            "cli",
+          );
+          if (decisionEvents.length !== r.applied) {
+            throw new Error(`could not build audit events for every applied member of group "${f.group}"`);
+          }
           note = `${cmd}ed suggestion group "${f.group}" — ${r.applied} edits${r.skipped ? `, ${r.skipped} skipped` : ""}`;
           break;
         }
         const [phrase] = f.positional;
         if (!phrase) throw new Error(`usage: acm ${cmd} "<phrase>" | acm ${cmd} --group <id>  [--doc]`);
+        const comment = findSuggestionComment(before, phrase);
         after = resolveSuggestion(before, phrase, op);
+        const event = structuredSuggestionDecision(before, comment, op, op, author, "cli");
+        if (!event) throw new Error(`"${phrase.slice(0, 48)}" is not an anchored suggestion`);
+        decisionEvents = [event];
         note = `${cmd}ed the suggestion matching "${phrase.slice(0, 40)}"`;
         break;
       }
       case "resolve": {
         const [phrase] = f.positional;
         if (!phrase) throw new Error('usage: acm resolve "<phrase>" [--doc]');
+        const thread = findThread(before, phrase);
         after = resolveThread(before, phrase);
+        decisionEvents = [threadResolveDecision(before, thread, author, "cli")];
         note = `resolved the thread matching "${phrase.slice(0, 40)}"`;
         break;
       }
@@ -283,7 +563,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  await commitWrite(docPath, before, after, cmd, note);
+  await commitWrite(docPath, before, after, cmd, note, decisionEvents);
 }
 
 /** Snapshot → write (through a live editor's 3-way merge if one's open, else direct)
@@ -296,6 +576,7 @@ async function commitWrite(
   after: string,
   cmd: string,
   note: string,
+  decisionEvents: DecisionEvent[] = [],
 ): Promise<void> {
   if (after === before) {
     console.log(`acm ${cmd}: no change. ${note}`);
@@ -309,7 +590,39 @@ async function commitWrite(
   const live = await liveServerFor(docPath);
   let final = after;
   let viaEditorPort: number | null = null;
+  const commitDirect = async () => {
+    const result = await writeDirectWithAudit(docPath, before, after, decisionEvents);
+    if (result.status === "written") {
+      final = result.content;
+      return;
+    }
+    if (result.status === "conflict") {
+      console.error(
+        `acm ${cmd}: NOT applied — the document changed under this direct edit. Retry in a moment.`,
+      );
+      if (snap) console.error(`  (nothing written; pre-edit backup → ${snap})`);
+      process.exit(1);
+    }
+    console.error(
+      `acm ${cmd}: the document changed, but its decision history could not be persisted: ` +
+        result.message,
+    );
+    for (const line of directAuditFailureGuidance(result)) console.error(line);
+    if (snap) console.error(`  pre-edit backup → ${snap}`);
+    process.exit(1);
+  };
   if (live) {
+    if (
+      decisionEvents.length > 0 &&
+      !(await persistDecisionEventsViaServer(live.port, docPath, []))
+    ) {
+      console.error(
+        `acm ${cmd}: the ACM editor on :${live.port} does not support durable decision history. ` +
+          `Rebuild/restart it before applying this review decision. Nothing written.`,
+      );
+      if (snap) console.error(`  (pre-edit backup → ${snap})`);
+      process.exit(1);
+    }
     let res: Response | null = null;
     let refused = false;
     let failure: unknown;
@@ -317,7 +630,12 @@ async function commitWrite(
       res = await fetch(`http://127.0.0.1:${live.port}/api/agent-write`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ base: before, content: after }),
+        body: JSON.stringify({
+          base: before,
+          content: after,
+          documentPath: docPath,
+          decisionEvents,
+        }),
         // Env override exists for the test suite (a black-holed-port test shouldn't
         // cost 10 real seconds); users never set it.
         signal: AbortSignal.timeout(Number(process.env.ACM_AGENT_WRITE_TIMEOUT_MS) || 10_000),
@@ -331,7 +649,7 @@ async function commitWrite(
       // Connection REFUSED: the editor died between the liveness probe and this POST.
       // With no live server there's no second writer to race, so a direct write is
       // safe (the pre-edit snapshot above is the recovery net).
-      await Bun.write(docPath, after);
+      await commitDirect();
     } else if (!res) {
       // Timed out / indeterminate — the editor may be ALIVE but slow or blocked, and
       // may hold unsaved human edits. Never direct-write over a possibly-live editor:
@@ -347,8 +665,20 @@ async function commitWrite(
       process.exit(1);
     } else {
       const body = (await res.json().catch(() => null)) as
-        | { version?: number; content?: string; conflict?: string }
+        | {
+            version?: number;
+            content?: string;
+            conflict?: string;
+            audit?: {
+              status?: string;
+              code?: string;
+              retryable?: boolean;
+              decisionEvents?: DecisionEvent[];
+              decisionEventIds?: string[];
+            };
+          }
         | null;
+      let auditRecovered = false;
       if (res.status === 409 && body) {
         // A real conflict from THIS ACM (cursor guard or same-span overlap): not applied.
         const why =
@@ -360,23 +690,74 @@ async function commitWrite(
         process.exit(1);
       }
       if (!res.ok || !body || typeof body.version !== "number") {
-        // The server answered, but NOT with the agent-write protocol — almost certainly
-        // an OLDER ACM on this port whose SPA fallback served HTML (or a 5xx). Do NOT
-        // fall back to a direct write: that editor is ALIVE and may hold unsaved human
-        // edits a blind write would clobber. Fail loudly so it gets rebuilt + retried.
-        console.error(
-          `acm ${cmd}: the ACM editor on :${live.port} did not accept the write ` +
-            `(HTTP ${res.status}; not an agent-write response) — it's likely running an ` +
-            `older build. Rebuild/restart it (\`just install\`) and retry. Nothing written.`,
-        );
-        if (snap) console.error(`  (pre-edit backup → ${snap})`);
-        process.exit(1);
+        if (
+          body?.audit?.status === "failed" &&
+          body.audit.code === "decision-persistence" &&
+          typeof body.content === "string"
+        ) {
+          if (await persistDecisionEventsViaServer(live.port, docPath, decisionEvents)) {
+            final = body.content;
+            viaEditorPort = live.port;
+            auditRecovered = true;
+          } else {
+            const restored = await rollBackUnauditedLiveWrite(
+              live.port,
+              docPath,
+              before,
+              after,
+              body.content,
+            );
+            console.error(
+              `acm ${cmd}: the document changed, but its decision history could not be persisted.`,
+            );
+            console.error(
+              restored
+                ? "  document was restored; no review decision was applied"
+                : "  CRITICAL: document rollback also failed; restore the pre-edit backup before continuing",
+            );
+            if (snap) console.error(`  pre-edit backup → ${snap}`);
+            process.exit(1);
+          }
+        } else {
+          // The server answered, but NOT with the agent-write protocol — almost certainly
+          // an OLDER ACM on this port whose SPA fallback served HTML (or a 5xx). Do NOT
+          // fall back to a direct write: that editor is ALIVE and may hold unsaved human
+          // edits a blind write would clobber. Fail loudly so it gets rebuilt + retried.
+          console.error(
+            `acm ${cmd}: the ACM editor on :${live.port} did not accept the write ` +
+              `(HTTP ${res.status}; not an agent-write response) — it's likely running an ` +
+              `older build. Rebuild/restart it (\`just install\`) and retry. Nothing written.`,
+          );
+          if (snap) console.error(`  (pre-edit backup → ${snap})`);
+          process.exit(1);
+        }
+      }
+      if (
+        decisionEvents.length > 0 &&
+        !auditRecovered &&
+        !decisionEventsAcknowledged(decisionEvents, body.audit)
+      ) {
+        if (!(await persistDecisionEventsViaServer(live.port, docPath, decisionEvents))) {
+          const restored =
+            typeof body.content === "string" &&
+            (await rollBackUnauditedLiveWrite(live.port, docPath, before, after, body.content));
+          console.error(
+            `acm ${cmd}: the editor changed the document but did not persist decision history.`,
+          );
+          console.error(
+            restored
+              ? "  document was restored; no review decision was applied"
+              : "  CRITICAL: document rollback also failed; restore the pre-edit backup before continuing",
+          );
+          if (snap) console.error(`  pre-edit backup → ${snap}`);
+          process.exit(1);
+        }
       }
       if (body.content !== undefined) final = body.content; // the merged bytes now on disk
       viaEditorPort = live.port;
     }
   } else {
-    await Bun.write(docPath, after);
+    await commitDirect();
   }
 
   const toks = scanTokens(final);
@@ -498,13 +879,14 @@ async function runSpellAdd(f: Flags): Promise<void> {
     console.error("usage: acm spell add <word> [word…]   (keeps words in your personal dictionary)");
     process.exit(1);
   }
-  const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
-  const current = Array.isArray(cfg.dictionary) ? (cfg.dictionary as string[]) : [];
-  const merged = [...new Set([...current, ...words])].sort();
-  const added = merged.filter((w) => !current.includes(w));
-
   const live = await anyLiveServer();
+  let merged: string[] = [];
+  let added: string[] = [];
   if (live) {
+    const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
+    const current = Array.isArray(cfg.dictionary) ? (cfg.dictionary as string[]) : [];
+    merged = [...new Set([...current, ...words])].sort();
+    added = merged.filter((word) => !current.includes(word));
     const res = await fetch(`http://127.0.0.1:${live.port}/api/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -516,7 +898,12 @@ async function runSpellAdd(f: Flags): Promise<void> {
       process.exit(1);
     }
   } else {
-    await writeConfig("settings.json", { ...cfg, dictionary: merged });
+    await updateConfig<Record<string, unknown>>("settings.json", {}, (cfg) => {
+      const current = Array.isArray(cfg.dictionary) ? (cfg.dictionary as string[]) : [];
+      merged = [...new Set([...current, ...words])].sort();
+      added = merged.filter((word) => !current.includes(word));
+      return { ...cfg, dictionary: merged };
+    });
   }
 
   if (added.length === 0) {
@@ -538,19 +925,20 @@ async function runSpellIgnore(f: Flags, docPath: string): Promise<void> {
     console.error("usage: acm spell ignore <word> [word…]   (stops flagging them in THIS doc only)");
     process.exit(1);
   }
-  const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
-  const rawMap = cfg.spellIgnore;
-  const map: Record<string, string[]> =
-    rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)
-      ? { ...(rawMap as Record<string, string[]>) }
-      : {};
-  const current = Array.isArray(map[docPath]) ? map[docPath] : [];
-  const merged = [...new Set([...current, ...words])].sort();
-  const added = merged.filter((w) => !current.includes(w));
-  map[docPath] = merged;
-
   const live = await anyLiveServer();
+  let merged: string[] = [];
+  let added: string[] = [];
   if (live) {
+    const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
+    const rawMap = cfg.spellIgnore;
+    const map: Record<string, string[]> =
+      rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)
+        ? { ...(rawMap as Record<string, string[]>) }
+        : {};
+    const current = Array.isArray(map[docPath]) ? map[docPath] : [];
+    merged = [...new Set([...current, ...words])].sort();
+    added = merged.filter((word) => !current.includes(word));
+    map[docPath] = merged;
     const res = await fetch(`http://127.0.0.1:${live.port}/api/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -562,7 +950,18 @@ async function runSpellIgnore(f: Flags, docPath: string): Promise<void> {
       process.exit(1);
     }
   } else {
-    await writeConfig("settings.json", { ...cfg, spellIgnore: map });
+    await updateConfig<Record<string, unknown>>("settings.json", {}, (cfg) => {
+      const rawMap = cfg.spellIgnore;
+      const map: Record<string, string[]> =
+        rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)
+          ? { ...(rawMap as Record<string, string[]>) }
+          : {};
+      const current = Array.isArray(map[docPath]) ? map[docPath] : [];
+      merged = [...new Set([...current, ...words])].sort();
+      added = merged.filter((word) => !current.includes(word));
+      map[docPath] = merged;
+      return { ...cfg, spellIgnore: map };
+    });
   }
 
   if (added.length === 0) {

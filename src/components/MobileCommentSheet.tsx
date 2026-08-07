@@ -15,13 +15,17 @@ import { useEffect, useState } from "react";
 import type { SidebarCard, CommentToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import { authorColor } from "./authorColor";
-import { MOD, handleCommentKey } from "./CommentSidebar";
+import { handleCommentKey } from "./commentKeys";
+import { standaloneAdditionTitle } from "./CommentSidebar";
 
 interface MobileCommentSheetProps {
   /** The active card (thread or suggestion), or null when nothing is focused. */
   active: SidebarCard | null;
+  /** Whether the active comment thread is currently in the seen set. */
+  activeSeen: boolean;
   /** Open (unseen) comment count — shown in the header, mirrors the desktop pill. */
   unseenCount: number;
+  richPreview: boolean;
   /** The next still-open card to advance to (null when none) — drives "Next". */
   nextOpen: SidebarCard | null;
   onClose: () => void;
@@ -32,6 +36,7 @@ interface MobileCommentSheetProps {
   onSuggestEdit: (card: SidebarCard) => void;
   onToggleSeen: (card: SidebarCard) => void;
   onApplySuggestion: (comment: CommentToken) => void;
+  onApplyAndResolveSuggestion: (comment: CommentToken) => void;
   onRejectSuggestionEdit: (comment: CommentToken) => void;
   applicableSuggestionIds: Set<string>;
   onAcceptSuggestion: (card: SidebarCard) => void;
@@ -42,10 +47,24 @@ interface MobileCommentSheetProps {
 const sheetBtn =
   "flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-3 text-[14px] font-medium";
 
+export function seenToggleLabel(seen: boolean): "Mark done" | "Mark unseen" {
+  return seen ? "Mark unseen" : "Mark done";
+}
+
+export function mobileReviewEntryLabel(
+  visibleCount: number,
+  unseenCount: number,
+): string | null {
+  if (visibleCount <= 0) return null;
+  return unseenCount > 0 ? `${unseenCount} open` : `${visibleCount} shown`;
+}
+
 export default function MobileCommentSheet(props: MobileCommentSheetProps) {
   const {
     active,
+    activeSeen,
     unseenCount,
+    richPreview,
     nextOpen,
     onClose,
     onGoTo,
@@ -55,6 +74,7 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
     onSuggestEdit,
     onToggleSeen,
     onApplySuggestion,
+    onApplyAndResolveSuggestion,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
     onAcceptSuggestion,
@@ -75,8 +95,8 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
   }, [active?.id]);
 
   function submit(markSeen: boolean) {
-    const text = draft.trim();
-    if (text && active) (markSeen ? onReplyAndSeen : onReply)(active, text);
+    const text = draft;
+    if (text.trim() && active) (markSeen ? onReplyAndSeen : onReply)(active, text);
     setDraft("");
   }
 
@@ -113,7 +133,7 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
             type="button"
             onClick={onClose}
             aria-label="Close comment"
-            className="ml-auto mt-1 flex h-9 w-9 items-center justify-center rounded-full text-[var(--muted)] hover:bg-[var(--line)]"
+            className="ml-auto mt-1 flex h-11 w-11 items-center justify-center rounded-full text-[var(--muted)] hover:bg-[var(--line)]"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
           </button>
@@ -122,7 +142,7 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
         {/* Body: full thread / suggestion (scrolls if long) */}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-1">
           {active?.kind === "suggestion" ? (
-            <SuggestionBlock card={active} onAccept={() => onAcceptSuggestion(active)} onReject={() => onRejectSuggestion(active)} />
+            <SuggestionBlock card={active} richPreview={richPreview} onAccept={() => onAcceptSuggestion(active)} onReject={() => onRejectSuggestion(active)} />
           ) : null}
 
           {active?.comments.map((c, i) => (
@@ -134,7 +154,13 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
                   <span className="truncate text-[12px] font-medium" style={{ color: authorColor(c.author) }}>{c.author ?? "anonymous"}</span>
                 </div>
               ) : null}
-              <CommentBody comment={c} applicable={applicableSuggestionIds.has(c.id)} onApply={() => onApplySuggestion(c)} onReject={() => onRejectSuggestionEdit(c)} />
+              <CommentBody
+                comment={c}
+                applicable={applicableSuggestionIds.has(c.id)}
+                onApply={() => onApplySuggestion(c)}
+                onApplyAndResolve={() => onApplyAndResolveSuggestion(c)}
+                onReject={() => onRejectSuggestionEdit(c)}
+              />
             </div>
           ))}
 
@@ -146,29 +172,36 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => handleCommentKey(e, () => submit(false), () => submit(true), onClose)}
               placeholder="Reply…"
-              className="block max-h-40 w-full resize-none overflow-y-auto rounded-lg border border-[var(--line-strong)] bg-[var(--bg)] px-3 py-2 text-[15px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
+              className="block max-h-40 w-full resize-none overflow-y-auto rounded-lg border border-[var(--line-strong)] bg-[var(--bg)] px-3 py-2 text-base leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
             />
           </div>
         </div>
 
         {/* Action bar — big targets; the common review verbs */}
         <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] px-4 py-2.5">
-          <button type="button" onClick={() => submit(false)} disabled={!draft.trim()} className={`${sheetBtn} bg-[var(--accent)] text-[var(--panel)] disabled:opacity-40`}>
-            Reply <span className="text-[11px] font-normal opacity-70">{MOD}↵</span>
+          <button type="button" onClick={() => submit(false)} disabled={!draft.trim()} className={`${sheetBtn} bg-[var(--accent)] text-[var(--panel)] disabled:bg-transparent disabled:text-[var(--faint)] disabled:opacity-100 disabled:ring-1 disabled:ring-inset disabled:ring-[var(--line-strong)]`}>
+            Reply
           </button>
           {active?.kind === "comment" ? (
             <>
               <button type="button" onClick={() => active && onSuggestEdit(active)} className={`${sheetBtn} border border-[var(--line-strong)] text-[var(--crit-comment)]`}>
                 Suggest edit
               </button>
-              <button type="button" onClick={() => active && onToggleSeen(active)} className={`${sheetBtn} border border-[var(--line-strong)] text-[var(--ink)]`}>
-                Mark done
+              <button
+                type="button"
+                onClick={() => active && onToggleSeen(active)}
+                aria-pressed={activeSeen}
+                className={`${sheetBtn} border border-[var(--line-strong)] text-[var(--ink)]`}
+              >
+                {seenToggleLabel(activeSeen)}
               </button>
             </>
           ) : null}
-          <button type="button" onClick={() => active && onResolveThread(active)} className={`${sheetBtn} ml-auto text-[var(--crit-del)]`}>
-            Resolve
-          </button>
+          {active?.kind === "comment" ? (
+            <button type="button" onClick={() => onResolveThread(active)} className={`${sheetBtn} ml-auto text-[var(--crit-del)]`}>
+              Resolve
+            </button>
+          ) : null}
           {nextOpen ? (
             <button type="button" onClick={() => onGoTo(nextOpen)} className={`${sheetBtn} border border-[var(--line-strong)] text-[var(--ink)]`}>
               Next ›
@@ -183,10 +216,12 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
 /** Suggestion card preview + Accept/Reject — the change shown like the desktop card. */
 function SuggestionBlock({
   card,
+  richPreview,
   onAccept,
   onReject,
 }: {
   card: Extract<SidebarCard, { kind: "suggestion" }>;
+  richPreview: boolean;
   onAccept: () => void;
   onReject: () => void;
 }) {
@@ -195,19 +230,28 @@ function SuggestionBlock({
   return (
     <div className="pt-1">
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">{badge}</div>
-      <p className="mb-2 whitespace-pre-wrap text-[15px] leading-relaxed">
-        {s.type === "substitute" ? (
-          <>
-            <span className="text-[var(--crit-del)] line-through">{s.oldText}</span>
-            <span className="px-1 text-[var(--faint)]">→</span>
-            <span className="text-[var(--crit-ins)]">{s.newText}</span>
-          </>
-        ) : s.type === "insert" ? (
-          <span className="text-[var(--crit-ins)]">{s.inner}</span>
-        ) : (
-          <span className="text-[var(--crit-del)] line-through">{s.inner}</span>
-        )}
-      </p>
+      {s.type === "insert" && card.standalone && richPreview ? (
+        <div className="mb-2">
+          <p className="truncate text-[15px] font-medium leading-relaxed text-[var(--ink)]">
+            {standaloneAdditionTitle(s.inner)}
+          </p>
+          <p className="mt-0.5 text-[12px] text-[var(--faint)]">Rendered in document</p>
+        </div>
+      ) : (
+        <p className="mb-2 whitespace-pre-wrap text-[15px] leading-relaxed">
+          {s.type === "substitute" ? (
+            <>
+              <span className="text-[var(--crit-del)] line-through">{s.oldText}</span>
+              <span className="px-1 text-[var(--faint)]">→</span>
+              <span className="text-[var(--crit-ins)]">{s.newText}</span>
+            </>
+          ) : s.type === "insert" ? (
+            <span className="text-[var(--crit-ins)]">{s.inner}</span>
+          ) : (
+            <span className="text-[var(--crit-del)] line-through">{s.inner}</span>
+          )}
+        </p>
+      )}
       <div className="flex gap-2">
         <button type="button" onClick={onAccept} className={`${sheetBtn} flex-1 bg-[var(--crit-ins)] text-[var(--panel)]`}>
           ✓ Accept
@@ -225,11 +269,13 @@ function CommentBody({
   comment,
   applicable,
   onApply,
+  onApplyAndResolve,
   onReject,
 }: {
   comment: CommentToken;
   applicable: boolean;
   onApply: () => void;
+  onApplyAndResolve: () => void;
   onReject: () => void;
 }) {
   const repl = suggestionReplacement(comment.body);
@@ -243,12 +289,21 @@ function CommentBody({
         {repl.trim() ? repl : "(delete this span)"}
       </p>
       {applicable ? (
-        <div className="mt-2 flex gap-2">
-          <button type="button" onClick={onApply} className={`${sheetBtn} flex-1 bg-[var(--crit-ins)] text-[var(--panel)]`}>
-            Apply
-          </button>
-          <button type="button" onClick={onReject} className={`${sheetBtn} flex-1 border border-[var(--line-strong)] text-[var(--crit-del)]`}>
-            Reject
+        <div className="mt-2 grid gap-2">
+          <div className="flex gap-2">
+            <button type="button" onClick={onApply} className={`${sheetBtn} flex-1 bg-[var(--crit-ins)] text-[var(--panel)]`}>
+              Apply
+            </button>
+            <button type="button" onClick={onReject} className={`${sheetBtn} flex-1 border border-[var(--line-strong)] text-[var(--crit-del)]`}>
+              Reject
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onApplyAndResolve}
+            className={`${sheetBtn} w-full border border-[var(--crit-ins)] text-[var(--crit-ins)]`}
+          >
+            Apply &amp; resolve
           </button>
         </div>
       ) : (

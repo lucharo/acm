@@ -43,7 +43,7 @@ export const critTags = {
  * True if any construct's opening delimiter (`{++`, `{--`, `{~~`, `{==`, `{>>`)
  * appears in [start, end). Used to reject an unbalanced/stray open that would
  * otherwise swallow a later construct — mirrors the lib scanTokens no-swallow
- * guard so the editor and the sidebar/nav agree on token boundaries.
+ * guard so the editor and review surfaces agree on token boundaries.
  */
 function hasNestedOpen(cx: InlineContext, start: number, end: number): boolean {
   for (let i = start; i < end - 1; i++) {

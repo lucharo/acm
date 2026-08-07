@@ -3,9 +3,9 @@
 //   • useDocSync  — initial snapshot + WebSocket pushes + debounced version-checked save
 //   • useCodeMirror — the editor (buffer = source of truth); local edits flow OUT
 //     via onDocChanged → save; remote/agent edits flow IN via applyRemote
-//   • CommentSidebar / NavPanel — presentational, driven by tokens scanned from the doc
+//   • CommentSidebar / Toc — presentational, driven by tokens scanned from the doc
 //
-// The editor BUFFER is ground truth; `doc` state here mirrors it so the sidebar/nav
+// The editor BUFFER is ground truth; `doc` state here mirrors it so review surfaces
 // can scan tokens. Accept/reject/resolve are plain ranged edits over the buffer
 // (using the shared lib grammar), which then debounce-save to the file.
 
@@ -15,17 +15,22 @@ import type { ViewUpdate } from "@codemirror/view";
 
 import { useDocSync } from "./client/useDocSync";
 import type { SaveState } from "./client/useDocSync";
-import { useCodeMirror } from "./editor/useCodeMirror";
+import { fetchAcmSession } from "./client/session";
+import type { AcmSession } from "./client/session";
+import { decisionAnnotations, useCodeMirror } from "./editor/useCodeMirror";
 import type { CritCallbacks } from "./editor/criticMarkupView";
 import CommentSidebar, { MOD } from "./components/CommentSidebar";
-import MobileCommentSheet from "./components/MobileCommentSheet";
+import MobileCommentSheet, { mobileReviewEntryLabel } from "./components/MobileCommentSheet";
+import MobileCommentComposer from "./components/MobileCommentComposer";
+import SelectionActions from "./components/SelectionActions";
 import HealReview from "./components/HealReview";
 import Toc from "./components/Toc";
-import NavPanel from "./components/NavPanel";
 import Header from "./components/Header";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
+import { commentEdgeVisible, commentRailExpanded } from "./lib/commentRail";
+import { isPrintShortcut } from "./lib/printShortcut";
 import { useViewSettings, useSeenState, useDictionary, fetchConfig } from "./hooks/useConfigState";
 import {
   setCustomWords,
@@ -47,7 +52,10 @@ import ShortcutsOverlay from "./components/ShortcutsOverlay";
 import SpellingReview from "./components/SpellingReview";
 import ToastStack from "./components/Toast";
 import type { ToastItem } from "./components/Toast";
+import PrintDocument, { waitForPrintImages } from "./components/PrintDocument";
+import Launcher from "./components/Launcher";
 import { toggleStrong, toggleEmphasis } from "./editor/formatting";
+import { formatMarkdownTableAt } from "./editor/markdownTable";
 import { flashRange } from "./editor/footnotes";
 import {
   scanTokens,
@@ -63,17 +71,33 @@ import {
   validateMarkup,
   suggestionThreadEdit,
   hardWrap,
+  acceptedMarkdown,
   suggestionGroupEdits,
   commentKey,
+  type SuggestionDiscussion,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
+import {
+  activeVisibleReviewCard,
+  mobileReviewScrollOptions,
+  nextVisibleReviewCard,
+  visibleReviewCards,
+} from "./lib/visibleReviewCards";
+import {
+  commentResolveDecision,
+  inlineSuggestionDecision,
+  structuredSuggestionDecision,
+  structuredSuggestionGroupDecisions,
+  threadResolveDecision,
+  type DecisionEvent,
+  type DecisionQueueUpdate,
+} from "./lib/decision";
 import type {
   CritToken,
   SuggestionToken,
   CommentToken,
   CommentThread,
   SidebarCard,
-  FilterMode,
 } from "./lib/types";
 
 
@@ -91,6 +115,37 @@ function dispatchableDiff(before: string, after: string): { from: number; to: nu
 }
 
 export default function App() {
+  const [session, setSession] = useState<AcmSession | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const viewSettings = useViewSettings();
+
+  useEffect(() => {
+    let active = true;
+    void fetchAcmSession().then(
+      (next) => {
+        if (active) setSession(next);
+      },
+      (cause) => {
+        if (active) setSessionError((cause as Error).message);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (sessionError) return <SessionError message={sessionError} />;
+  if (!session) return <LoadingSession />;
+  if (session.mode === "launcher") return <Launcher session={session} />;
+  return <DocumentApp {...viewSettings} />;
+}
+
+function DocumentApp({
+  settings,
+  onChangeSettings,
+  settingsSaveError,
+  retrySettings,
+}: ReturnType<typeof useViewSettings>) {
   // Remote updates (WS push / reconnect resync / 409) are forwarded into the
   // Workspace once it has registered its handler. An update can arrive in the gap
   // between the initial GET (which mounts Workspace) and Workspace's effect — if
@@ -107,17 +162,13 @@ export default function App() {
     },
   });
 
-  // View settings live at the App level so theme/font apply to the loading
-  // screen too (state + persistence in useConfigState).
-  const { settings, onChangeSettings } = useViewSettings();
-
-
-  if (sync.initialDoc === null) {
+  if (sync.initialDoc === null || sync.documentPath === null) {
     return <Loading connected={sync.connected} />;
   }
   return (
     <Workspace
       initialDoc={sync.initialDoc}
+      documentPath={sync.documentPath}
       save={sync.save}
       flushNow={sync.flushNow}
       reportSelection={sync.reportSelection}
@@ -128,7 +179,28 @@ export default function App() {
       pendingRemote={pendingRemote}
       settings={settings}
       onChangeSettings={onChangeSettings}
+      settingsSaveError={settingsSaveError}
+      onRetrySettings={retrySettings}
     />
+  );
+}
+
+function LoadingSession() {
+  return (
+    <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
+      Opening ACM…
+    </div>
+  );
+}
+
+function SessionError({ message }: { message: string }) {
+  return (
+    <main className="flex h-full items-center justify-center bg-[var(--desk)] p-6 text-[var(--ink)]">
+      <div className="max-w-md rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5 shadow-sm">
+        <h1 className="text-base font-semibold">ACM could not start</h1>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">{message}</p>
+      </div>
+    </main>
   );
 }
 
@@ -142,7 +214,8 @@ function Loading({ connected }: { connected: boolean }) {
 
 interface WorkspaceProps {
   initialDoc: string;
-  save: (content: string) => void;
+  documentPath: string;
+  save: (content: string, decisionUpdate?: DecisionQueueUpdate) => void;
   flushNow: () => void;
   reportSelection: (from: number, to: number) => void;
   connected: boolean;
@@ -154,10 +227,13 @@ interface WorkspaceProps {
   pendingRemote: React.MutableRefObject<{ content: string; version: number } | null>;
   settings: ViewSettings;
   onChangeSettings: (patch: Partial<ViewSettings>) => void;
+  settingsSaveError: boolean;
+  onRetrySettings: () => void;
 }
 
 function Workspace({
   initialDoc,
+  documentPath,
   save,
   flushNow,
   reportSelection,
@@ -168,17 +244,14 @@ function Workspace({
   pendingRemote,
   settings,
   onChangeSettings,
+  settingsSaveError,
+  onRetrySettings,
 }: WorkspaceProps) {
-  // `doc` mirrors the editor buffer so the sidebar/nav can scan tokens.
+  // `doc` mirrors the editor buffer so review surfaces can scan tokens.
   const [doc, setDoc] = useState(initialDoc);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterMode>("all");
   const [repositionKey, setRepositionKey] = useState(0);
   const [view, setView] = useState<EditorView | null>(null);
-  // The overview panel is hidden by default ("less is more"); a header toggle / the
-  // settings menu reveals it. Comments live in the right margin; suggestions also
-  // carry inline ✓/✗, so the default editor+margin view loses nothing.
-  const [navOpen, setNavOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const [tocActiveFrom, setTocActiveFrom] = useState<number | null>(null);
   // Extra scroll reach (px of scroller bottom padding) so cards stacked below the
@@ -189,18 +262,17 @@ function Workspace({
 
   // Hide the right-margin comment column when the reading area is too narrow to
   // fit both the prose and the ~320px comments — below this the editor is
-  // unreadably cramped. The inline comment dots and the overview panel stay
-  // available, so comments remain reachable. Driven by the reading area's actual
-  // width (a ResizeObserver), so it adapts to the window AND the overview panel.
+  // unreadably cramped. The inline comment dots and mobile comments sheet keep
+  // comments reachable. Driven by the reading area's actual width.
   const readingRef = useRef<HTMLDivElement | null>(null);
-  const [commentsVisible, setCommentsVisible] = useState(true);
+  const [commentRailWideEnough, setCommentRailWideEnough] = useState(true);
   useEffect(() => {
     const el = readingRef.current;
     if (!el) return;
     const COMMENTS_MIN_WIDTH = 800;
     const ro = new ResizeObserver((entries) => {
       const w = entries[entries.length - 1].contentRect.width;
-      setCommentsVisible(w >= COMMENTS_MIN_WIDTH);
+      setCommentRailWideEnough(w >= COMMENTS_MIN_WIDTH);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -226,7 +298,11 @@ function Workspace({
 
   // "Seen" tracking — content-keyed, non-destructive (state + persistence in
   // useConfigState).
-  const { seen, setSeen } = useSeenState();
+  const documentCommentKeys = useMemo(
+    () => new Set(threads.flatMap((thread) => thread.comments.map(commentKey))),
+    [threads],
+  );
+  const { seen, setSeen } = useSeenState(documentPath, documentCommentKeys);
 
   // Personal spelling dictionary (persisted). Mirror it into the spellcheck engine
   // whenever it changes so the underline + suggestions honour the user's words.
@@ -245,19 +321,12 @@ function Workspace({
   // Re-seeds on window focus so a CLI ignore lands without a reload (ignoreWord is
   // a Set-add, so re-seeding already-known words is a no-op).
   useEffect(() => {
-    let docPath: string | null = null;
     const seed = async () => {
-      if (!docPath) {
-        const res = await fetch("/api/doc").catch(() => null);
-        const body = res && res.ok ? ((await res.json()) as { path?: string }) : null;
-        docPath = body?.path ?? null;
-        if (!docPath) return; // older server without `path` — nothing to key on
-      }
       const cfg = await fetchConfig();
       const map = cfg?.spellIgnore;
       const words =
         map && typeof map === "object" && !Array.isArray(map)
-          ? (map as Record<string, string[]>)[docPath]
+          ? (map as Record<string, string[]>)[documentPath]
           : undefined;
       if (Array.isArray(words)) for (const w of words) ignoreWord(w);
     };
@@ -265,8 +334,13 @@ function Workspace({
     const onFocus = () => void seed();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, []);
+  }, [documentPath]);
   const { seenThreadIds, unseenCount } = useSeenDerived(commentCards, seen);
+  const visibleCards = useMemo(
+    () => visibleReviewCards(cards, seenThreadIds, settings.showSeen),
+    [cards, seenThreadIds, settings.showSeen],
+  );
+  const hasVisibleCards = visibleCards.length > 0;
   // Mutation callbacks invoked by editor widgets. They need the live view, which
   // useCodeMirror returns below — so widgets call through a stable proxy that
   // reads the freshest handlers from this ref. The proxy identity never changes,
@@ -299,6 +373,7 @@ function Workspace({
     if (u.selectionSet || u.docChanged) {
       const sel = u.state.selection.main;
       setHasSelection(!sel.empty);
+      setSelectionRange(sel.empty ? null : { from: sel.from, to: sel.to });
       // Tell the server where the caret is so agent writes avoid this span (#38).
       reportSelection(sel.from, sel.to);
     }
@@ -331,9 +406,9 @@ function Workspace({
   const editor = useCodeMirror({
     initialDoc,
     callbacks: stableCallbacks,
-    onDocChanged: (content) => {
+    onDocChanged: (content, decisionUpdate) => {
       setDoc(content);
-      save(content);
+      save(content, decisionUpdate);
     },
     onUpdate,
     onShowShortcuts: () => setShortcutsOpen((o) => !o),
@@ -343,10 +418,12 @@ function Workspace({
     bionic: settings.bionic,
     pageBreaks: settings.pageBreaks,
     spellcheck: settings.spellcheck,
+    richPreview: settings.richPreview,
   });
 
   // Selection state powers the "Add comment" affordance.
   const [hasSelection, setHasSelection] = useState(false);
+  const [selectionRange, setSelectionRange] = useState<{ from: number; to: number } | null>(null);
 
   // Spelling review modal: a deduped list of every flagged word in the document.
   // `flagged` is recomputed fresh whenever the list is shown (settings popover or the
@@ -376,14 +453,42 @@ function Workspace({
   // The comment composer (state + post/suggest-edit actions) — see hooks/useComposer.
   const {
     composing,
-    setComposing,
     draft,
     setDraft,
     composerAnchored,
     openComposer,
+    cancelComposer,
     postComment,
     suggestEditOnSelection,
   } = useComposer(editor.viewRef, settings.author, setSeen);
+
+  // A new composer belongs to the comment rail just like an existing thread. Keep
+  // the surface mounted for its final fade, but collapse the column immediately
+  // once neither a visible card nor a composer needs it.
+  const railNeeded = commentRailExpanded(settings.commentRail, hasVisibleCards, composing);
+  const [railMounted, setRailMounted] = useState(railNeeded);
+  useEffect(() => {
+    if (railNeeded && commentRailWideEnough) {
+      setRailMounted(true);
+      return;
+    }
+    const timer = setTimeout(() => setRailMounted(false), 220);
+    return () => clearTimeout(timer);
+  }, [railNeeded, commentRailWideEnough]);
+  const railExpanded = commentRailWideEnough && railNeeded;
+  const railSurfaceMounted = commentRailWideEnough && (railMounted || railNeeded);
+  const commentsEdgeVisible = commentEdgeVisible(
+    settings.commentRail,
+    commentRailWideEnough,
+    railExpanded,
+    hasVisibleCards,
+  );
+  useEffect(() => {
+    if (!railExpanded) setScrollReach(0);
+  }, [railExpanded]);
+  const toggleCommentRail = useCallback(() => {
+    onChangeSettings({ commentRail: commentsEdgeVisible ? "hide" : "show" });
+  }, [commentsEdgeVisible, onChangeSettings]);
 
   // Surface the (once-created) view as state so the sidebar gets it. The hook's
   // view-creation effect runs before this one (registered earlier), so viewRef is
@@ -497,12 +602,22 @@ function Workspace({
     (from: number, to: number, mode: "accept" | "reject") => {
       const v = editor.viewRef.current;
       if (!v) return;
-      const raw = v.state.doc.sliceString(from, to);
+      const content = v.state.doc.toString();
+      const token = scanTokens(content).find(
+        (candidate): candidate is SuggestionToken =>
+          isSuggestion(candidate) && candidate.from === from && candidate.to === to,
+      );
+      if (!token) return;
+      const raw = content.slice(from, to);
       const insert = applySuggestion(raw, mode);
-      v.dispatch({ changes: { from, to, insert } });
+      const event = inlineSuggestionDecision(token, mode, settings.author, "gui");
+      v.dispatch({
+        changes: { from, to, insert },
+        annotations: decisionAnnotations([event]),
+      });
       setActiveId(null);
     },
-    [editor.viewRef],
+    [editor.viewRef, settings.author],
   );
 
   const resolveComment = useCallback(
@@ -511,12 +626,14 @@ function Workspace({
       if (!v) return;
       // Strip the whole anchor (highlight + comment), not just the comment, so no
       // orphaned `{==…==}` is left behind.
-      const edit = resolveAnchorEdit(v.state.doc.toString(), token.from, token.to);
-      v.dispatch({ changes: edit });
+      const content = v.state.doc.toString();
+      const edit = resolveAnchorEdit(content, token.from, token.to);
+      const event = commentResolveDecision(content, token, settings.author, "gui");
+      v.dispatch({ changes: edit, annotations: decisionAnnotations([event]) });
       // Clear selection: this edit shifts every later token's positional id.
       setActiveId(null);
     },
-    [editor.viewRef],
+    [editor.viewRef, settings.author],
   );
 
   const acceptToken = useCallback(
@@ -527,36 +644,95 @@ function Workspace({
     (t: SuggestionToken) => applyMutation(t.from, t.to, "reject"),
     [applyMutation],
   );
+  const defaultApplyDiscussion: SuggestionDiscussion = settings.applyAndResolve
+    ? "resolve-thread"
+    : "keep-discussion";
 
-  // Accept / reject a structured `SUGGEST:` comment. Accept keeps the proposed
-  // wording, reject keeps the original span; both keep any surrounding discussion
-  // (suggestionThreadEdit). No-op if it isn't an anchored suggestion.
+  // Accept / reject a structured `SUGGEST:` comment. Ordinary Apply keeps the
+  // surrounding discussion; Apply & resolve consumes the complete thread in the
+  // same CodeMirror transaction as the wording change.
   const runSuggestionEdit = useCallback(
-    (comment: CommentToken, mode: "accept" | "reject") => {
+    (
+      comment: CommentToken,
+      mode: "accept" | "reject",
+      discussion: SuggestionDiscussion = "keep-discussion",
+    ) => {
       const v = editor.viewRef.current;
       if (!v) return;
-      const edit = suggestionThreadEdit(v.state.doc.toString(), comment, mode);
+      const content = v.state.doc.toString();
+      const effectiveDiscussion = mode === "accept" ? discussion : "keep-discussion";
+      const edit = suggestionThreadEdit(content, comment, mode, effectiveDiscussion);
       if (edit) {
-        v.dispatch({ changes: edit });
+        const event = structuredSuggestionDecision(
+          content,
+          comment,
+          mode,
+          mode === "accept"
+            ? effectiveDiscussion === "resolve-thread"
+              ? "apply-resolve"
+              : "apply"
+            : "reject",
+          settings.author,
+          "gui",
+        );
+        if (!event) return;
+        v.dispatch({ changes: edit, annotations: decisionAnnotations([event]) });
         setActiveId(null);
       }
     },
-    [editor.viewRef],
+    [editor.viewRef, settings.author],
   );
 
   // Accept / reject EVERY member of a suggestion group (#21) as ONE transaction
   // (array of changes in original coordinates → atomic apply + a single undo).
   const runGroupEdit = useCallback(
-    (groupId: string, mode: "accept" | "reject") => {
+    (
+      groupId: string,
+      mode: "accept" | "reject",
+      discussion: SuggestionDiscussion = "keep-discussion",
+    ) => {
       const v = editor.viewRef.current;
       if (!v) return;
-      const { edits } = suggestionGroupEdits(v.state.doc.toString(), groupId, mode);
+      const content = v.state.doc.toString();
+      const effectiveDiscussion = mode === "accept" ? discussion : "keep-discussion";
+      const { edits, skipped } = suggestionGroupEdits(
+        content,
+        groupId,
+        mode,
+        effectiveDiscussion,
+      );
       if (edits.length) {
-        v.dispatch({ changes: edits });
+        const events = structuredSuggestionGroupDecisions(
+          content,
+          groupId,
+          mode,
+          mode === "accept"
+            ? effectiveDiscussion === "resolve-thread"
+              ? "apply-resolve"
+              : "apply"
+            : "reject",
+          settings.author,
+          "gui",
+        );
+        if (events.length !== edits.length) {
+          pushToast("Could not record every group decision. No changes were made.", "error");
+          return;
+        }
+        v.dispatch({ changes: edits, annotations: decisionAnnotations(events) });
         setActiveId(null);
+        if (skipped > 0) {
+          pushToast(
+            `${skipped} conflicting group edit${skipped === 1 ? " was" : "s were"} left open.`,
+          );
+        }
+      } else if (skipped > 0) {
+        pushToast(
+          `No changes made: ${skipped} conflicting group edit${skipped === 1 ? " remains" : "s remain"} open.`,
+          "error",
+        );
       }
     },
-    [editor.viewRef],
+    [editor.viewRef, pushToast, settings.author],
   );
 
   // ── Comment threads ───────────────────────────────────────────────────────────
@@ -571,6 +747,16 @@ function Workspace({
       // jump-to-top. The magnetic card still floats to the anchor line.
       editor.viewRef.current?.dispatch({
         effects: EditorView.scrollIntoView(thread.from, { y: "nearest", yMargin: 24 }),
+      });
+    },
+    [editor.viewRef],
+  );
+
+  const focusMobileReviewCard = useCallback(
+    (card: SidebarCard) => {
+      setActiveId(card.comments[0]?.id ?? card.id);
+      editor.viewRef.current?.dispatch({
+        effects: EditorView.scrollIntoView(card.from, mobileReviewScrollOptions()),
       });
     },
     [editor.viewRef],
@@ -597,12 +783,15 @@ function Workspace({
         setActiveId(target ? target.comments[0].id : null);
         if (target) {
           editor.viewRef.current?.dispatch({
-            effects: EditorView.scrollIntoView(target.from, { y: "nearest" }),
+            effects: EditorView.scrollIntoView(
+              target.from,
+              commentRailWideEnough ? { y: "nearest" } : mobileReviewScrollOptions(),
+            ),
           });
         }
       }
     },
-    [seen, threads, editor.viewRef],
+    [seen, threads, editor.viewRef, commentRailWideEnough],
   );
 
   // Clicking comment-anchored highlighted text focuses its comment (same as the
@@ -633,6 +822,29 @@ function Workspace({
     if (v && first) v.dispatch({ effects: EditorView.scrollIntoView(first.from, { y: "center" }) });
   }, [editor.viewRef, diagnostics]);
 
+  const printResult = useMemo(() => acceptedMarkdown(doc), [doc]);
+  const requestPrint = useCallback(() => {
+    if (!printResult.ok) {
+      pushToast(
+        `Fix ${printResult.diagnostics.length} markup issue${printResult.diagnostics.length === 1 ? "" : "s"} before exporting so review delimiters cannot leak into the PDF.`,
+        "error",
+      );
+      goToFirstIssue();
+      return;
+    }
+    void (async () => {
+      const root = document.getElementById("acm-print-document");
+      const pendingImages = root ? await waitForPrintImages(root) : [];
+      if (pendingImages.length > 0) {
+        pushToast(
+          `${pendingImages.length} image${pendingImages.length === 1 ? " is" : "s are"} still loading and may be omitted from the PDF.`,
+          "error",
+        );
+      }
+      window.print();
+    })();
+  }, [goToFirstIssue, printResult, pushToast]);
+
   // Hard-wrap the prose to 88 columns (#10) — markup-safe (constructs are atomic,
   // so token ids and seen-state survive). A normal editor edit: saves + undoable.
   const wrapDoc = useCallback(() => {
@@ -642,6 +854,22 @@ function Workspace({
     const wrapped = hardWrap(cur, 88);
     if (wrapped !== cur) v.dispatch({ changes: dispatchableDiff(cur, wrapped) });
   }, [editor.viewRef]);
+
+  const formatTableSource = useCallback(() => {
+    const v = editor.viewRef.current;
+    if (!v) return;
+    const result = formatMarkdownTableAt(v.state, v.state.selection.main.head);
+    if (result.status === "not-table") {
+      pushToast("Place the cursor in a valid top-level Markdown table first.", "error");
+      return;
+    }
+    if (result.status === "unchanged") {
+      pushToast("This table source is already aligned.");
+      return;
+    }
+    v.dispatch({ changes: result.change, scrollIntoView: true });
+    pushToast("Table source aligned. Undo restores the previous spacing.");
+  }, [editor.viewRef, pushToast]);
 
   // ── Command palette (⌘K) ──────────────────────────────────────────────────────
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -663,7 +891,10 @@ function Workspace({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+      if (isPrintShortcut(e)) {
+        e.preventDefault();
+        requestPrint();
+      } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       } else if (mod && !e.shiftKey && !e.altKey && e.key === ",") {
@@ -684,7 +915,7 @@ function Workspace({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [editor.viewRef, requestPrint]);
 
   // Auto-heal EVERYTHING mechanical: nested comments flattened, comments trapped
   // in tracked changes moved out, multi-block anchors re-anchored on their final
@@ -744,11 +975,13 @@ function Workspace({
       if (!v) return;
       // Strip the whole anchor structure — outer `{==` opens, the highlight, and all
       // comment markers — leaving just the span prose (no orphaned highlight/mess).
-      const edit = resolveAnchorEdit(v.state.doc.toString(), thread.from, thread.to);
-      v.dispatch({ changes: edit });
+      const content = v.state.doc.toString();
+      const edit = resolveAnchorEdit(content, thread.from, thread.to);
+      const event = threadResolveDecision(content, thread, settings.author, "gui");
+      v.dispatch({ changes: edit, annotations: decisionAnnotations([event]) });
       setActiveId(null);
     },
-    [editor.viewRef],
+    [editor.viewRef, settings.author],
   );
 
   // Delete a SINGLE comment (distinct from Resolve, which clears the whole anchor).
@@ -823,14 +1056,20 @@ function Workspace({
       },
       onAcceptSuggestion: (from) => {
         const hit = tokens.find((t): t is CommentToken => isComment(t) && t.from === from);
-        if (hit) runSuggestionEdit(hit, "accept");
+        if (hit) {
+          runSuggestionEdit(
+            hit,
+            "accept",
+            defaultApplyDiscussion,
+          );
+        }
       },
       onRejectSuggestion: (from) => {
         const hit = tokens.find((t): t is CommentToken => isComment(t) && t.from === from);
         if (hit) runSuggestionEdit(hit, "reject");
       },
     };
-  }, [applyMutation, tokens, runSuggestionEdit]);
+  }, [applyMutation, defaultApplyDiscussion, tokens, runSuggestionEdit]);
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
     const goToLastThread = () => {
@@ -848,7 +1087,9 @@ function Workspace({
       { id: "bold", label: "Bold selection", hint: `${MOD}B`, disabled: !hasSelection, run: format(toggleStrong) },
       { id: "italic", label: "Italic selection", hint: `${MOD}I`, disabled: !hasSelection, run: format(toggleEmphasis) },
       { id: "shortcuts", label: "Keyboard shortcuts", hint: `${MOD}/`, run: () => setShortcutsOpen(true) },
+      { id: "print", label: "Print / save as PDF", hint: `${MOD}P`, run: requestPrint },
       { id: "wrap", label: "Hard-wrap prose to 88 columns", hint: "acm wrap", run: wrapDoc },
+      { id: "format-table", label: "Format table source at cursor", disabled: settings.richPreview, run: formatTableSource },
       { id: "comment", label: "Comment on selection", hint: `${MOD}↵ to post`, disabled: !hasSelection, run: openComposer },
       { id: "last-thread", label: "Go to the last comment", disabled: threads.length === 0, run: goToLastThread },
       { id: "first-issue", label: "Jump to first markup issue", hint: diagnostics.length ? String(diagnostics.length) : undefined, disabled: diagnostics.length === 0, run: goToFirstIssue },
@@ -860,13 +1101,15 @@ function Workspace({
       { id: "bionic", label: settings.bionic ? "Disable bionic reading" : "Enable bionic reading", run: () => onChangeSettings({ bionic: !settings.bionic }) },
       { id: "pagebreaks", label: settings.pageBreaks ? "Hide A4 page breaks" : "Show A4 page breaks", run: () => onChangeSettings({ pageBreaks: !settings.pageBreaks }) },
       { id: "progressbar", label: settings.progressBar ? "Hide reading progress bar" : "Show reading progress bar", run: () => onChangeSettings({ progressBar: !settings.progressBar }) },
+      { id: "rich-preview", label: settings.richPreview ? "Show raw Markdown source" : "Show rich preview", run: () => onChangeSettings({ richPreview: !settings.richPreview }) },
       { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },
+      { id: "comment-edge", label: commentsEdgeVisible ? "Hide comments edge" : "Show comments edge", run: toggleCommentRail },
+      { id: "comment-edge-auto", label: "Use automatic comments edge", disabled: settings.commentRail === "auto", run: () => onChangeSettings({ commentRail: "auto" }) },
       { id: "spellcheck", label: settings.spellcheck ? "Turn off spell check" : "Turn on spell check", run: () => onChangeSettings({ spellcheck: !settings.spellcheck }) },
       { id: "spell-review", label: "Review spelling", disabled: !settings.spellcheck, run: openSpellReview },
-      { id: "nav", label: navOpen ? "Hide overview panel" : "Show overview panel", run: () => setNavOpen((o) => !o) },
-      { id: "toc", label: tocOpen ? "Hide outline" : "Show outline", run: () => setTocOpen((o) => !o) },
+      { id: "toc", label: tocOpen ? "Hide table of contents" : "Show table of contents", run: () => setTocOpen((o) => !o) },
     ];
-  }, [editor.viewRef, threads, wrapDoc, hasSelection, openComposer, diagnostics.length, goToFirstIssue, settings, onChangeSettings, navOpen, tocOpen, openSpellReview]);
+  }, [editor.viewRef, threads, wrapDoc, formatTableSource, hasSelection, openComposer, diagnostics.length, goToFirstIssue, requestPrint, settings, onChangeSettings, tocOpen, openSpellReview, commentsEdgeVisible, toggleCommentRail]);
 
 
   // ── Right-click context menu ──────────────────────────────────────────────────
@@ -1069,50 +1312,42 @@ function Workspace({
 
   // ── Mobile comment surface ────────────────────────────────────────────────────
   // On a phone the right-margin column is hidden (commentsVisible=false), so the
-  // active thread/suggestion is shown in a bottom sheet instead. Compute the active
-  // card + the next still-open comment (for the sheet's inbox-style "Next") + the
-  // first open one (for the floating entry button when nothing's focused).
+  // active thread/suggestion is shown in a bottom sheet instead. Navigation follows
+  // the SAME filtered visible-card set as the desktop rail, including seen comments
+  // when "Show seen" is enabled.
   const activeCard = useMemo<SidebarCard | null>(
-    () => cards.find((c) => c.id === activeId || c.comments.some((cc) => cc.id === activeId)) ?? null,
-    [cards, activeId],
+    () => activeVisibleReviewCard(cards, seenThreadIds, settings.showSeen, activeId),
+    [cards, seenThreadIds, settings.showSeen, activeId],
   );
-  const openComments = useMemo(
-    () => cards.filter((c) => c.kind === "comment" && !seenThreadIds.has(c.id)).sort((a, b) => a.from - b.from),
-    [cards, seenThreadIds],
+  const mobileCards = useMemo(
+    () => [...visibleCards].sort((a, b) => a.from - b.from),
+    [visibleCards],
   );
-  const nextOpenComment = useMemo(() => {
-    if (!openComments.length) return null;
-    const after = activeCard ? openComments.find((c) => c.from > activeCard.from && c.id !== activeCard.id) : null;
-    return after ?? openComments.find((c) => c.id !== activeCard?.id) ?? null;
-  }, [openComments, activeCard]);
+  const nextMobileCard = useMemo(() => {
+    return nextVisibleReviewCard(mobileCards, activeCard);
+  }, [mobileCards, activeCard]);
 
   return (
-    <div className="flex h-full flex-col bg-[var(--bg)]">
+    <div className="acm-workspace flex h-full flex-col bg-[var(--bg)]">
       <Header
         connected={connected}
         saveState={saveState}
         lastSavedAt={lastSavedAt}
         wordCount={wordCount}
-        canComment={hasSelection}
-        composing={composing}
-        composerAnchored={composerAnchored}
         onWrap={wrapDoc}
-        draft={draft}
-        onDraftChange={setDraft}
-        onOpenComposer={openComposer}
-        onPostComment={() => postComment(false)}
-        onPostCommentSeen={() => postComment(true)}
-        onSuggestEdit={suggestEditOnSelection}
-        onCancelComposer={() => setComposing(false)}
-        navOpen={navOpen}
-        onToggleNav={() => setNavOpen((v) => !v)}
         tocOpen={tocOpen}
         onToggleToc={() => setTocOpen((v) => !v)}
+        commentRailVisible={commentsEdgeVisible}
+        commentsSurface={commentRailWideEnough ? "rail" : "sheet"}
+        onToggleCommentRail={toggleCommentRail}
         settings={settings}
         onChangeSettings={onChangeSettings}
+        settingsSaveError={settingsSaveError}
+        onRetrySettings={onRetrySettings}
         settingsOpen={settingsOpen}
         onSetSettingsOpen={setSettingsOpen}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        onPrint={requestPrint}
         dictionary={dictionary}
         onAddWord={addWord}
         onRemoveWord={removeWord}
@@ -1137,25 +1372,6 @@ function Workspace({
       ) : null}
 
       <div className="flex min-h-0 flex-1">
-        {/* Overview panel — hidden by default; toggled from the header / settings. */}
-        {navOpen ? (
-          <aside className="w-72 shrink-0 overflow-hidden border-r border-[var(--line)]">
-            <NavPanel
-              tokens={tokens}
-              applicableSuggestionIds={applicableSuggestionIds}
-              filter={filter}
-              onFilterChange={setFilter}
-              activeId={activeId}
-              onSelect={gotoToken}
-              onAccept={acceptToken}
-              onReject={rejectToken}
-              onResolve={resolveComment}
-              onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
-              onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
-            />
-          </aside>
-        ) : null}
-
         {/* Reading area: the editor (page) and the comment column are ONE centred
             group so comments sit just right of the page (short connectors), with the
             desk filling the outer margins in page view. */}
@@ -1163,7 +1379,14 @@ function Workspace({
           ref={readingRef}
           className={`flex min-w-0 flex-1 justify-center ${settings.page ? "bg-[var(--desk)]" : "bg-[var(--bg)]"}`}
         >
-          <div className="flex min-w-0" style={{ width: "100%", maxWidth: 1100 }}>
+          <div
+            className="grid min-w-0 transition-[grid-template-columns,max-width] duration-200 ease-out"
+            style={{
+              width: "100%",
+              maxWidth: railExpanded ? 1100 : 780,
+              gridTemplateColumns: railExpanded ? "minmax(0, 1fr) 20rem" : "minmax(0, 1fr) 0rem",
+            }}
+          >
             <main className="relative min-w-0 flex-1 overflow-hidden">
               <div
                 ref={editor.containerRef}
@@ -1171,42 +1394,81 @@ function Workspace({
                 onContextMenu={openEditorMenu}
                 onClick={(e) => focusCommentAtPoint(e.clientX, e.clientY)}
                 style={
-                  commentsVisible && scrollReach
+                  railExpanded && scrollReach
                     ? ({ ["--acm-scroll-reach" as string]: `${scrollReach}px` })
                     : undefined
-                }
+                  }
               />
-            </main>
-            {commentsVisible ? (
-              <aside className="w-80 shrink-0">
-                <CommentSidebar
+              {!composing ? (
+                <SelectionActions
                   view={view}
-                  cards={cards}
-                  activeId={activeId}
-                  seenIds={seenThreadIds}
-                  showSeen={settings.showSeen}
-                  unseenCount={unseenCount}
-                  onToggleSeen={toggleSeen}
-                  repositionKey={repositionKey}
-                  replyTarget={replyTarget}
-                  onResolveThread={resolveThread}
-                  onDeleteComment={deleteComment}
-                  onReply={replyToThread}
-                  onReplyAndSeen={replyAndSeen}
-                  onSuggestEdit={(t) => replyAndSeen(t, SUGGEST_EDIT_TEXT)}
-                  onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
-                  onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
-                  applicableSuggestionIds={applicableSuggestionIds}
-                  suggestionGroupOf={suggestionGroupOf}
-                  groupMembersOf={groupMembersOf}
-                  onGroupEdit={runGroupEdit}
-                  onLocate={locateSpan}
-                  onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
-                  onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
-                  onFocusThread={focusThread}
-                  onCardContextMenu={openCommentMenu}
-                  onContentExtent={(px) => setScrollReach((p) => (Math.abs(p - px) > 2 ? px : p))}
+                  selection={selectionRange}
+                  onAddComment={openComposer}
+                  onMakeSuggestion={suggestEditOnSelection}
                 />
+              ) : null}
+            </main>
+            {railSurfaceMounted ? (
+              <aside
+                className={`min-w-0 overflow-hidden transition-opacity duration-200 ${railExpanded ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                aria-hidden={!railExpanded}
+              >
+                <div className="h-full w-80">
+                  <CommentSidebar
+                    view={view}
+                    cards={cards}
+                    richPreview={settings.richPreview}
+                    activeId={activeId}
+                    seenIds={seenThreadIds}
+                    showSeen={settings.showSeen}
+                    unseenCount={unseenCount}
+                    onToggleSeen={toggleSeen}
+                    repositionKey={repositionKey}
+                    replyTarget={replyTarget}
+                    onResolveThread={resolveThread}
+                    onDeleteComment={deleteComment}
+                    onReply={replyToThread}
+                    onReplyAndSeen={replyAndSeen}
+                    onSuggestEdit={(t) => replyAndSeen(t, SUGGEST_EDIT_TEXT)}
+                    onApplySuggestion={(c) =>
+                      runSuggestionEdit(
+                        c,
+                        "accept",
+                        defaultApplyDiscussion,
+                      )
+                    }
+                    onApplyAndResolveSuggestion={(c) =>
+                      runSuggestionEdit(c, "accept", "resolve-thread")
+                    }
+                    onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
+                    applicableSuggestionIds={applicableSuggestionIds}
+                    suggestionGroupOf={suggestionGroupOf}
+                    groupMembersOf={groupMembersOf}
+                    onGroupEdit={(groupId, mode) =>
+                      runGroupEdit(
+                        groupId,
+                        mode,
+                        mode === "accept" ? defaultApplyDiscussion : "keep-discussion",
+                      )
+                    }
+                    onGroupApplyAndResolve={(groupId) =>
+                      runGroupEdit(groupId, "accept", "resolve-thread")
+                    }
+                    onLocate={locateSpan}
+                    onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
+                    onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
+                    onFocusThread={focusThread}
+                    onCardContextMenu={openCommentMenu}
+                    composerOpen={composing}
+                    composerDraft={draft}
+                    composerAnchored={composerAnchored}
+                    onComposerDraftChange={setDraft}
+                    onPostComment={() => postComment(false)}
+                    onPostCommentSeen={() => postComment(true)}
+                    onCancelComposer={cancelComposer}
+                    onContentExtent={(px) => setScrollReach((p) => (Math.abs(p - px) > 2 ? px : p))}
+                  />
+                </div>
               </aside>
             ) : null}
           </div>
@@ -1266,34 +1528,55 @@ function Workspace({
       {/* Mobile: the right-margin column is hidden (too narrow), so the active
           thread/suggestion lives in a bottom sheet, with a floating entry button
           to open the first unseen comment when nothing's focused. */}
-      {!commentsVisible ? (
+      {!commentRailWideEnough && composing ? (
+        <MobileCommentComposer
+          draft={draft}
+          anchored={composerAnchored}
+          onDraftChange={setDraft}
+          onPost={() => postComment(false)}
+          onPostDone={() => postComment(true)}
+          onCancel={cancelComposer}
+        />
+      ) : null}
+      {!commentRailWideEnough && !composing && hasVisibleCards && settings.commentRail !== "hide" ? (
         <>
           <MobileCommentSheet
             active={activeCard}
+            activeSeen={activeCard?.kind === "comment" && seenThreadIds.has(activeCard.id)}
             unseenCount={unseenCount}
-            nextOpen={nextOpenComment}
+            richPreview={settings.richPreview}
+            nextOpen={nextMobileCard}
             onClose={() => setActiveId(null)}
-            onGoTo={focusThread}
+            onGoTo={focusMobileReviewCard}
             onReply={replyToThread}
             onReplyAndSeen={replyAndSeen}
             onResolveThread={resolveThread}
             onSuggestEdit={(t) => replyAndSeen(t, SUGGEST_EDIT_TEXT)}
             onToggleSeen={toggleSeen}
-            onApplySuggestion={(c) => runSuggestionEdit(c, "accept")}
+            onApplySuggestion={(c) =>
+              runSuggestionEdit(
+                c,
+                "accept",
+                defaultApplyDiscussion,
+              )
+            }
+            onApplyAndResolveSuggestion={(c) =>
+              runSuggestionEdit(c, "accept", "resolve-thread")
+            }
             onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
             applicableSuggestionIds={applicableSuggestionIds}
             onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
             onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
           />
-          {!activeCard && unseenCount > 0 ? (
+          {!activeCard && mobileCards.length > 0 ? (
             <button
               type="button"
-              onClick={() => nextOpenComment && focusThread(nextOpenComment)}
+              onClick={() => nextMobileCard && focusMobileReviewCard(nextMobileCard)}
               className="fixed bottom-3 left-3 z-30 flex items-center gap-1.5 rounded-full bg-[var(--accent)] py-2 pl-3 pr-3.5 text-[13px] font-medium text-[var(--panel)] shadow-lg"
               title="Open comments"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-              {unseenCount} open
+              {mobileReviewEntryLabel(mobileCards.length, unseenCount)}
             </button>
           ) : null}
         </>
@@ -1313,6 +1596,11 @@ function Workspace({
 
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
       <ToastStack toasts={toasts} />
+      <PrintDocument
+        result={printResult}
+        style={settings.printStyle}
+        alternateSides={settings.printAlternateSides}
+      />
     </div>
   );
 }

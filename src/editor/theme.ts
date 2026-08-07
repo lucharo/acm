@@ -173,7 +173,8 @@ export const acmTheme: Extension = EditorView.theme(
       width: "100%",
       maxWidth: "100%",
       overflow: "hidden",
-      cursor: "text",
+      cursor: "default",
+      position: "relative",
     },
     ".cm-md-table": {
       width: "100%",
@@ -188,8 +189,19 @@ export const acmTheme: Extension = EditorView.theme(
       border: "1px solid var(--line-strong)",
       padding: "0.38em 0.55em",
       verticalAlign: "top",
-      overflowWrap: "anywhere",
-      wordBreak: "break-word",
+      overflowWrap: "break-word",
+      wordBreak: "normal",
+      cursor: "text",
+      outline: "none",
+      transition: "background-color 120ms ease, box-shadow 120ms ease",
+    },
+    "@media (hover: hover)": {
+      ".cm-md-table th:hover, .cm-md-table td:hover": {
+        boxShadow: "inset 0 0 0 1px var(--accent)",
+      },
+    },
+    ".cm-md-table th:focus-visible, .cm-md-table td:focus-visible": {
+      boxShadow: "inset 0 0 0 2px var(--accent)",
     },
     ".cm-md-table th": {
       backgroundColor: "var(--line)",
@@ -198,6 +210,96 @@ export const acmTheme: Extension = EditorView.theme(
     },
     ".cm-md-table td": {
       backgroundColor: "var(--panel)",
+    },
+    ".cm-md-table-cell-input": {
+      boxSizing: "border-box",
+      width: "100%",
+      minWidth: "0",
+      border: "0",
+      borderRadius: "3px",
+      outline: "2px solid var(--accent)",
+      outlineOffset: "2px",
+      backgroundColor: "var(--panel)",
+      color: "var(--ink)",
+      font: "inherit",
+      lineHeight: "inherit",
+      padding: "0",
+    },
+    ".cm-md-table a": {
+      color: "var(--accent)",
+      textDecoration: "underline",
+      textUnderlineOffset: "0.12em",
+    },
+    ".cm-md-table code": {
+      borderRadius: "3px",
+      backgroundColor: "var(--line)",
+      padding: "0.08em 0.25em",
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontSize: "0.9em",
+    },
+    ".cm-md-html-block": {
+      boxSizing: "border-box",
+      width: "100%",
+      maxWidth: "100%",
+      margin: "0.35em 0",
+      color: "var(--ink)",
+      fontFamily: "var(--editor-font)",
+      fontSize: "0.94em",
+      lineHeight: "1.5",
+    },
+    ".cm-md-code-block": {
+      boxSizing: "border-box",
+      width: "100%",
+      maxWidth: "100%",
+      margin: "0.55em 0",
+      color: "var(--ink)",
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      fontSize: "0.88em",
+      lineHeight: "1.5",
+    },
+    ".cm-md-code-block pre": {
+      boxSizing: "border-box",
+      maxWidth: "100%",
+      margin: "0",
+      overflowX: "auto",
+      border: "1px solid var(--line-strong)",
+      borderRadius: "6px",
+      backgroundColor: "var(--line)",
+      padding: "0.7em 0.85em",
+      whiteSpace: "pre-wrap",
+      overflowWrap: "anywhere",
+    },
+    ".cm-md-code-block code": {
+      font: "inherit",
+    },
+    ".cm-md-code-block code[data-language]::before": {
+      content: "attr(data-language)",
+      display: "block",
+      marginBottom: "0.35em",
+      color: "var(--faint)",
+      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      fontSize: "0.72em",
+      fontWeight: "700",
+      letterSpacing: "0.06em",
+      textTransform: "uppercase",
+    },
+    ".cm-rich-html-table": {
+      width: "100%",
+      maxWidth: "100%",
+      tableLayout: "fixed",
+      borderCollapse: "collapse",
+    },
+    ".cm-rich-html-table th, .cm-rich-html-table td": {
+      border: "1px solid var(--line-strong)",
+      padding: "0.5em 0.65em",
+      verticalAlign: "top",
+    },
+    ".cm-rich-html-table ul, .cm-rich-html-table ol": {
+      margin: "0",
+      paddingLeft: "1.25em",
+    },
+    ".cm-rich-html-table li + li": {
+      marginTop: "0.25em",
     },
     // Substitution arrow rendered in place of `~>`.
     ".cm-md-sub-arrow": {
@@ -212,6 +314,108 @@ export const acmTheme: Extension = EditorView.theme(
       backgroundColor: "var(--crit-ins-bg)",
       borderRadius: "3px",
       padding: "0.02em 0.06em",
+    },
+    ".cm-crit-block-ins": {
+      boxSizing: "border-box",
+      width: "100%",
+      margin: "0.55em 0",
+      padding: "0.5em 0.7em 0.65em",
+      border: "1px solid color-mix(in srgb, var(--crit-ins) 35%, var(--line))",
+      borderLeft: "3px solid var(--crit-ins)",
+      borderRadius: "7px",
+      backgroundColor: "var(--crit-ins-bg)",
+      color: "var(--ink)",
+    },
+    ".cm-crit-block-toolbar": {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "0.75em",
+      marginBottom: "0.4em",
+      fontFamily: "ui-sans-serif, -apple-system, sans-serif",
+    },
+    ".cm-crit-block-label": {
+      color: "var(--crit-ins)",
+      fontSize: "0.74em",
+      fontWeight: "700",
+      letterSpacing: "0.04em",
+      textTransform: "uppercase",
+    },
+    ".cm-crit-block-actions": {
+      display: "flex",
+      alignItems: "center",
+      gap: "0.3em",
+    },
+    ".cm-crit-block-action": {
+      appearance: "none",
+      border: "1px solid var(--line-strong)",
+      borderRadius: "5px",
+      backgroundColor: "var(--panel)",
+      padding: "0.2em 0.48em",
+      fontFamily: "inherit",
+      fontSize: "0.72em",
+      lineHeight: "1.3",
+      cursor: "pointer",
+    },
+    ".cm-crit-block-action:focus-visible": {
+      outline: "2px solid var(--accent)",
+      outlineOffset: "2px",
+    },
+    ".cm-crit-block-accept": {
+      color: "var(--crit-ins)",
+    },
+    ".cm-crit-block-reject": {
+      color: "var(--crit-del)",
+    },
+    ".cm-crit-block-raw": {
+      color: "var(--muted)",
+    },
+    ".cm-crit-block-action:hover": {
+      backgroundColor: "var(--line)",
+    },
+    ".cm-crit-block-content > :first-child": {
+      marginTop: "0",
+    },
+    ".cm-crit-block-content > :last-child": {
+      marginBottom: "0",
+    },
+    ".cm-crit-block-content h1, .cm-crit-block-content h2, .cm-crit-block-content h3, .cm-crit-block-content h4, .cm-crit-block-content h5, .cm-crit-block-content h6": {
+      margin: "0.35em 0 0.25em",
+      color: "var(--ink)",
+      fontFamily: "var(--editor-font)",
+      fontWeight: "700",
+      lineHeight: "1.25",
+    },
+    ".cm-crit-block-content h1": { fontSize: "1.55em" },
+    ".cm-crit-block-content h2": { fontSize: "1.35em" },
+    ".cm-crit-block-content h3": { fontSize: "1.18em" },
+    ".cm-crit-block-content p": {
+      margin: "0.3em 0",
+    },
+    ".cm-crit-block-content ul, .cm-crit-block-content ol": {
+      margin: "0.3em 0",
+      paddingLeft: "1.5em",
+    },
+    ".cm-crit-block-content ul": {
+      listStyleType: "disc",
+    },
+    ".cm-crit-block-content ol": {
+      listStyleType: "decimal",
+    },
+    ".cm-crit-block-content li > p": {
+      margin: "0.12em 0",
+    },
+    ".cm-crit-block-content a": {
+      color: "var(--accent)",
+      textDecoration: "underline",
+      textUnderlineOffset: "0.12em",
+    },
+    ".cm-crit-block-content code": {
+      borderRadius: "3px",
+      backgroundColor: "var(--panel)",
+      padding: "0.08em 0.25em",
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontSize: "0.9em",
     },
     ".cm-crit-del": {
       color: "var(--crit-del)",
@@ -395,14 +599,20 @@ export const acmTheme: Extension = EditorView.theme(
       ".cm-content": {
         padding: "1.25rem 1.1rem 5rem 1.1rem",
       },
-      // Fatten the touch targets a phone needs: the inline accept/reject pills
-      // (desktop 1.15em ≈ 19px is a hard tap) and the comment anchor dot (6px).
-      // Inline elements can't be 44px without breaking the text line, so this is a
-      // pragmatic bump, not the full HIG size — the whole highlighted span is also
-      // tappable (focusCommentAtPoint), so comments have a large target regardless.
+      ".cm-md-table": {
+        fontSize: "0.88em",
+      },
+      ".cm-md-table th, .cm-md-table td": {
+        padding: "0.3em 0.24em",
+      },
+    },
+    // Fatten inline review affordances through tablet widths. Inline controls
+    // cannot reach 44px without breaking prose, but the surrounding suggestion or
+    // highlighted span is also tappable, so this keeps the compact fallback usable.
+    "@media (max-width: 900px)": {
       ".cm-crit-accept, .cm-crit-reject": {
-        width: "1.65em",
-        height: "1.65em",
+        width: "1.65rem",
+        height: "1.65rem",
         fontSize: "0.85em",
       },
       ".cm-crit-comment-anchor": {
@@ -445,10 +655,12 @@ export const pageTheme: Extension = EditorView.theme({
   // shared props like padding over this one), so we DON'T re-declare it here — we
   // only strip the chrome that's unique to the sheet.
   "@media (max-width: 640px)": {
-    ".cm-scroller": { padding: "0.5rem 0 4rem" },
+    ".cm-scroller": {
+      padding: "0.5rem 0 4rem",
+      backgroundColor: "var(--panel)",
+    },
     ".cm-content": {
-      borderLeft: "none",
-      borderRight: "none",
+      border: "none",
       borderRadius: "0",
       boxShadow: "none",
     },

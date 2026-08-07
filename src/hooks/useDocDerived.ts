@@ -1,5 +1,5 @@
 // ── Derived document state (pure memos over the doc string) ───────────────────
-// Everything the sidebar/nav/pill read is derived here from `doc` (the React
+// Everything the review surfaces read is derived here from `doc` (the React
 // mirror of the editor buffer) in one place: tokens → threads/cards → the
 // inline-suggestion list and its gates → markup health. One hook so the
 // derivation chain is readable top-to-bottom and the Workspace stays wiring.

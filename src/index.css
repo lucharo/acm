@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* Shared palette — referenced by both the CodeMirror theme (editor/theme.ts,
-   via var(--…)) and the React chrome (sidebar/nav). One palette, no drift. */
+   via var(--…)) and the React chrome (review surfaces). One palette, no drift. */
 :root {
   color-scheme: light;
 
@@ -100,4 +100,257 @@ body {
   font-family: ui-sans-serif, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* The accepted-state print document is always current but never competes with
+   the live editor on screen. Browser print reveals only this safe surface. */
+#acm-print-document { display: none; }
+
+@page simple {
+  size: A4;
+  margin: 18mm 22mm 20mm;
+  @bottom-center {
+    content: counter(page);
+    color: #77756f;
+    font: 8.5pt ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
+@page tufte:left {
+  size: A4;
+  margin: 16mm 12mm 20mm 16mm;
+  @bottom-left {
+    content: counter(page);
+    color: #77756f;
+    font: 8.5pt ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
+@page tufte:right {
+  size: A4;
+  margin: 16mm 16mm 20mm 12mm;
+  @bottom-right {
+    content: counter(page);
+    color: #77756f;
+    font: 8.5pt ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
+@media print {
+  :root {
+    color-scheme: light;
+    --print-ink: #1b1a17;
+    --print-muted: #6f6b63;
+    --print-line: #d9d4ca;
+    --print-paper: #fff;
+  }
+
+  html, body, #root {
+    height: auto;
+    overflow: visible;
+    background: var(--print-paper) !important;
+    color: var(--print-ink) !important;
+  }
+
+  #root > .acm-workspace { display: contents !important; }
+  #root > .acm-workspace > :not(#acm-print-document) { display: none !important; }
+  #acm-print-document {
+    display: block !important;
+    width: auto;
+    min-height: 0;
+    background: var(--print-paper);
+    color: var(--print-ink);
+    font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+    font-size: 11pt;
+    line-height: 1.48;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .acm-print-root--simple,
+  .acm-print-root--blocked { page: simple; }
+  .acm-print-root--tufte { page: tufte; font-size: 10.5pt; }
+  .acm-print-article { width: 100%; }
+  .acm-print-article::after { content: ""; display: block; clear: both; }
+  .acm-print-row { margin: 0 0 0.8em; }
+  .acm-print-root--tufte .acm-print-row {
+    display: block;
+    width: calc(100% - 66mm);
+    margin-right: auto;
+    margin-left: auto;
+  }
+  .acm-print-main { min-width: 0; }
+  .acm-print-root--tufte .acm-print-main { width: 100%; }
+  .acm-print-rib {
+    width: 27mm;
+    margin-bottom: 0.7em;
+    color: var(--print-muted);
+    font: 8.4pt/1.36 ui-sans-serif, system-ui, sans-serif;
+  }
+  .acm-print-rib--left {
+    float: left;
+    clear: left;
+    margin-left: -33mm;
+    text-align: right;
+  }
+  .acm-print-rib--right {
+    float: right;
+    clear: right;
+    margin-right: -33mm;
+    text-align: left;
+  }
+  .acm-print-reference { break-inside: avoid; margin-bottom: 1.1em; }
+  .acm-print-reference-label {
+    margin-bottom: 0.25em;
+    color: var(--print-ink);
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .acm-print-reference--quote .acm-print-reference-body {
+    font-family: ui-serif, Georgia, serif;
+    font-style: italic;
+  }
+  .acm-print-reference-body > :first-child { margin-top: 0; }
+  .acm-print-reference-body > :last-child { margin-bottom: 0; }
+  .acm-print-footnote-ref {
+    padding-left: 0.08em;
+    font: 0.68em ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .acm-print-main > :first-child { margin-top: 0; }
+  .acm-print-main > :last-child { margin-bottom: 0; }
+  .acm-print-main p { margin: 0 0 0.72em; }
+  .acm-print-main h1,
+  .acm-print-main h2,
+  .acm-print-main h3,
+  .acm-print-main h4,
+  .acm-print-main h5,
+  .acm-print-main h6 {
+    break-after: avoid;
+    margin: 1.25em 0 0.45em;
+    color: var(--print-ink);
+    font-family: ui-serif, Georgia, serif;
+    line-height: 1.16;
+  }
+  .acm-print-main h1 {
+    margin-top: 0;
+    font-size: 25pt;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+  }
+  .acm-print-main h2 { font-size: 17pt; }
+  .acm-print-main h3 { font-size: 13pt; }
+  .acm-print-main ul,
+  .acm-print-main ol,
+  .acm-print-reference-body ul,
+  .acm-print-reference-body ol {
+    margin: 0.35em 0 0.85em;
+    padding-left: 1.5em;
+    list-style-position: outside;
+  }
+  .acm-print-main ul,
+  .acm-print-reference-body ul { list-style-type: disc; }
+  .acm-print-main ol,
+  .acm-print-reference-body ol { list-style-type: decimal; }
+  .acm-print-main li,
+  .acm-print-reference-body li { display: list-item; margin: 0.18em 0; }
+  .acm-print-main blockquote {
+    break-inside: avoid;
+    margin: 1.2em 1.8em;
+    padding-left: 1em;
+    border-left: 1.5px solid var(--print-line);
+    color: var(--print-muted);
+    font-style: italic;
+  }
+  .acm-print-main a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.12em;
+  }
+  .acm-print-main code,
+  .acm-print-reference code {
+    border-radius: 2px;
+    background: #f2f0eb;
+    padding: 0.08em 0.24em;
+    font: 0.86em ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .acm-print-main pre {
+    break-inside: avoid;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    margin: 1em 0;
+    border: 1px solid var(--print-line);
+    border-radius: 4px;
+    background: #f7f6f3;
+    padding: 0.75em 0.9em;
+  }
+  .acm-print-main pre code { background: transparent; padding: 0; }
+  .acm-print-main hr {
+    margin: 1.5em 0;
+    border: 0;
+    border-top: 1px solid var(--print-line);
+  }
+  .acm-print-main img {
+    display: block;
+    max-width: 100%;
+    max-height: 220mm;
+    margin: 1em auto;
+    object-fit: contain;
+  }
+  .acm-print-main table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    margin: 0.9em 0 1.2em;
+    break-inside: avoid;
+    font-size: 9.4pt;
+  }
+  .acm-print-main th,
+  .acm-print-main td {
+    border: 1px solid var(--print-line);
+    padding: 0.42em 0.55em;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+  .acm-print-main th {
+    background: #f4f2ed;
+    font-weight: 700;
+    text-align: left;
+  }
+  .acm-print-main [data-align="center"] { text-align: center; }
+  .acm-print-main [data-align="right"] { text-align: right; }
+  .acm-print-main .cm-rich-html-table ul,
+  .acm-print-main .cm-rich-html-table ol { margin: 0; }
+
+  .acm-print-endnotes {
+    break-before: auto;
+    margin-top: 2em;
+    padding-top: 0.8em;
+    border-top: 1px solid var(--print-line);
+  }
+  .acm-print-endnotes h2 { margin: 0 0 0.7em; font-size: 13pt; }
+  .acm-print-endnotes ol {
+    margin: 0;
+    padding-left: 1.6em;
+    list-style-position: outside;
+    list-style-type: decimal;
+  }
+  .acm-print-endnotes li {
+    display: list-item;
+    margin: 0.55em 0;
+    padding-left: 0.25em;
+  }
+  .acm-print-endnotes li > div > :first-child { margin-top: 0; }
+  .acm-print-endnotes li > div > :last-child { margin-bottom: 0; }
+
+  .acm-print-blocked {
+    max-width: 120mm;
+    margin: 35mm auto;
+    text-align: center;
+  }
+  .acm-print-blocked h1 { margin: 0 0 0.5em; font-size: 22pt; font-weight: 500; }
+  .acm-print-blocked p { margin: 0.4em 0; }
+  .acm-print-blocked-detail { color: var(--print-muted); font-size: 9.5pt; }
 }

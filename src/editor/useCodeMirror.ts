@@ -11,32 +11,36 @@
 // facet reconfigure so the click handlers always see the latest callbacks.
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EditorView } from "@codemirror/view";
+import { EditorView, placeholder } from "@codemirror/view";
 import { lineNumbers } from "@codemirror/view";
-import { Annotation, Compartment, EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, StateEffect } from "@codemirror/state";
+import type { Transaction } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
-import { history } from "@codemirror/commands";
+import { history, invertedEffects, isolateHistory } from "@codemirror/commands";
 import { keymap } from "@codemirror/view";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
 import { acmFormattingKeymap } from "./formatting";
+import { listIndentKeymap } from "./listIndent";
 import { CriticMarkup } from "./criticMarkupParser";
-import { criticMarkupExtension, critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
+import { critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
-import { markdownPreview } from "./markdownPreview";
+import { documentPreviewExtension } from "./previewMode";
 import { imageInsert } from "./imageInsert";
 import type { ToastFn } from "./imageInsert";
 import { footnotes } from "./footnotes";
 import { bionicReading } from "./bionicView";
 import { pageBreaks } from "./pageBreaks";
 import { spellcheck } from "./spellcheck";
+import { tableSlashKeymap } from "./tableInsert";
 import { acmTheme, pageTheme } from "./theme";
+import type { DecisionEvent, DecisionQueueUpdate } from "../lib/decision";
 
 export interface UseCodeMirrorOptions {
   initialDoc: string;
   callbacks: CritCallbacks;
-  onDocChanged: (content: string) => void;
+  onDocChanged: (content: string, decisionUpdate: DecisionQueueUpdate) => void;
   onUpdate?: (u: ViewUpdate) => void;
   /** Open/toggle the keyboard-shortcuts cheat sheet (bound to ⌘/ in the editor). */
   onShowShortcuts?: () => void;
@@ -47,19 +51,76 @@ export interface UseCodeMirrorOptions {
   bionic?: boolean;
   pageBreaks?: boolean;
   spellcheck?: boolean;
+  richPreview?: boolean;
 }
+
+type HighlightStateInput = { active: number | null; seen: number[]; busy: number[] };
 
 export interface UseCodeMirrorResult {
   containerRef: React.RefObject<HTMLDivElement | null>;
   viewRef: React.MutableRefObject<EditorView | null>;
   applyRemote: (content: string) => void;
   /** Tell the editor which comment-anchor highlights are active / seen / busy (by `from`). */
-  setHighlightState: (state: { active: number | null; seen: number[]; busy: number[] }) => void;
+  setHighlightState: (state: HighlightStateInput) => void;
 }
 
 /** Marks transactions that originate from a remote/agent edit, so the update
  *  listener can suppress the onDocChanged echo for them. */
 const remoteAnnotation = Annotation.define<boolean>();
+/** Review actions attach their canonical audit events to the same transaction as
+ * the document edit, so one update feeds both through the versioned save path. */
+export const decisionAnnotation = Annotation.define<DecisionEvent[]>();
+
+const decisionHistoryEffect = StateEffect.define<{
+  kind: "enqueue" | "cancel";
+  events: DecisionEvent[];
+}>();
+
+/** Keep one review action isolated in CodeMirror history and carry its audit
+ * identity through undo/redo without inventing a second decision event. */
+export function decisionAnnotations(events: DecisionEvent[]) {
+  return [decisionAnnotation.of(events), isolateHistory.of("full")];
+}
+
+/** CodeMirror history stores inverse effects. The original review transaction
+ * queues its event; undo cancels it if it is still pending; redo requeues it. */
+export const decisionHistoryExtension = invertedEffects.of((transaction) => {
+  const inverse = [];
+  const annotated = transaction.annotation(decisionAnnotation) ?? [];
+  if (annotated.length > 0) {
+    inverse.push(decisionHistoryEffect.of({ kind: "cancel", events: annotated }));
+  }
+  for (const effect of transaction.effects) {
+    if (!effect.is(decisionHistoryEffect)) continue;
+    inverse.push(
+      decisionHistoryEffect.of({
+        kind: effect.value.kind === "enqueue" ? "cancel" : "enqueue",
+        events: effect.value.events,
+      }),
+    );
+  }
+  return inverse;
+});
+
+export function decisionQueueUpdateFromTransactions(
+  transactions: readonly Transaction[],
+): DecisionQueueUpdate {
+  const update: DecisionQueueUpdate = { enqueue: [], cancel: [] };
+  for (const transaction of transactions) {
+    update.enqueue.push(...(transaction.annotation(decisionAnnotation) ?? []));
+    for (const effect of transaction.effects) {
+      if (!effect.is(decisionHistoryEffect)) continue;
+      update[effect.value.kind].push(...effect.value.events);
+    }
+  }
+  return update;
+}
+
+export function decisionEventsFromTransactions(
+  transactions: readonly Transaction[],
+): DecisionEvent[] {
+  return decisionQueueUpdateFromTransactions(transactions).enqueue;
+}
 
 /** Length of the shared leading run of two strings. */
 function commonPrefixLen(a: string, b: string): number {
@@ -85,6 +146,7 @@ function commonSuffixLen(a: string, b: string, prefixLen: number): number {
 export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const highlightStateRef = useRef<HighlightStateInput>({ active: null, seen: [], busy: [] });
 
   // Keep the latest options in a ref so the (once-created) view's listener and
   // callbacks always read current values without recreating the view.
@@ -104,6 +166,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   const pageBreaksCompartment = useRef(new Compartment());
   // Compartment for the optional spell-check underline (toggled from settings).
   const spellcheckCompartment = useRef(new Compartment());
+  // One global switch owns both Markdown and CriticMarkup presentation layers.
+  const previewCompartment = useRef(new Compartment());
 
   // Create the view exactly once.
   useEffect(() => {
@@ -117,7 +181,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         tr.annotation(remoteAnnotation),
       );
       if (!isRemote) {
-        optsRef.current.onDocChanged(update.state.doc.toString());
+        const decisionUpdate = decisionQueueUpdateFromTransactions(update.transactions);
+        optsRef.current.onDocChanged(update.state.doc.toString(), decisionUpdate);
       }
     });
 
@@ -125,11 +190,14 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
       doc: optsRef.current.initialDoc,
       extensions: [
         history(),
+        decisionHistoryExtension,
         // Formatting keymap goes FIRST so ⌘I overrides the default keymap's
         // selectParentSyntax (and ⌘B, which the default keymap leaves unbound).
         // ⌘/ opens the cheat sheet — bound here (ahead of defaults) so it overrides
         // CodeMirror's toggle-comment, which is meaningless in prose.
         keymap.of([
+          ...tableSlashKeymap,
+          ...listIndentKeymap,
           ...acmFormattingKeymap,
           {
             key: "Mod-/",
@@ -142,6 +210,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         ]),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
+        placeholder("Start writing…"),
         // NB: we deliberately do NOT use drawSelection(). It paints the selection on a
         // layer BEHIND the text, which the doc's pervasive yellow {==..==} highlight
         // backgrounds then hide — so selecting highlighted text looked like nothing
@@ -149,12 +218,13 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         // ON TOP of text + its background, so it's visible everywhere (styled via the
         // ::selection rule in theme.ts). We don't need multi-range/rectangular select.
         markdown({ base: markdownLanguage, extensions: [CriticMarkup] }),
-        markdownPreview,
+        previewCompartment.current.of(
+          documentPreviewExtension(optsRef.current.richPreview ?? true),
+        ),
         // Image drop/paste — reads the toast through optsRef so it always
         // reaches the app shell's freshest handler (same pattern as onUpdate).
         imageInsert((msg, kind) => optsRef.current.onToast?.(msg, kind)),
         footnotes,
-        criticMarkupExtension(),
         acmTheme,
         callbacksCompartment.current.of(
           critCallbacksFacet.of(optsRef.current.callbacks),
@@ -244,6 +314,22 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     });
   }, [opts.spellcheck]);
 
+  // Rich/raw is global and presentation-only: reconfigure the block/inline
+  // layers without recreating the editor or changing a byte of the document.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const enabled = opts.richPreview ?? true;
+    view.dispatch({
+      effects: previewCompartment.current.reconfigure(
+        documentPreviewExtension(enabled),
+      ),
+    });
+    if (enabled) {
+      view.dispatch({ effects: setCritHighlights.of(highlightStateRef.current) });
+    }
+  }, [opts.richPreview]);
+
   // Apply a full remote snapshot as a minimal ranged edit (prefix/suffix diff).
   // Stable identity (reads only the stable viewRef) so consumers' effects that
   // depend on the returned object don't tear down every render.
@@ -268,7 +354,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   }, []);
 
   const setHighlightState = useCallback(
-    (state: { active: number | null; seen: number[]; busy: number[] }) => {
+    (state: HighlightStateInput) => {
+      highlightStateRef.current = state;
       viewRef.current?.dispatch({ effects: setCritHighlights.of(state) });
     },
     [],

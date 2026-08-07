@@ -11,6 +11,7 @@
 
 import type { CritToken, CommentToken, CommentThread, SidebarCard } from "./types";
 import type { SuggestionToken } from "./types";
+import { markdownLiteralRanges, positionInRanges } from "./markdownLiteralRanges";
 
 // Re-export the public token types so agents/scripts can get everything from this
 // one module (the documented entry point in skills/acm-review/SKILL.md), not types.
@@ -39,13 +40,38 @@ const DELIMS = {
 
 const SUBSTITUTE_ARROW = "~>";
 
-// A construct must stay within one block (CriticMarkup is single-block) and must
-// not contain another construct's opening delimiter. Both guards keep scanTokens
-// in agreement with the editor's block-bounded lezer parser and prevent a stray /
-// half-typed open from swallowing a later construct (and the prose between it).
-// (Highlights are the exception — they are nesting-aware, see matchHighlightAt.)
-const BLANK_LINE = /\n[ \t]*\n/;
+// Constructs normally stay within one block and must not contain another
+// construct's opening delimiter. The deliberate exceptions are nesting-aware
+// highlights and whole-line insertion blocks, which may carry Markdown blocks.
+// These guards prevent a stray/half-typed open from swallowing later prose.
+const BLANK_LINE = /\r?\n[ \t]*\r?\n/;
 const NESTED_OPEN = /\{(\+\+|--|~~|==|>>)/;
+
+function standaloneInsertionRange(content: string, from: number, to: number): boolean {
+  if (from < 0 || to < from || to > content.length) return false;
+
+  const lineStart = content.lastIndexOf("\n", from - 1) + 1;
+  const lineEnd = content.indexOf("\n", to);
+  const after = lineEnd === -1 ? content.length : lineEnd;
+
+  return (
+    /^[ \t\r]*$/.test(content.slice(lineStart, from)) &&
+    /^[ \t\r]*$/.test(content.slice(to, after))
+  );
+}
+
+/** True when an insertion occupies a whole Markdown line/block in `content`.
+ * The token may contain newlines and blank lines; only the surrounding line
+ * prefixes/suffixes must be indentation whitespace. */
+export function isStandaloneInsertion(
+  content: string,
+  token: Pick<CritToken, "type" | "from" | "to">,
+): boolean {
+  if (token.type !== "insert") return false;
+  const raw = content.slice(token.from, token.to);
+  if (!raw.startsWith("{++") || !raw.endsWith("++}")) return false;
+  return standaloneInsertionRange(content, token.from, token.to);
+}
 
 /**
  * Scan `text` and return every CriticMarkup token with absolute offsets, in
@@ -54,6 +80,7 @@ const NESTED_OPEN = /\{(\+\+|--|~~|==|>>)/;
  *   • adjacent / stacked comments at the same or overlapping anchor (e.g.
  *     `{==x==}{>>@a: ..<<}{>>@b: ..<<}`) — each is its own token; ids stay unique
  *   • `@author:` prefixes inside comments (author + body split out)
+ *   • whole-line insertion blocks containing headings, lists, and blank lines
  *   • dangling / half-typed markup (`{++` with no close) → simply not matched
  *   • delimiter chars appearing in body text (non-greedy, bounded matching)
  * Tokens do not overlap, with ONE deliberate exception: a highlight anchor may
@@ -136,20 +163,25 @@ function matchConstructAt(text: string, from: number): ConstructMatch | null {
     if (closeAt === -1) continue; // dangling open: skip
 
     const inner = text.slice(innerStart, closeAt);
+    const candidateTo = closeAt + closeMarker.length;
 
     // No-swallow / single-block guards: a stray or half-typed open must not consume
     // a later construct or cross a paragraph break. If the body crosses a blank line
     // or contains another construct's opening delimiter, treat THIS open as
     // unbalanced and bail — scanTokens then advances one char and matches the inner
     // construct at its real position (rather than deleting prose on accept/resolve).
-    if (BLANK_LINE.test(inner)) continue;
+    if (
+      BLANK_LINE.test(inner) &&
+      !(type === "insert" && standaloneInsertionRange(text, from, candidateTo))
+    ) {
+      continue;
+    }
     if (NESTED_OPEN.test(inner)) continue;
     // A substitution requires the ~> arrow (matches the editor's lezer parser, which
     // rejects an arrowless {~~ ~~}). Keeps the two parsers in agreement.
     if (type === "substitute" && !inner.includes(SUBSTITUTE_ARROW)) continue;
 
-    const to = closeAt + closeMarker.length;
-    return { type, from, to, raw: text.slice(from, to), inner };
+    return { type, from, to: candidateTo, raw: text.slice(from, candidateTo), inner };
   }
   return null;
 }
@@ -239,17 +271,83 @@ function buildToken(id: string, m: ConstructMatch): CritToken {
  * author. That input is rare and harmless (display-only); supporting multi-word
  * authors for the common `@author: body` form is the more important behaviour.
  */
+const COMMENT_CODEC_PREFIX = "~acm1~";
+const COMMENT_AUTHOR_CODEC_PREFIX = "~acma1~";
+
+function serializeCommentAuthor(author: string): string {
+  const trimmed = author.trim();
+  if (!trimmed) return "";
+  if (
+    !trimmed.startsWith(COMMENT_AUTHOR_CODEC_PREFIX) &&
+    !/[:{}\r\n\u0000-\u001f\u007f]/.test(trimmed)
+  ) {
+    return trimmed;
+  }
+  return COMMENT_AUTHOR_CODEC_PREFIX + encodeURIComponent(trimmed);
+}
+
+function decodeCommentAuthor(author: string): string {
+  if (!author.startsWith(COMMENT_AUTHOR_CODEC_PREFIX)) return author;
+  try {
+    const decoded = decodeURIComponent(author.slice(COMMENT_AUTHOR_CODEC_PREFIX.length));
+    return serializeCommentAuthor(decoded) === author ? decoded : author;
+  } catch {
+    return author;
+  }
+}
+
+/** Decode the one-line storage form used for comment bodies that cannot safely
+ * live literally inside CriticMarkup. Unknown escapes stay byte-faithful so a
+ * future codec extension cannot silently discard existing content. */
+function decodeCommentBody(text: string): string | null {
+  if (!text.startsWith(COMMENT_CODEC_PREFIX)) return null;
+
+  let decoded = "";
+  for (let i = COMMENT_CODEC_PREFIX.length; i < text.length; i++) {
+    if (text[i] !== "\\") {
+      decoded += text[i];
+      continue;
+    }
+    if (text.startsWith("\\u007b", i)) {
+      decoded += "{";
+      i += 5;
+    } else if (text.startsWith("\\u007d", i)) {
+      decoded += "}";
+      i += 5;
+    } else if (text[i + 1] === "n") {
+      decoded += "\n";
+      i += 1;
+    } else if (text[i + 1] === "r") {
+      decoded += "\r";
+      i += 1;
+    } else if (text[i + 1] === "\\") {
+      decoded += "\\";
+      i += 1;
+    } else {
+      decoded += "\\";
+    }
+  }
+  // A literal legacy body may coincidentally start with the prefix. Only accept
+  // the payload when decoding and re-encoding reproduces the exact stored form.
+  return serializeCommentBody(decoded) === text ? decoded : null;
+}
+
 function parseCommentInner(inner: string): { author: string | null; body: string } {
   const trimmed = inner.trimStart();
   if (trimmed.startsWith("@")) {
     const colonAt = trimmed.indexOf(":");
     if (colonAt !== -1) {
-      const author = trimmed.slice(1, colonAt).trim();
-      const body = restoreCloseMarker(trimmed.slice(colonAt + 1).trim());
+      const author = decodeCommentAuthor(trimmed.slice(1, colonAt).trim());
+      const remainder = trimmed.slice(colonAt + 1);
+      const stored = remainder.startsWith(" ") ? remainder.slice(1) : remainder;
+      const body = decodeCommentBody(stored) ?? restoreCloseMarker(remainder.trim());
       return { author, body };
     }
   }
-  return { author: null, body: restoreCloseMarker(inner.trim()) };
+  return {
+    author: null,
+    body: decodeCommentBody(inner) ?? restoreCloseMarker(inner.trim()),
+  };
 }
 
 /** Undo neutralizeCloseMarker so the displayed/derived body is byte-faithful. */
@@ -262,14 +360,56 @@ function restoreCloseMarker(text: string): string {
  * server endpoint and the in-UI "add comment" action so both write identically.
  *   formatComment("claude", "looks good") -> "{>>@claude: looks good<<}"
  *   formatComment("",       "looks good") -> "{>>looks good<<}"
- * Any `<<}` occurring inside `text` must be neutralised so it can't break the
- * marker.
+ * Bodies that could cross a Markdown paragraph or resemble delimiters use the
+ * canonical one-line codec; ordinary comments retain their historical bytes.
  */
 export function formatComment(author: string, text: string): string {
-  const safe = neutralizeCloseMarker(text);
-  const trimmedAuthor = author.trim();
-  const body = trimmedAuthor ? `@${trimmedAuthor}: ${safe}` : safe;
+  const safe = serializeCommentBody(text);
+  const safeAuthor = serializeCommentAuthor(author);
+  const body = safeAuthor ? `@${safeAuthor}: ${safe}` : safe;
   return `{>>${body}<<}`;
+}
+
+/** Canonicalise one complete raw comment marker supplied by an agent batch.
+ * Non-comment inserts stay byte-identical. The body is decoded without trimming
+ * so literal line breaks and boundary whitespace are never silently discarded. */
+export function canonicalizeCommentMarker(marker: string): string {
+  if (!marker.startsWith("{>>") || !marker.endsWith("<<}")) return marker;
+  const inner = marker.slice(3, -3);
+  const trimmed = inner.trimStart();
+  if (trimmed.startsWith("@")) {
+    const colonAt = trimmed.indexOf(":");
+    if (colonAt !== -1) {
+      const author = decodeCommentAuthor(trimmed.slice(1, colonAt).trim());
+      const remainder = trimmed.slice(colonAt + 1);
+      const stored = remainder.startsWith(" ") ? remainder.slice(1) : remainder;
+      return formatComment(author, decodeCommentBody(stored) ?? restoreCloseMarker(stored));
+    }
+  }
+  return formatComment("", decodeCommentBody(inner) ?? restoreCloseMarker(inner));
+}
+
+/** Store risky comment bodies on one physical line so Markdown paragraph breaks,
+ * nested-looking delimiters, and boundary whitespace survive exactly. Simple
+ * one-line comments retain their historical byte representation. */
+function serializeCommentBody(text: string): string {
+  const needsCodec =
+    text.startsWith(COMMENT_CODEC_PREFIX) ||
+    text.trimStart() !== text ||
+    text.trimEnd() !== text ||
+    /[\\\r\n{}]/.test(text);
+  if (!needsCodec) return neutralizeCloseMarker(text);
+
+  let encoded = COMMENT_CODEC_PREFIX;
+  for (const char of text) {
+    if (char === "\\") encoded += "\\\\";
+    else if (char === "\r") encoded += "\\r";
+    else if (char === "\n") encoded += "\\n";
+    else if (char === "{") encoded += "\\u007b";
+    else if (char === "}") encoded += "\\u007d";
+    else encoded += char;
+  }
+  return encoded;
 }
 
 /** Break any literal close-marker sequence so body text can't terminate early. */
@@ -351,6 +491,35 @@ function findHighlightClose(text: string, openPos: number): number {
 // — a relocated `{==` must land AFTER it so the block still parses as markdown.
 const BLOCK_LINE_PREFIX = /^(?:\s*>\s?)*(?:\s*(?:[-*+]|\d{1,3}[.)])\s+)?(?:#{1,6}\s+)?/;
 
+/** ONE balanced legacy comment whose literal blank line made it invalid Markdown,
+ * rewritten through the canonical one-line codec. Ambiguous nested comments and
+ * truly dangling markers remain untouched for the validator to report. */
+function healOneMultilineComment(content: string): string | null {
+  for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    const scanned = scanComment(content, i);
+    if (!scanned || scanned.nested || matchConstructAt(content, i)) continue;
+
+    const inner = content.slice(i + 3, scanned.end - 3);
+    if (!BLANK_LINE.test(inner)) continue;
+
+    const trimmed = inner.trimStart();
+    let author = "";
+    let body = inner;
+    if (trimmed.startsWith("@")) {
+      const colonAt = trimmed.indexOf(":");
+      if (colonAt !== -1) {
+        author = decodeCommentAuthor(trimmed.slice(1, colonAt).trim());
+        const remainder = trimmed.slice(colonAt + 1);
+        body = remainder.startsWith(" ") ? remainder.slice(1) : remainder;
+      }
+    }
+
+    const healed = formatComment(author, restoreCloseMarker(body));
+    return content.slice(0, i) + healed + content.slice(scanned.end);
+  }
+  return null;
+}
+
 /** ONE multi-block-anchor repair, or null when none is needed. */
 function healOneMultiBlockAnchor(content: string): string | null {
   for (let i = content.indexOf("{=="); i >= 0; i = content.indexOf("{==", i + 3)) {
@@ -416,7 +585,10 @@ function healOneCommentInWrapper(content: string): string | null {
 export function healDocument(content: string): string {
   let out = healNestedComments(content);
   for (let guard = 0; guard < 500; guard++) {
-    const next = healOneCommentInWrapper(out) ?? healOneMultiBlockAnchor(out);
+    const next =
+      healOneMultilineComment(out) ??
+      healOneCommentInWrapper(out) ??
+      healOneMultiBlockAnchor(out);
     if (next === null) break;
     out = next;
   }
@@ -515,6 +687,10 @@ export interface MarkupDiagnostic {
   kind: "dangling-open" | "stray-close" | "nested-comment" | "unparsed";
   message: string;
 }
+
+export type AcceptedMarkdownResult =
+  | { ok: true; markdown: string }
+  | { ok: false; diagnostics: MarkupDiagnostic[] };
 
 const SIMPLE_CLOSE: Record<string, string> = { "{++": "++}", "{--": "--}", "{~~": "~~}" };
 const STRAY_CLOSES = ["++}", "--}", "~~}", "<<}"];
@@ -642,6 +818,57 @@ export function validateMarkup(text: string): MarkupDiagnostic[] {
   flushHlStack(); // anything still open at EOF leaks
   out.sort((a, b) => a.from - b.from);
   return out;
+}
+
+/** Produce the document's accepted Markdown without mutating the source. This is
+ * the canonical projection for print/export: insertions and replacement text are
+ * kept, deletions/comments are removed, and highlights keep their inner prose.
+ * Malformed CriticMarkup is refused rather than leaking review delimiters into a
+ * published artifact. */
+export function acceptedMarkdown(text: string): AcceptedMarkdownResult {
+  const literalRanges = markdownLiteralRanges(text);
+  const diagnostics = validateMarkup(text).filter(
+    (diagnostic) => !positionInRanges(diagnostic.from, literalRanges),
+  );
+  if (diagnostics.length > 0) return { ok: false, diagnostics };
+
+  const acceptRange = (source: string): string => {
+    const protectedRanges = markdownLiteralRanges(source);
+    const tokens = [...scanTokens(source)]
+      .filter((token) => !positionInRanges(token.from, protectedRanges))
+      .sort(
+        (a, b) => a.from - b.from || b.to - a.to,
+      );
+    let cursor = 0;
+    let accepted = "";
+
+    for (const token of tokens) {
+      // scanTokens deliberately emits tracked changes contained by a highlight.
+      // Once the outer token has been handled recursively, skip those duplicate
+      // absolute ranges at this level.
+      if (token.from < cursor) continue;
+      accepted += source.slice(cursor, token.from);
+      switch (token.type) {
+        case "insert":
+          accepted += acceptRange(token.inner);
+          break;
+        case "delete":
+        case "comment":
+          break;
+        case "substitute":
+          accepted += acceptRange(token.newText);
+          break;
+        case "highlight":
+          accepted += acceptRange(token.inner);
+          break;
+      }
+      cursor = token.to;
+    }
+
+    return accepted + source.slice(cursor);
+  };
+
+  return { ok: true, markdown: acceptRange(text) };
 }
 
 /**
@@ -999,8 +1226,9 @@ export function nestedCommentDetail(content: string, from: number): NestedCommen
  *  survives the positional-id shifts that edits cause. NUL separator (written as
  *  an escape, not a raw byte: a raw NUL makes every tool treat this file as
  *  binary): un-typeable, so "a b"+"c" can never collide with "a"+"b c". The escape
- *  keeps the exact runtime string — stored seen-keys (localStorage + ~/.config/acm)
- *  stay valid. Shared by the GUI (useSeenState) and the CLI (`acm threads`). */
+ *  keeps the exact runtime string — stored per-document seen-keys (localStorage +
+ *  ~/.config/acm) stay valid. Shared by the GUI (useSeenState) and the CLI
+ *  (`acm threads`). */
 export function commentKey(c: { author: string | null; body: string }): string {
   return `${c.author ?? ""}\u0000${c.body}`;
 }
@@ -1050,7 +1278,15 @@ export function groupCards(tokens: CritToken[], text: string): SidebarCard[] {
       claimed.add(n.id);
       cursorTo = n.to;
     }
-    cards.push({ kind: "suggestion", id: t.id, from: t.from, to: cursorTo, suggestion: t as SuggestionToken, comments: replies });
+    cards.push({
+      kind: "suggestion",
+      id: t.id,
+      from: t.from,
+      to: cursorTo,
+      suggestion: t as SuggestionToken,
+      standalone: t.type === "insert" && isStandaloneInsertion(text, t),
+      comments: replies,
+    });
   }
 
   const freeComments = inOrder.filter((t): t is CommentToken => t.type === "comment" && !claimed.has(t.id));
@@ -1172,7 +1408,8 @@ export function threadAnchorHighlightFor(
  * source of truth for both, root or mid-thread reply. Rebuilds the whole anchor run
  * [anchorStart, thread.to):
  *   • span  ← the replacement (accept) or the original span (reject);
- *   • every OTHER comment in the thread is kept verbatim (discussion survives);
+ *   • by default every OTHER comment is kept verbatim (discussion survives);
+ *   • `resolve-thread` removes the complete discussion in that same ranged edit;
  *   • if no comments remain, the `{==…==}` wrapper collapses to plain prose.
  * So a sole-comment (root) suggestion collapses to clean prose exactly as before,
  * while accepting/rejecting a reply leaves the conversation intact on the (now
@@ -1180,10 +1417,13 @@ export function threadAnchorHighlightFor(
  * wrapper and keeps the remaining comments as point comments (no empty `{====}`).
  * Returns null when `comment` isn't an anchored suggestion.
  */
+export type SuggestionDiscussion = "keep-discussion" | "resolve-thread";
+
 export function suggestionThreadEdit(
   content: string,
   comment: CommentToken,
   mode: "accept" | "reject",
+  discussion: SuggestionDiscussion = "keep-discussion",
 ): { from: number; to: number; insert: string } | null {
   const repl = suggestionReplacement(comment.body);
   if (repl === null) return null;
@@ -1198,6 +1438,9 @@ export function suggestionThreadEdit(
   if (!thread) return null;
 
   const newSpan = mode === "accept" ? repl : hl.inner;
+  if (discussion === "resolve-thread") {
+    return { from: suggestionAnchorStart(content, hl), to: thread.to, insert: newSpan };
+  }
   const remaining = thread.comments.filter((c) => c.from !== comment.from);
   const keptMarkup = remaining.map((c) => c.raw).join("");
   const insert =
@@ -1300,14 +1543,15 @@ export function suggestCards(content: string, tokens?: CritToken[]): SuggestCard
 
 /**
  * The accept/reject edits for every member of group `groupId`. Members whose
- * anchor can't resolve, or whose edit would overlap an earlier member's (two
- * suggestions on ONE thread — contradictory to apply together; the first wins),
- * are counted in `skipped` rather than silently dropped.
+ * anchor can't resolve are counted in `skipped`. Ordinary Apply keeps the first
+ * of overlapping edits; Apply & resolve preserves every conflicting thread,
+ * because resolving one would otherwise silently erase its competing proposal.
  */
 export function suggestionGroupEdits(
   content: string,
   groupId: string,
   mode: "accept" | "reject",
+  discussion: SuggestionDiscussion = "keep-discussion",
 ): { edits: { from: number; to: number; insert: string }[]; skipped: number } {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
@@ -1316,11 +1560,26 @@ export function suggestionGroupEdits(
   let skipped = 0;
   for (const m of members) {
     const c = comments.find((t) => t.from === m.commentFrom);
-    const e = c ? suggestionThreadEdit(content, c, mode) : null;
+    const e = c ? suggestionThreadEdit(content, c, mode, discussion) : null;
     if (e) edits.push(e);
     else skipped += 1;
   }
   edits.sort((a, b) => a.from - b.from);
+  if (discussion === "resolve-thread") {
+    // A resolve-range consumes its complete thread. If two group members share
+    // that thread, keeping the first edit would silently remove the competing
+    // proposal without applying or auditing it. Preserve the whole conflicting
+    // thread instead; non-overlapping members in the group can still proceed.
+    const conflicting = new Set<number>();
+    for (let i = 0; i < edits.length; i += 1) {
+      for (let j = i + 1; j < edits.length && edits[j].from < edits[i].to; j += 1) {
+        conflicting.add(i);
+        conflicting.add(j);
+      }
+    }
+    skipped += conflicting.size;
+    return { edits: edits.filter((_, index) => !conflicting.has(index)), skipped };
+  }
   const clean: typeof edits = [];
   for (const e of edits) {
     const prev = clean[clean.length - 1];

@@ -30,6 +30,7 @@ export function shortcutGroups(): ShortcutGroup[] {
       items: [
         { keys: `${MOD}B`, label: "Bold" },
         { keys: `${MOD}I`, label: "Italic" },
+        { keys: "/table ↵", label: "Insert table" },
       ],
     },
     {
@@ -39,6 +40,7 @@ export function shortcutGroups(): ShortcutGroup[] {
         { keys: `${MOD},`, label: "Settings" },
         { keys: `${MOD}/`, label: "Show this cheat sheet" },
         { keys: `${MOD}S`, label: "Save now" },
+        { keys: `${MOD}P`, label: "Print / save as PDF" },
         { keys: `${MOD}A`, label: "Select all" },
         { keys: `${MOD}Z`, label: "Undo" },
         { keys: `${MOD}${SHIFT}Z`, label: "Redo" },

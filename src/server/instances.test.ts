@@ -1,44 +1,65 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-// Point the config home at a throwaway dir BEFORE importing the module under test
-// (configHome() reads the env per call, so ordering is belt-and-braces).
 const tmp = mkdtempSync(join(tmpdir(), "acm-instances-"));
-const prevXdg = process.env.XDG_CONFIG_HOME;
-beforeAll(() => {
-  process.env.XDG_CONFIG_HOME = tmp;
-});
 afterAll(() => {
-  if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-  else process.env.XDG_CONFIG_HOME = prevXdg;
   rmSync(tmp, { recursive: true, force: true });
 });
 
-import { registerInstance, liveInstances, probeInstanceState, isConnectionRefused } from "./instances";
+import { probeInstanceState, isConnectionRefused } from "./instances";
 import type { InstanceEntry } from "./instances";
 
 describe("instance registry", () => {
-  test("register + resolve; dead pids are filtered and pruned", async () => {
-    await registerInstance(12000, "/tmp/live-doc.md");
-    // Plant a convincing-but-dead entry alongside (pid that can't exist).
-    const file = join(tmp, "acm", "instances.json");
-    mkdirSync(join(tmp, "acm"), { recursive: true });
-    const current = await Bun.file(file).json();
-    current["12345"] = { port: 12345, doc: "/tmp/dead-doc.md", pid: 999999999, startedAt: "2026-01-01" };
-    writeFileSync(file, JSON.stringify(current));
+  test("register + resolve; dead pids are filtered and pruned", () => {
+    // Config paths are process-global. Run the complete lifecycle in one child so
+    // concurrently loaded server tests cannot redirect this registry mid-write.
+    const instancesModule = new URL("./instances.ts", import.meta.url).href;
+    const script = `
+      import { join } from "node:path";
+      import { registerInstance, liveInstances } from ${JSON.stringify(instancesModule)};
 
-    const live = await liveInstances();
-    expect(live).toHaveLength(1);
-    expect(live[0].port).toBe(12000);
-    expect(live[0].doc).toBe("/tmp/live-doc.md");
-    expect(live[0].pid).toBe(process.pid);
+      const root = process.env.XDG_CONFIG_HOME;
+      if (!root) throw new Error("missing XDG_CONFIG_HOME");
 
-    // Registering again prunes the dead entry from the file itself.
-    await registerInstance(12001, "/tmp/second.md");
-    const after = await Bun.file(file).json();
-    expect(Object.keys(after).sort()).toEqual(["12000", "12001"]);
+      await registerInstance(12000, "/tmp/live-doc.md");
+      const file = join(root, "acm", "instances.json");
+      const current = await Bun.file(file).json();
+      current["12345"] = {
+        port: 12345,
+        doc: "/tmp/dead-doc.md",
+        pid: 999999999,
+        startedAt: "2026-01-01",
+      };
+      await Bun.write(file, JSON.stringify(current));
+
+      const live = await liveInstances();
+      await registerInstance(12001, "/tmp/second.md");
+      const after = await Bun.file(file).json();
+      console.log(JSON.stringify({
+        live: live.map((entry) => ({
+          port: entry.port,
+          doc: entry.doc,
+          pidMatches: entry.pid === process.pid,
+        })),
+        keys: Object.keys(after).sort(),
+      }));
+    `;
+
+    const proc = Bun.spawnSync([process.execPath, "--eval", script], {
+      env: { ...process.env, XDG_CONFIG_HOME: tmp },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 15_000,
+    });
+
+    expect(proc.exitCode).toBe(0);
+    expect(proc.stderr.toString()).toBe("");
+    expect(JSON.parse(proc.stdout.toString())).toEqual({
+      live: [{ port: 12000, doc: "/tmp/live-doc.md", pidMatches: true }],
+      keys: ["12000", "12001"],
+    });
   });
 });
 

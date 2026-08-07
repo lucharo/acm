@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { UserConfig } from "vite";
 import { startServer, type AcmServer } from "../../server";
 import viteConfigDefinition from "../../vite.config";
+import { scanTokens } from "../lib/criticmarkup";
+import type { CommentToken } from "../lib/types";
 
 const live: AcmServer[] = [];
 let previousConfigHome: string | undefined;
@@ -44,11 +46,88 @@ describe("local server request boundary", () => {
         Origin: "http://localhost:12173",
         "Content-Type": "text/plain",
       },
-      body: JSON.stringify({ anchor: 0, text: "proxied write", author: "editor" }),
+      body: JSON.stringify({
+        anchor: 0,
+        text: "proxied write",
+        author: "editor",
+        documentPath: docPath,
+      }),
     });
 
     expect(response.status).toBe(200);
     expect(await Bun.file(docPath).text()).toBe("{>>@editor: proxied write<<}Original.\n");
+  });
+
+  test("the comment API serializes pasted blank lines and reloads the exact body", async () => {
+    const docPath = join(mkdtempSync(join(tmpdir(), "acm-security-doc-")), "doc.md");
+    await Bun.write(docPath, "Original.\n");
+    const acm = startServer({ docPath, port: 0, staticDir: "./dist" });
+    live.push(acm);
+    const body = "first line\n\nsecond line";
+
+    const response = await fetch(`http://127.0.0.1:${acm.server.port}/api/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ anchor: 0, text: body, author: "editor", documentPath: docPath }),
+    });
+
+    expect(response.status).toBe(200);
+    const reloaded = await Bun.file(docPath).text();
+    expect(reloaded).toBe("{>>@editor: ~acm1~first line\\n\\nsecond line<<}Original.\n");
+    expect(
+      scanTokens(reloaded).filter((token): token is CommentToken => token.type === "comment"),
+    ).toEqual([expect.objectContaining({ author: "editor", body })]);
+  });
+
+  test("the comment API rejects a missing document identity before writing", async () => {
+    const docPath = join(mkdtempSync(join(tmpdir(), "acm-security-doc-")), "doc.md");
+    await Bun.write(docPath, "Original.\n");
+    const acm = startServer({ docPath, port: 0, staticDir: "./dist" });
+    live.push(acm);
+
+    const response = await fetch(`http://127.0.0.1:${acm.server.port}/api/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ anchor: 0, text: "unbound write", author: "editor" }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      audit: {
+        status: "failed",
+        code: "document-mismatch",
+        retryable: false,
+      },
+    });
+    expect(await Bun.file(docPath).text()).toBe("Original.\n");
+  });
+
+  test("the comment API rejects another document identity before writing", async () => {
+    const docPath = join(mkdtempSync(join(tmpdir(), "acm-security-doc-")), "doc.md");
+    await Bun.write(docPath, "Original.\n");
+    const acm = startServer({ docPath, port: 0, staticDir: "./dist" });
+    live.push(acm);
+
+    const response = await fetch(`http://127.0.0.1:${acm.server.port}/api/comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        anchor: 0,
+        text: "wrong document",
+        author: "editor",
+        documentPath: `${docPath}.other`,
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      audit: {
+        status: "failed",
+        code: "document-mismatch",
+        retryable: false,
+      },
+    });
+    expect(await Bun.file(docPath).text()).toBe("Original.\n");
   });
 
   test("a cross-origin request with a non-loopback Host cannot modify the document", async () => {

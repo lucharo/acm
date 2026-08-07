@@ -1,7 +1,7 @@
 // Dev orchestrator: runs the Bun API/WS server + the Vite dev server together.
 //
 // Port convention: 12000 is RESERVED for the PRODUCTION instance (`just prod` /
-// `acm <file>` — the one actually editing your doc). Development must never squat
+// `acm edit <file>` — the one actually editing your doc). Development must never squat
 // on it, so we pick a RANDOM Vite port in 12000+[1,500) each run and put the API
 // on a free port well above that. Open the printed URL — it has live source + HMR
 // and proxies /api + /ws to the Bun server. (Edits still reach the browser over the

@@ -180,9 +180,7 @@ function parseComments(xml?: string): Map<string, ImportedComment> {
   for (const comment of wordElements(doc, "comment")) {
     const body = wordElements(comment, "p")
       .map(textWithin)
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+      .join("\n\n");
     comments.set(wordAttribute(comment, "id"), {
       author: wordAttribute(comment, "author"),
       body,

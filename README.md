@@ -33,19 +33,24 @@ If the managed skill was edited locally, setup stops before making changes.
 Then use ACM from anywhere:
 
 ```bash
-acm path/to/doc.md         # open the editor on that file (creates it if missing)
-acm                        # open a new untitled doc
-acm --help                 # options: --port <n>, --no-open
+acm                        # explain ACM and list the main commands
+acm edit                   # New / Open / Recent Documents launcher
+acm edit path/to/doc.md    # open that file, creating it if missing
+acm --help                 # every command and option
 ```
 
-The doc is chosen **explicitly** by the argument — no env indirection that can
-silently point two sessions at different copies.
+The launcher creates nothing until you confirm a Markdown filename. Each editor
+process/window still owns exactly one document; the lightweight launcher adds
+New, Open and Recent Documents without turning ACM into a workspace or file
+browser. Editor settings are global and apply to every ACM document. Concurrent
+preference changes across tabs are whole-settings last-writer-wins; document text
+and decision history are unaffected.
 
 **Standalone binary** (à la `bun` — a single executable, no Bun needed to run it):
 
 ```bash
 bun run build:bin          # → dist/acm  (one ~56MB executable, SPA embedded)
-./dist/acm path/to/doc.md
+./dist/acm edit path/to/doc.md
 ```
 
 **Import from Google Docs** — a link-accessible Google Doc can be fetched as a
@@ -94,11 +99,63 @@ Comments support an author prefix: `{>>@claude: needs a citation<<}` → the bub
 
 ## How it works for the human
 
-- **Suggestion mode** — every insertion/deletion/substitution has inline ✓ (accept) / ✗ (reject) controls. Accept applies the change and strips the markup *in the file*; reject reverts and strips. The nav panel offers the same controls per item.
+- **Suggestion mode** — every insertion/deletion/substitution has inline ✓ (accept) / ✗ (reject) controls. Accept applies the change and strips the markup *in the file*; reject reverts and strips.
 - **Comments** — each `{>>…<<}` is a margin bubble connected to its anchor. **Resolve** removes it. **Add a comment** by selecting text and clicking *Add comment*.
-- **Navigation** — the left panel lists every suggestion/comment with counts and filters (all / comments / suggestions / unresolved); click to jump.
+- **Navigation** — the top-left table-of-contents button jumps between headings. Review cards stay beside the prose on desktop and in a bottom sheet on narrow screens.
 - **Keyboard** — `Alt+↓`/`Alt+J` next · `Alt+↑`/`Alt+K` prev · `Alt+Y` accept · `Alt+N` reject (the active item).
 - **Live** — when an agent rewrites the file on disk, the UI updates within ~1s without losing your scroll position.
+
+## FAQ
+
+### What do the header icons do?
+
+The left side holds document controls: table of contents, then rich/raw Markdown.
+The right side holds review controls: comments, then settings. Tooltips and
+accessible labels name every icon. The old overview panel, filter strip and
+aggregate suggestion count were removed: use the inline/edge decision controls,
+the open-comment pill and `Alt+↓`/`Alt+↑` review navigation instead.
+
+### Can I edit a rendered table without switching the whole document to source?
+
+Yes. Click a rich table cell to edit it in place; press Tab or Shift-Tab to move
+between cells. Modified-click follows a link instead of editing it. Type `/table`
+on an otherwise empty line and press Enter to insert a two-column starter table.
+The global code/eye control remains the deliberate escape to raw Markdown, where
+the command palette can also align the table source.
+
+### Why can a tracked addition appear in the page and in the comments edge?
+
+The page is the proposed content in context. The compact card beside it is only
+the decision surface for accepting or rejecting it; it does not repeat the rich
+content. On narrow screens that decision surface moves into the comments sheet.
+
+### Does ACM render HTML from Markdown?
+
+It renders a conservative, sanitised subset of standard HTML, including tables,
+lists, links and inline formatting. That supports a two-column bullet layout with
+a standard HTML table. Scripts, event handlers, unsafe URLs, styles and custom
+elements such as `<columns>` are removed or left inspectable as source.
+
+### How does the comments edge behave?
+
+With automatic visibility, a clean document reserves no rail and stays centred.
+The first visible comment opens the edge; resolving or filtering the last visible
+comment recentres the page. The comments button can explicitly show or hide it.
+
+### What changes on mobile?
+
+The same editor and decisions remain available. Header controls stay touch-sized,
+the comments edge becomes a bottom sheet, selection actions stay close to the
+selected text, and the document uses the available width instead of reserving a
+desktop rail.
+
+### How was the product demo made?
+
+The Playwright Recast capture was tried first and recorded the real interaction,
+but its timing was too abrupt for a clear product story. The final film uses
+retina captures from the genuine compiled app, composed with HyperFrames into
+slower camera moves, held before/action/after states and larger local captions.
+No product UI is mocked.
 
 ## How it works for an agent
 
@@ -114,9 +171,11 @@ An agent has two equally first-class ways to participate — both end as plain t
    ```bash
    curl -X POST localhost:12001/api/comment \
      -H 'content-type: application/json' \
-     -d '{"anchor": 1280, "text": "tighten this", "author": "claude"}'
+     -d '{"documentPath":"/absolute/path/to/sample-essay.md","anchor":1280,"text":"tighten this","author":"claude"}'
    ```
-   `anchor` is a character offset; ACM inserts `{>>@claude: tighten this<<}` there using the same grammar the UI uses.
+   Copy `documentPath` from the exact `path` returned by `GET /api/doc`; ACM rejects
+   missing or mismatched document identities before writing. `anchor` is a character
+   offset, and the comment uses the same grammar as the UI.
 
 ## Architecture
 
@@ -124,11 +183,13 @@ An agent has two equally first-class ways to participate — both end as plain t
 server.ts            Bun.serve — GET/PUT /api/doc, POST /api/comment, WebSocket /ws,
                      a directory watcher + a single content-hash gate (lastKnownHash)
                      that prevents the write→watch→broadcast→clobber feedback loop.
+src/server/launcher.ts
+                     New/Open/Recent handoff into one explicit document server.
 src/lib/             criticmarkup.ts — the one grammar (scan + format + accept/reject),
                      shared by the editor, the sidebar, and the server. types.ts.
 src/editor/          CodeMirror 6: a @lezer/markdown CriticMarkup parser, decoration +
                      widget layers, Markdown live-preview, and a thin uncontrolled hook.
-src/components/      CommentSidebar (coordsAtPos anchoring, connectors) + NavPanel.
+src/components/      CommentSidebar (coordsAtPos anchoring, connectors) + Toc.
 src/client/          useDocSync — WebSocket pushes + debounced, version-checked saves.
 src/App.tsx          Integration: the buffer is ground truth; local edits debounce-save,
                      remote edits rebase via a scroll-preserving ranged diff.
@@ -138,4 +199,4 @@ src/App.tsx          Integration: the buffer is ground truth; local edits deboun
 
 ## Non-goals
 
-One doc per window. No workspace or project management (a picker for opening a doc is fine; doc collections are not). No accounts or access levels — sharing, if it ever lands, is your own tunnel exposing your local instance (ADR-0006). No cloud and no multiplayer cursors. Import is a one-shot conversion into the local `.md`; ACM does not retain a Google connection or synchronize changes.
+One doc per window. No workspace, always-visible file browser or multi-document editor process. No accounts or access levels — sharing, if it ever lands, is your own tunnel exposing your local instance (ADR-0006). No cloud and no multiplayer cursors. Import is a one-shot conversion into the local `.md`; ACM does not retain a Google connection or synchronize changes.

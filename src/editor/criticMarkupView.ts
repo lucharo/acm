@@ -30,9 +30,11 @@ import {
 } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Facet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
-import type { Extension, Range, RangeSet } from "@codemirror/state";
+import type { EditorState, Extension, Range, RangeSet } from "@codemirror/state";
 import { suggestCards } from "../lib/criticmarkup";
 import type { SuggestCard } from "../lib/criticmarkup";
+import { appendRichBlocks } from "./richMarkdown";
+import { standaloneInsertionTokens } from "./standaloneInsertion";
 
 // ── Active / seen highlight state (App → editor bridge) ───────────────────────
 // App tells the editor which comment-anchor highlights are ACTIVE (selected) or
@@ -127,6 +129,45 @@ export const critCallbacksFacet = Facet.define<CritCallbacks, CritCallbacks>({
 });
 
 // ── Widgets ───────────────────────────────────────────────────────────────────
+
+class StandaloneInsertionWidget extends WidgetType {
+  constructor(
+    readonly from: number,
+    readonly to: number,
+    readonly inner: string,
+  ) {
+    super();
+  }
+  eq(other: StandaloneInsertionWidget) {
+    return other.from === this.from && other.to === this.to && other.inner === this.inner;
+  }
+  toDOM(view: EditorView) {
+    const wrap = document.createElement("section");
+    wrap.className = "cm-crit-block-ins";
+    wrap.setAttribute("contenteditable", "false");
+    wrap.setAttribute("aria-label", "Tracked addition");
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "cm-crit-block-toolbar";
+    const label = document.createElement("span");
+    label.className = "cm-crit-block-label";
+    label.textContent = "Added";
+    toolbar.appendChild(label);
+    wrap.appendChild(toolbar);
+
+    const content = document.createElement("div");
+    content.className = "cm-crit-block-content";
+    appendRichBlocks(content, this.inner);
+    wrap.appendChild(content);
+    return wrap;
+  }
+}
+
+/** Rich block additions are a visual document preview; one consistent review
+ * action surface lives in the comment rail. */
+export function standaloneInsertionPresentation() {
+  return { label: "Added", actionSurface: "rail" } as const;
+}
 
 /** ✓ / ✗ controls rendered after a suggestion. Carries the node [from,to). */
 class AcceptRejectWidget extends WidgetType {
@@ -300,6 +341,9 @@ class SuggestionInlineWidget extends WidgetType {
 // AROUND the markdown style marks, so e.g. bold-inside-insertion keeps both.
 function buildMarks(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
+  const standaloneInsertions = new Set(
+    standaloneInsertionTokens(view.state).map((token) => token.from),
+  );
   const insMark = Decoration.mark({ class: "cm-crit-ins" });
   const delMark = Decoration.mark({ class: "cm-crit-del" });
   const subOld = Decoration.mark({ class: "cm-crit-sub-old" });
@@ -316,6 +360,7 @@ function buildMarks(view: EditorView): DecorationSet {
       from: vFrom,
       to: vTo,
       enter: (node) => {
+        if (node.name === "CMInsert" && standaloneInsertions.has(node.from)) return false;
         switch (node.name) {
           case "CMInsert":
             ranges.push(insMark.range(node.from, node.to));
@@ -399,6 +444,9 @@ const markPlugin = ViewPlugin.fromClass(
 // ── WIDGET + COMMENT-HIDE plugin (→ regular decorations) ──────────────────────
 function buildWidgets(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
+  const standaloneInsertions = new Set(
+    standaloneInsertionTokens(view.state).map((token) => token.from),
+  );
   // SUGGEST: comments → an inline suggestion widget (proposed wording + ✓/✗)
   // instead of the plain 💬 bubble. Keyed by the comment's start offset.
   const suggestByComment = new Map(
@@ -410,6 +458,7 @@ function buildWidgets(view: EditorView): DecorationSet {
       from: vFrom,
       to: vTo,
       enter: (node) => {
+        if (node.name === "CMInsert" && standaloneInsertions.has(node.from)) return false;
         switch (node.name) {
           case "CMInsert":
           case "CMDelete":
@@ -529,6 +578,44 @@ const widgetPlugin = ViewPlugin.fromClass(
   },
 );
 
+function buildStandaloneInsertionDecorations(state: EditorState): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  const insertions = standaloneInsertionTokens(state);
+
+  for (const insertion of insertions) {
+    ranges.push(
+      Decoration.replace({
+        widget: new StandaloneInsertionWidget(
+          insertion.from,
+          insertion.to,
+          insertion.inner,
+        ),
+        block: true,
+        inclusive: false,
+      }).range(insertion.from, insertion.to),
+    );
+  }
+
+  ranges.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const range of ranges) builder.add(range.from, range.to, range.value);
+  return builder.finish();
+}
+
+const standaloneInsertionPreviewField = StateField.define<DecorationSet>({
+  create: buildStandaloneInsertionDecorations,
+  update(value, transaction) {
+    if (transaction.docChanged) {
+      return buildStandaloneInsertionDecorations(transaction.state);
+    }
+    return value;
+  },
+  provide: (field) => [
+    EditorView.decorations.from(field),
+    EditorView.atomicRanges.from(field, (decorations) => () => decorations),
+  ],
+});
+
 // ── Atomic ranges over hidden markup ──────────────────────────────────────────
 // Goal: the cursor never lands inside HIDDEN markup, and Backspace/Delete never
 // leaves a half-deleted construct — WITHOUT preventing you from selecting or
@@ -555,11 +642,15 @@ const HIDDEN_DELIM_NODES = new Set<string>([
 const criticAtomicRanges = EditorView.atomicRanges.of((view): RangeSet<Decoration> => {
   const ranges: Range<Decoration>[] = [];
   const filler = Decoration.replace({});
+  const standaloneInsertions = new Set(
+    standaloneInsertionTokens(view.state).map((token) => token.from),
+  );
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
       from: vFrom,
       to: vTo,
       enter: (node) => {
+        if (node.name === "CMInsert" && standaloneInsertions.has(node.from)) return false;
         if (node.name === "CMComment") {
           ranges.push(filler.range(node.from, node.to));
           return false; // whole comment is atomic (no editable interior)
@@ -588,6 +679,7 @@ export function criticMarkupExtension(): Extension {
   return [
     critHighlightField,
     suggestCardsField,
+    standaloneInsertionPreviewField,
     EditorView.outerDecorations.of((view) =>
       view.plugin(markPlugin)?.decorations ?? Decoration.none,
     ),

@@ -46,7 +46,7 @@ export function findThread(content: string, phrase: string): CommentThread {
 /** The single SUGGEST card matched by `phrase`. Prefer the comment body (the
  *  proposed wording); when that yields no match, fall back to the anchor prose.
  *  The fallback is what makes an empty-replacement deletion addressable. */
-function findSuggestionComment(content: string, phrase: string): CommentToken {
+export function findSuggestionComment(content: string, phrase: string): CommentToken {
   const tokens = scanTokens(content);
   const suggestions = tokens.filter(
     (t): t is CommentToken => t.type === "comment" && suggestionReplacement(t.body) !== null,
@@ -155,8 +155,8 @@ export interface ThreadSummary {
 
 /** Read/verify surface: every thread with its anchor span, authors, count, and
  *  whether it carries an applyable suggestion. Drives `acm threads [--json]`.
- *  `seenKeys` is the human's persisted seen-set (content keys via commentKey,
- *  from ~/.config/acm/settings.json); a thread counts as seen only when EVERY
+ *  `seenKeys` is the human's persisted per-document seen-set (content keys via
+ *  commentKey, from ~/.config/acm/settings.json); a thread counts as seen only when EVERY
  *  comment in it is — the same rule the GUI uses. Threads whose comments ride a
  *  raw `{++/--/~~}` suggestion card have NO seen affordance in the GUI (they're
  *  accept/reject, not inbox items) → `seen: null`, so the unseen count can't

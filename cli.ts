@@ -1,155 +1,141 @@
 #!/usr/bin/env bun
 // ── acm — the ACM command-line entry ──────────────────────────────────────────
-// `acm <file.md>`  opens (creating if missing) a CriticMarkup doc in the editor.
-// `acm`            opens a new untitled doc (in-app open screen is a follow-up).
-//
-// The doc is chosen EXPLICITLY here — no ACM_DOC env indirection — so two sessions
-// can't silently diverge onto different copies. Serves the prebuilt SPA from the
-// checkout's ./dist in source mode; the installed standalone binary embeds it.
+// `acm` explains the tool. `acm edit` opens the document launcher, while
+// `acm edit <file.md>` opens one explicitly named Markdown document. Agent verbs
+// remain top-level because they operate on the document already open in ACM.
 
-import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { startServer } from "./server";
+import { HELP_TEXT, OVERVIEW_TEXT, parseInvocation } from "./src/cli/invocation";
 import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
-
-interface Args {
-  file?: string;
-  port?: number;
-  open: boolean;
-}
-
-function parseArgs(argv: string[]): Args {
-  const out: Args = { open: true };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--no-open") out.open = false;
-    else if (a === "--port") out.port = Number(argv[++i]);
-    else if (a === "-h" || a === "--help") {
-      printHelp();
-      process.exit(0);
-    } else if (!a.startsWith("-") && out.file === undefined) {
-      out.file = a;
-    }
-  }
-  return out;
-}
-
-function printHelp() {
-  console.log(`acm — Agent CriticMarkup editor
-
-Usage:
-  acm [file.md]      Open (creating if missing) a CriticMarkup document
-  acm                Open a new untitled document
-
-Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
-running ACM editor; snapshot before every write):
-  acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]
-  acm reply "<phrase>" "<text>"     Reply to the thread matching <phrase> (alias: comment)
-  acm suggest "<span>" "<new>"      Anchor a SUGGEST: on the unique prose <span>
-  acm accept "<phrase>"             Accept the suggestion matching <phrase>
-  acm reject "<phrase>"             Reject it (keep the original span)
-  acm resolve "<phrase>"            Strip the thread matching <phrase>
-  acm reply --batch <edits.json>    Batch reply-append (idempotent); [{id,match,insert}]
-  acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
-  acm heal                          Repair markup that renders raw; snapshot-first
-  acm import <Google Docs URL|file.docx> [out.md]
-                                     Google Docs/Word → CriticMarkup, including comments
-  acm spell [list] [--json]         List flagged words: count, suggestions, line
-  acm spell add <word…>             Keep words in your personal dictionary
-  acm spell ignore <word…>          Stop flagging words in THIS doc only
-  acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
-  acm history [n]                   The doc's version history (auto-recorded)
-  acm restore <sha>                 Restore a history version (snapshots first)
-    (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
-
-Options:
-  --port <n>         Port to serve on (default 12000; auto-increments if busy)
-  --no-open          Don't auto-open the browser
-  -h, --help         Show this help`);
-}
+import { prepareDocumentTarget } from "./src/server/documentTarget";
+import { startLauncherServer } from "./src/server/launcher";
+import { recordRecentDocument } from "./src/server/recent";
 
 function openBrowser(url: string) {
-  const cmd =
+  const command =
     process.platform === "darwin"
       ? ["open", url]
       : process.platform === "win32"
         ? ["cmd", "/c", "start", "", url]
         : ["xdg-open", url];
   try {
-    Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+    Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
   } catch {
-    // No browser opener available — the URL is printed below regardless.
+    // The URL is always printed, so a missing desktop opener is non-fatal.
   }
 }
 
-function uniqueUntitled(): string {
-  let p = resolve("untitled.md");
-  let n = 2;
-  while (existsSync(p)) p = resolve(`untitled-${n++}.md`);
-  return p;
+function isBusyPort(error: unknown): boolean {
+  return (error as { code?: string })?.code === "EADDRINUSE";
 }
 
-if (process.argv[2] === "skill") {
+function startOnFreePort<T>(preferredPort: number, start: (port: number) => T): T {
+  let port = preferredPort;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      return start(port);
+    } catch (error) {
+      if (!isBusyPort(error)) throw error;
+      port += 1;
+    }
+  }
+  throw new Error("could not find a free port to listen on");
+}
+
+async function loadStaticAssets(): Promise<{
+  staticDir: string;
+  staticAssets?: Map<string, string>;
+}> {
+  let staticAssets: Map<string, string> | undefined;
+  try {
+    const mod = await import("./src/server/embedded.generated");
+    staticAssets = mod.EMBEDDED_ASSETS as Map<string, string>;
+  } catch {
+    // Source mode uses the filesystem build in ./dist.
+  }
+  return { staticDir: resolve(import.meta.dir, "dist"), staticAssets };
+}
+
+const invocation = parseInvocation(process.argv.slice(2), isAgentVerb);
+
+if (invocation.kind === "overview") {
+  console.log(OVERVIEW_TEXT);
+  process.exit(0);
+}
+if (invocation.kind === "help") {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
+if (invocation.kind === "error") {
+  console.error(invocation.message);
+  process.exit(2);
+}
+if (invocation.kind === "legacy-skill") {
   console.error("`acm skill` has been replaced by the standard skills manager.");
   console.error("From the ACM repository, run `bun run setup` to install or refresh acm-review.");
   console.error("That setup delegates agent paths and symlinks to `npx skills add`.");
   process.exit(2);
 }
-
-// Agent edit/read verbs (threads/reply/comment/suggest/accept/reject/resolve/spell).
-if (isAgentVerb(process.argv[2])) {
-  // Give `acm spell` its Hunspell dicts when running as the compiled binary (where
-  // node_modules isn't beside the executable). The generated module's file-imports
-  // are embedded by `bun build --compile`; it's absent in plain source mode, where
-  // the catch is a no-op and the engine reads node_modules instead. Resolved here in
-  // cli.ts (outside the tsc `include`) so the optional generated module never breaks
-  // typecheck — the same arrangement the SPA's embedded.generated uses below.
+if (invocation.kind === "agent") {
   try {
     const { setEmbeddedDicts } = await import("./src/cli/spellEngine");
     const dicts = await import("./src/cli/dicts.generated");
     setEmbeddedDicts(dicts.EMBEDDED_DICTS);
   } catch {
-    // No generated dicts (source mode) → engine resolves them from node_modules.
+    // Source mode resolves dictionaries from node_modules.
   }
-  await runAgentVerb(process.argv[2], process.argv.slice(3));
+  await runAgentVerb(invocation.verb, invocation.args);
   process.exit(0);
 }
 
-const args = parseArgs(process.argv.slice(2));
+const assets = await loadStaticAssets();
+const preferredPort = invocation.port ?? 12000;
+const rememberRecentDocument = async (documentPath: string) => {
+  if (await recordRecentDocument(documentPath)) return;
+  console.error(
+    "acm edit: warning: could not update Recent Documents; the editor remains available.",
+  );
+};
 
-const docPath = args.file ? resolve(args.file) : uniqueUntitled();
-if (!existsSync(docPath)) {
-  writeFileSync(docPath, "");
-  console.log(`Created new document: ${docPath}`);
-}
-
-// SPA assets: embedded (compiled binary / built install) if the generated map is
-// present, else the filesystem dist next to this file. Both resolve the same way.
-let staticAssets: Map<string, string> | undefined;
 try {
-  const mod = await import("./src/server/embedded.generated");
-  staticAssets = mod.EMBEDDED_ASSETS as Map<string, string>;
-} catch {
-  // Not generated yet (run `bun run build:embed`) — fall back to filesystem dist.
-}
-const staticDir = resolve(import.meta.dir, "dist");
-
-// Find a free port, starting at the requested/default and incrementing if busy.
-let acm: ReturnType<typeof startServer> | undefined;
-let port = args.port ?? 12000;
-for (let attempt = 0; attempt < 20; attempt++) {
-  try {
-    acm = startServer({ docPath, port, staticDir, staticAssets });
-    break;
-  } catch {
-    port++;
+  if (invocation.file) {
+    const target = prepareDocumentTarget(invocation.file, process.cwd(), "open-or-create");
+    if (!target.ok) {
+      console.error(`acm edit: ${target.message}`);
+      process.exit(2);
+    }
+    const acm = startOnFreePort(preferredPort, (port) =>
+      startServer({ docPath: target.path, port, ...assets }),
+    );
+    await rememberRecentDocument(target.path);
+    const url = `http://localhost:${acm.port}`;
+    if (target.created) console.log(`Created new document: ${target.path}`);
+    console.log(`\n  ACM ready → ${url}\n  editing: ${target.path}\n`);
+    if (invocation.open) openBrowser(url);
+  } else {
+    let launcher: ReturnType<typeof startLauncherServer>;
+    launcher = startOnFreePort(preferredPort, (port) =>
+      startLauncherServer({
+        port,
+        cwd: process.cwd(),
+        ...assets,
+        activateDocument: async (documentPath) => {
+          const documentStartPort = launcher.port < 65_535 ? launcher.port + 1 : 0;
+          const acm = startOnFreePort(documentStartPort, (documentPort) =>
+            startServer({ docPath: documentPath, port: documentPort, ...assets }),
+          );
+          await rememberRecentDocument(documentPath);
+          setTimeout(() => launcher.stop(), 750);
+          return { url: `http://localhost:${acm.port}` };
+        },
+      }),
+    );
+    const url = `http://localhost:${launcher.port}`;
+    console.log(`\n  ACM launcher → ${url}\n  folder: ${launcher.cwd}\n`);
+    if (invocation.open) openBrowser(url);
   }
-}
-if (!acm) {
-  console.error("acm: could not find a free port to listen on");
+} catch (error) {
+  console.error(`acm edit: ${(error as Error).message}`);
   process.exit(1);
 }
-
-const url = `http://localhost:${acm.port}`;
-console.log(`\n  ACM ready → ${url}\n  editing: ${docPath}\n`);
-if (args.open) openBrowser(url);

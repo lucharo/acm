@@ -6,6 +6,8 @@
 export type Theme = "light" | "dark" | "system";
 export type Font = "serif" | "sans" | "mono";
 export type SpellVariant = "uk" | "us"; // British vs American spelling dictionary
+export type CommentRailMode = "auto" | "show" | "hide";
+export type PrintStyle = "simple" | "tufte";
 export interface ViewSettings {
   theme: Theme;
   font: Font;
@@ -14,7 +16,12 @@ export interface ViewSettings {
   bionic: boolean; // bionic-reading: bold the lead of each word (rendered only)
   pageBreaks: boolean; // A4 page-break markers + page tally (a sense of print length)
   progressBar: boolean; // thin reading-progress bar under the header (fills as you scroll)
+  richPreview: boolean; // rendered Markdown/review view; false exposes canonical source
+  printStyle: PrintStyle; // browser print/PDF presentation; never changes document bytes
+  printAlternateSides: boolean; // Tufte reference ribs follow odd/right, even/left book-page parity
   showSeen: boolean; // reveal comments marked "seen" (off = they're hidden, zero-inbox)
+  commentRail: CommentRailMode; // auto by default; can be pinned open or hidden
+  applyAndResolve: boolean; // make Apply also close the complete suggestion discussion
   spellcheck: boolean; // wiggly-underline misspelled words (editor/spellcheck.ts)
   spellVariant: SpellVariant; // which dictionary spell check runs against
   author: string; // name stamped on comments YOU add through the UI
@@ -34,7 +41,12 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   bionic: false,
   pageBreaks: false,
   progressBar: true, // on by default — a quiet, familiar reading affordance
+  richPreview: true,
+  printStyle: "simple",
+  printAlternateSides: true,
   showSeen: false,
+  commentRail: "auto",
+  applyAndResolve: false,
   spellcheck: true, // on by default — the Google-Docs expectation for a prose editor
   spellVariant: "uk", // British English by default
   author: "You",

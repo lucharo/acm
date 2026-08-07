@@ -1,43 +1,37 @@
-// ── App header: nav/outline toggles, comment composer, status, settings menu ──
+// ── App header: document controls, status, review controls, and settings ─────
 // Purely presentational — every action and all state arrive as props from the
 // Workspace; the only local state is whether the settings menu is open.
 
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { MOD, handleCommentKey } from "./CommentSidebar";
+import { CodeXml, Eye, ListTree, MessageSquare, PanelRight, Settings } from "lucide-react";
+import { MOD } from "../lib/platform";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
-import type { Font, Theme, SpellVariant, ViewSettings } from "../lib/viewSettings";
+import type { Font, Theme, SpellVariant, PrintStyle, ViewSettings } from "../lib/viewSettings";
 
 export interface HeaderProps {
   connected: boolean;
   saveState: SaveState;
   lastSavedAt: number | null;
   wordCount: number;
-  canComment: boolean;
-  composing: boolean;
-  composerAnchored: boolean;
   onWrap: () => void;
-  draft: string;
-  onDraftChange: (v: string) => void;
-  onOpenComposer: () => void;
-  onPostComment: () => void;
-  /** Post the comment AND mark it seen — the "suggest edits & dismiss" flow (⌘⇧↵). */
-  onPostCommentSeen: () => void;
-  /** One-click: post a canned "suggest edit" comment on the selection + mark it seen. */
-  onSuggestEdit: () => void;
-  onCancelComposer: () => void;
-  navOpen: boolean;
-  onToggleNav: () => void;
   tocOpen: boolean;
   onToggleToc: () => void;
+  commentRailVisible: boolean;
+  commentsSurface: "rail" | "sheet";
+  onToggleCommentRail: () => void;
   settings: ViewSettings;
   onChangeSettings: (patch: Partial<ViewSettings>) => void;
+  settingsSaveError: boolean;
+  onRetrySettings: () => void;
   /** Settings menu open-state is lifted to the Workspace so ⌘, can toggle it. */
   settingsOpen: boolean;
   onSetSettingsOpen: (open: boolean) => void;
   /** Open the keyboard-shortcuts cheat sheet. */
   onShowShortcuts: () => void;
+  /** Print the accepted document using the persisted PDF presentation. */
+  onPrint: () => void;
   /** The user's personal spelling dictionary + add/remove (Spelling tab). */
   dictionary: string[];
   onAddWord: (word: string) => void;
@@ -47,8 +41,30 @@ export interface HeaderProps {
   onOpenReview: () => void;
 }
 
-const iconBtn =
-  "flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)]";
+export const headerIconButtonClass =
+  "flex h-10 w-10 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)] lg:h-7 lg:w-7";
+
+export function previewModePresentation(richPreview: boolean) {
+  return richPreview
+    ? ({ label: "Show raw Markdown source", icon: "code" } as const)
+    : ({ label: "Show rich preview", icon: "eye" } as const);
+}
+
+export function commentsTogglePresentation(
+  visible: boolean,
+  surface: "rail" | "sheet",
+) {
+  if (surface === "sheet") {
+    return {
+      label: visible ? "Hide comments" : "Show comments",
+      icon: "message-square" as const,
+    };
+  }
+  return {
+    label: visible ? "Hide comments edge" : "Show comments edge",
+    icon: "panel-right" as const,
+  };
+}
 
 export default function Header(props: HeaderProps) {
   const {
@@ -56,26 +72,20 @@ export default function Header(props: HeaderProps) {
     saveState,
     lastSavedAt,
     wordCount,
-    canComment,
-    composing,
-    composerAnchored,
     onWrap,
-    draft,
-    onDraftChange,
-    onOpenComposer,
-    onPostComment,
-    onPostCommentSeen,
-    onSuggestEdit,
-    onCancelComposer,
-    navOpen,
-    onToggleNav,
     tocOpen,
     onToggleToc,
+    commentRailVisible,
+    commentsSurface,
+    onToggleCommentRail,
     settings,
     onChangeSettings,
+    settingsSaveError,
+    onRetrySettings,
     settingsOpen,
     onSetSettingsOpen,
     onShowShortcuts,
+    onPrint,
     dictionary,
     onAddWord,
     onRemoveWord,
@@ -84,121 +94,45 @@ export default function Header(props: HeaderProps) {
   } = props;
 
   // settingsOpen is lifted to the Workspace (prop) so ⌘, can toggle it; only the
-  // Display|Spelling tab choice is local.
-  const [settingsTab, setSettingsTab] = useState<"display" | "spelling">("display");
+  // Display|Review|Spelling tab choice is local.
+  const [settingsTab, setSettingsTab] = useState<"display" | "review" | "spelling">("display");
 
   return (
     <header className="relative flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
-      {/* Overview-panel toggle — hidden on phones: the overview/comment column is a
-          wide side panel that can't fit a narrow screen (the comment sidebar already
-          auto-hides under ~800px), and the outline (next button) is the mobile nav. */}
-      <button
-        type="button"
-        onClick={onToggleNav}
-        className={`${iconBtn} hidden sm:flex ${navOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
-        title={navOpen ? "Hide overview" : "Show overview"}
-        aria-pressed={navOpen}
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
-          <line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" strokeWidth="1.3" />
-        </svg>
-      </button>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onToggleToc}
+          className={`${headerIconButtonClass} ${tocOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
+          title={tocOpen ? "Hide table of contents" : "Table of contents"}
+          aria-label={tocOpen ? "Hide table of contents" : "Table of contents"}
+          aria-pressed={tocOpen}
+        >
+          <ListTree size={17} strokeWidth={1.7} aria-hidden="true" />
+        </button>
 
-      {/* Outline (table of contents) toggle */}
-      <button
-        type="button"
-        onClick={onToggleToc}
-        className={`${iconBtn} ${tocOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
-        title={tocOpen ? "Hide outline" : "Show outline"}
-        aria-pressed={tocOpen}
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-          <line x1="3" y1="4" x2="13" y2="4" />
-          <line x1="5" y1="8" x2="13" y2="8" />
-          <line x1="7" y1="12" x2="13" y2="12" />
-        </svg>
-      </button>
+        <button
+          type="button"
+          onClick={() => onChangeSettings({ richPreview: !settings.richPreview })}
+          className={`${headerIconButtonClass} ${!settings.richPreview ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
+          title={previewModePresentation(settings.richPreview).label}
+          aria-label={previewModePresentation(settings.richPreview).label}
+          aria-pressed={!settings.richPreview}
+        >
+          {previewModePresentation(settings.richPreview).icon === "code" ? (
+            <CodeXml size={17} strokeWidth={1.7} aria-hidden="true" />
+          ) : (
+            <Eye size={17} strokeWidth={1.7} aria-hidden="true" />
+          )}
+        </button>
+      </div>
 
-      <img src="/logo.png" alt="" className="h-5 w-5 shrink-0 rounded-[4px]" />
-      <span className="text-[13px] font-semibold tracking-tight">
+      <span className="hidden h-5 w-px bg-[var(--line-strong)] min-[360px]:block" aria-hidden="true" />
+      <span className="hidden text-[13px] font-semibold tracking-tight min-[360px]:inline">
         ACM <span className="hidden text-[var(--faint)] sm:inline">· Agent CriticMarkup</span>
       </span>
 
       <div className="ml-auto flex flex-wrap items-center justify-end gap-2 gap-y-1">
-        {composing ? (
-          <div className="flex flex-wrap items-center justify-end gap-1.5 gap-y-1">
-            <textarea
-              autoFocus
-              rows={1}
-              value={draft}
-              onChange={(e) => onDraftChange(e.target.value)}
-              onKeyDown={(e) => handleCommentKey(e, onPostComment, onPostCommentSeen, onCancelComposer)}
-              placeholder="Comment on selection…  (⇧↵ for a new line)"
-              className="block max-h-32 w-44 resize-none overflow-y-auto rounded border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)] sm:w-60"
-            />
-            {!composerAnchored && (
-              /* The selection can't be wrapped as a {==span==} (it cuts markup or
-                 crosses a paragraph) — disclose the point fallback instead of
-                 silently degrading. */
-              <span
-                className="max-w-24 text-[10px] italic leading-tight text-[var(--muted)]"
-                title="This selection crosses markup or a paragraph break, so the comment will attach at its end point instead of anchoring the span."
-              >
-                attaches at a point — selection can't anchor
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={onPostComment}
-              className="flex items-center gap-1.5 rounded bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--panel)]"
-            >
-              Post <span className="text-[10px] font-normal opacity-70">{MOD}↵</span>
-            </button>
-            <button
-              type="button"
-              onClick={onPostCommentSeen}
-              title="Post and mark it seen"
-              className="flex items-center gap-1.5 rounded border border-[var(--line-strong)] px-2 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--line)]"
-            >
-              &amp; seen <span className="text-[10px] font-normal text-[var(--faint)]">{MOD}⇧↵</span>
-            </button>
-            <button
-              type="button"
-              onClick={onCancelComposer}
-              className="rounded px-2 py-1 text-[12px] text-[var(--muted)] hover:bg-[var(--line)]"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={onOpenComposer}
-            disabled={!canComment}
-            title={canComment ? "Comment on selection" : "Select text to comment"}
-            className="rounded border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--ink)] enabled:hover:bg-[var(--line)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Add comment
-          </button>
-        )}
-        {/* One-click hand-off: tag the selection with a "suggest edit" comment for the
-            agent + mark it seen. Only when there's a selection and not mid-compose. */}
-        {!composing && canComment ? (
-          <button
-            type="button"
-            onClick={onSuggestEdit}
-            title="Ask the agent for an edit on this selection — posts “suggest edit” and marks it seen"
-            className="flex items-center gap-1 rounded border border-[var(--line-strong)] px-2.5 py-1 text-[12px] font-medium text-[var(--crit-comment)] hover:bg-[var(--line)]"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-            </svg>
-            Suggest edit
-          </button>
-        ) : null}
-
         <span className="hidden text-[11px] tabular-nums text-[var(--faint)] sm:inline" title="Word count (accepted prose)">
           {wordCount.toLocaleString()} words
         </span>
@@ -216,29 +150,41 @@ export default function Header(props: HeaderProps) {
           {connected ? "live" : "offline"}
         </span>
 
-        {/* Settings (a proper cog) */}
+        <button
+          type="button"
+          onClick={onToggleCommentRail}
+          className={`${headerIconButtonClass} ${commentRailVisible ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
+          title={commentsTogglePresentation(commentRailVisible, commentsSurface).label}
+          aria-label={commentsTogglePresentation(commentRailVisible, commentsSurface).label}
+          aria-pressed={commentRailVisible}
+        >
+          {commentsTogglePresentation(commentRailVisible, commentsSurface).icon === "message-square" ? (
+            <MessageSquare size={17} strokeWidth={1.7} aria-hidden="true" />
+          ) : (
+            <PanelRight size={17} strokeWidth={1.7} aria-hidden="true" />
+          )}
+        </button>
+
         <button
           type="button"
           onClick={() => onSetSettingsOpen(!settingsOpen)}
-          className={`${iconBtn} ${settingsOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
+          className={`${headerIconButtonClass} ${settingsOpen ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
           title={`Settings (${MOD},)`}
+          aria-label="Settings"
           aria-haspopup="menu"
           aria-expanded={settingsOpen}
         >
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
+          <Settings size={17} strokeWidth={1.7} aria-hidden="true" />
         </button>
 
         {settingsOpen ? (
           <>
             <div className="fixed inset-0 z-20" onClick={() => onSetSettingsOpen(false)} />
-            <div className="absolute right-3 top-11 z-30 w-60 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-1.5 shadow-lg">
-              {/* Display | Spelling tabs — keeps the (now busy) panel scannable and
-                  gives the dictionary its own home, as requested. */}
+            <div className="absolute right-3 top-11 z-30 max-h-[calc(100vh-4rem)] w-60 overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--panel)] p-1.5 shadow-lg">
+              {/* Purpose-based tabs keep review behaviour distinct from visual
+                  preferences and give the dictionary its own home. */}
               <div className="mb-1.5 flex gap-1 rounded-md bg-[var(--line)] p-0.5">
-                {(["display", "spelling"] as const).map((t) => (
+                {(["display", "review", "spelling"] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
@@ -253,6 +199,18 @@ export default function Header(props: HeaderProps) {
                   </button>
                 ))}
               </div>
+              <p className="mb-1.5 px-2 text-[11px] leading-snug text-[var(--muted)]">
+                Settings are global and apply to every ACM document.
+              </p>
+              {settingsSaveError ? (
+                <button
+                  type="button"
+                  onClick={onRetrySettings}
+                  className="mb-1.5 w-full rounded-md border border-[var(--crit-del)] px-2 py-1.5 text-left text-[11px] text-[var(--crit-del)]"
+                >
+                  Settings not saved. Retry
+                </button>
+              ) : null}
               {settingsTab === "display" ? (
               <>
               <FontPicker value={settings.font} onChange={(font) => onChangeSettings({ font })} />
@@ -280,6 +238,11 @@ export default function Header(props: HeaderProps) {
               </div>
               <div className="my-1 border-t border-[var(--line)]" />
               <SettingRow
+                label="Rich preview"
+                checked={settings.richPreview}
+                onToggle={() => onChangeSettings({ richPreview: !settings.richPreview })}
+              />
+              <SettingRow
                 label="Page view"
                 checked={settings.page}
                 onToggle={() => onChangeSettings({ page: !settings.page })}
@@ -304,12 +267,46 @@ export default function Header(props: HeaderProps) {
                 checked={settings.progressBar}
                 onToggle={() => onChangeSettings({ progressBar: !settings.progressBar })}
               />
+              <div className="my-1 border-t border-[var(--line)]" />
+              <Segmented<PrintStyle>
+                label="PDF style"
+                value={settings.printStyle}
+                options={[
+                  { value: "simple", label: "Simple" },
+                  { value: "tufte", label: "Tufte" },
+                ]}
+                onChange={(printStyle) => onChangeSettings({ printStyle })}
+              />
+              <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted)]">
+                Exports accepted CriticMarkup. Unapplied SUGGEST cards keep the current wording.
+              </p>
+              {settings.printStyle === "tufte" ? (
+                <>
+                  <SettingRow
+                    label="Reference rib on alternating pages"
+                    checked={settings.printAlternateSides}
+                    onToggle={() => onChangeSettings({ printAlternateSides: !settings.printAlternateSides })}
+                  />
+                  <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted)]">
+                    Odd pages use the right outer margin; even pages use the left. Turn off to keep references right.
+                  </p>
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  onSetSettingsOpen(false);
+                  onPrint();
+                }}
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] text-[var(--ink)] hover:bg-[var(--line)]"
+              >
+                Print / save as PDF <span className="text-[11px] text-[var(--faint)]">{MOD}P</span>
+              </button>
               <SettingRow
                 label="Show seen comments"
                 checked={settings.showSeen}
                 onToggle={() => onChangeSettings({ showSeen: !settings.showSeen })}
               />
-              <SettingRow label="Overview panel" checked={navOpen} onToggle={onToggleNav} />
               <div className="my-1 border-t border-[var(--line)]" />
               <button
                 type="button"
@@ -344,6 +341,8 @@ export default function Header(props: HeaderProps) {
                 </p>
               </div>
               </>
+              ) : settingsTab === "review" ? (
+                <ReviewTab settings={settings} onChangeSettings={onChangeSettings} />
               ) : (
                 <SpellingTab
                   settings={settings}
@@ -446,6 +445,45 @@ function SettingRow({
         />
       </span>
     </button>
+  );
+}
+
+/** Review behaviour stays conservative by default. The explicit combined action
+ * is always available beside Apply; this setting only changes the plain Apply
+ * shortcut for people who consistently want the thread closed too. */
+function ReviewTab({
+  settings,
+  onChangeSettings,
+}: {
+  settings: ViewSettings;
+  onChangeSettings: (patch: Partial<ViewSettings>) => void;
+}) {
+  return (
+    <div>
+      <Segmented
+        label="Comments edge"
+        value={settings.commentRail}
+        options={[
+          { value: "auto", label: "Auto" },
+          { value: "show", label: "Show" },
+          { value: "hide", label: "Hide" },
+        ]}
+        onChange={(commentRail) => onChangeSettings({ commentRail })}
+      />
+      <p className="px-2 pb-2 text-[11px] leading-snug text-[var(--muted)]">
+        Automatic keeps a clean document centred, then opens the edge when review cards appear.
+      </p>
+      <div className="my-1 border-t border-[var(--line)]" />
+      <SettingRow
+        label="Apply also resolves"
+        checked={settings.applyAndResolve}
+        onToggle={() => onChangeSettings({ applyAndResolve: !settings.applyAndResolve })}
+      />
+      <p className="px-2 pb-2 text-[11px] leading-snug text-[var(--muted)]">
+        Off by default. When enabled, Apply updates the wording and closes its complete
+        discussion in one undoable action.
+      </p>
+    </div>
   );
 }
 
@@ -563,6 +601,16 @@ const SAVE_BADGE: Record<SaveState, { label: string; color: string; title: strin
   unsaved: { label: "Unsaved", color: "var(--crit-ins)", title: "Edits queued — saving shortly (⌘S to save now)" },
   offline: { label: "Offline · unsaved", color: "var(--crit-del)", title: "Disconnected — your edits are held and will be written on reconnect" },
   conflict: { label: "Conflict", color: "var(--crit-del)", title: "The file changed under your edit; your version is kept and will be saved" },
+  "audit-error": {
+    label: "History not saved",
+    color: "var(--crit-del)",
+    title: "The document was saved, but its decision history was not. Press ⌘S to retry after fixing storage.",
+  },
+  "audit-recovery": {
+    label: "History needs review",
+    color: "var(--crit-del)",
+    title: "Ambiguous unsent decision history was preserved in this browser rather than replayed without proof that its document edit landed.",
+  },
 };
 
 /** Explicit Saved / Saving / Unsaved / Offline / Conflict indicator. When saved,

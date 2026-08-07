@@ -1,4 +1,4 @@
-// Floating table of contents — a Google-Docs-style document outline. Lists the
+// Floating table of contents. Lists the
 // markdown headings, indented by level; click one to jump to it. Purely
 // presentational: App extracts the headings (with doc offsets) and owns the jump.
 
@@ -21,12 +21,12 @@ export default function Toc({ headings, activeFrom, onJump, onClose }: TocProps)
   return (
     <div className="fixed left-2 top-16 z-30 flex max-h-[calc(100vh-5rem)] w-60 flex-col rounded-xl border border-[var(--line)] bg-[var(--panel)] shadow-2xl">
       <div className="flex items-center gap-2 border-b border-[var(--line)] px-3 py-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Outline</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Table of contents</span>
         <button
           type="button"
           onClick={onClose}
           className="ml-auto rounded p-0.5 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
-          aria-label="Close outline"
+          aria-label="Close table of contents"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
         </button>

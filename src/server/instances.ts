@@ -6,7 +6,7 @@
 // needed: liveness is the authority.
 
 import { resolve } from "node:path";
-import { readConfig, writeConfig } from "./config";
+import { readConfig, updateConfig } from "./config";
 
 export interface InstanceEntry {
   port: number;
@@ -26,23 +26,21 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Record this process as the ACM serving `doc` on `port` (prunes dead entries).
- *  KNOWN, tolerated race: concurrent read-modify-writes of instances.json can
- *  drop an entry (no file lock). Liveness is the authority, not the file — a
- *  lost entry re-registers on the next boot and readers verify pid + port
- *  anyway, so the worst case is a transient "no document" message. */
+/** Record this process as the ACM serving `doc` on `port` (prunes dead entries). */
 export async function registerInstance(port: number, doc: string): Promise<void> {
-  const all = await readConfig<Record<string, InstanceEntry>>(FILE, {});
-  for (const [key, e] of Object.entries(all)) {
-    if (!isAlive(e.pid)) delete all[key];
-  }
-  all[String(port)] = {
-    port,
-    doc: resolve(doc),
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-  };
-  await writeConfig(FILE, all);
+  await updateConfig<Record<string, InstanceEntry>>(FILE, {}, (current) => {
+    const all = { ...current };
+    for (const [key, e] of Object.entries(all)) {
+      if (!isAlive(e.pid)) delete all[key];
+    }
+    all[String(port)] = {
+      port,
+      doc: resolve(doc),
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+    };
+    return all;
+  });
 }
 
 /** Every registered instance whose process is still alive, sorted by port (so the

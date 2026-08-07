@@ -9,8 +9,9 @@
 //      (#, **, _, `, >, list bullets, link [] () ) UNLESS the cursor/selection is
 //      on that line, in which case the markers are revealed for editing.
 //
-// Tables use a third component: a StateField provides block replacements (which
-// ViewPlugins cannot), revealing the raw table whenever focus + selection enter it.
+// Tables and safe HTML blocks use a third component: a StateField provides block
+// replacements (which ViewPlugins cannot). Tables expose focused cell inputs;
+// the global source toggle removes every preview replacement deliberately.
 //
 // Both only walk `view.visibleRanges` and rebuild on doc / viewport / selection
 // changes. CriticMarkup nodes are skipped entirely — criticMarkupView.ts owns
@@ -21,11 +22,21 @@
 import { syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { RangeSetBuilder, StateField } from "@codemirror/state";
 import type { EditorState, Extension, Range } from "@codemirror/state";
 
-import { tablePreviewForNode } from "./markdownTable";
-import type { MarkdownTableModel, TableAlignment } from "./markdownTable";
+import {
+  nextMarkdownTableCell,
+  tablePreviewForNode,
+  updateMarkdownTableCell,
+} from "./markdownTable";
+import type {
+  MarkdownTableCellAddress,
+  MarkdownTableModel,
+  TableAlignment,
+} from "./markdownTable";
+import { appendRichBlocks, appendRichInline } from "./richMarkdown";
+import { standaloneInsertionTokens } from "./standaloneInsertion";
 
 // CriticMarkup delimiter nodes we hide (like Markdown markers) so suggestions read
 // as rendered prose: green inserted text, struck deletions, etc. — not raw `{++…++}`.
@@ -114,8 +125,44 @@ class ImageWidget extends WidgetType {
   }
 }
 
-/** Renders a parsed GFM table while its source range is inactive. The widget
- *  only reads the model; the Markdown buffer remains the single source of truth. */
+function tableCellKey(address: MarkdownTableCellAddress): string {
+  return `${address.section}:${address.row}:${address.column}`;
+}
+
+export function renderedTableCellSelector(
+  tableFrom: number,
+  address: MarkdownTableCellAddress,
+): string {
+  return `[data-table-from="${tableFrom}"] [data-table-cell="${tableCellKey(address)}"]`;
+}
+
+function focusRenderedTableCell(
+  view: EditorView,
+  tableFrom: number,
+  address: MarkdownTableCellAddress | null,
+  boundaryAnchor: number | null = null,
+) {
+  if (!address && boundaryAnchor === null) return;
+  setTimeout(() => {
+    if (address) {
+      const cell = view.dom.querySelector<HTMLElement>(
+        renderedTableCellSelector(tableFrom, address),
+      );
+      if (cell) {
+        cell.focus();
+        return;
+      }
+    }
+    if (boundaryAnchor === null) return;
+    const anchor = Math.max(0, Math.min(boundaryAnchor, view.state.doc.length));
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    view.focus();
+  }, 0);
+}
+
+/** Renders a parsed GFM table as an interactive block. A focused cell reveals
+ * its Markdown in a native input; committing replaces the complete table in one
+ * aligned CodeMirror transaction, so undo restores the exact previous source. */
 class TableWidget extends WidgetType {
   constructor(readonly model: MarkdownTableModel) {
     super();
@@ -126,24 +173,37 @@ class TableWidget extends WidgetType {
   toDOM(view: EditorView) {
     const wrap = document.createElement("div");
     wrap.className = "cm-md-table-wrap";
-    wrap.title = "Click to edit Markdown table";
+    wrap.dataset.tableFrom = String(this.model.from);
+    wrap.setAttribute("contenteditable", "false");
 
     const table = document.createElement("table");
     table.className = "cm-md-table";
     const head = document.createElement("thead");
     const headRow = document.createElement("tr");
     this.model.header.forEach((value, index) => {
-      headRow.appendChild(tableCell("th", value, this.model.alignments[index]));
+      headRow.appendChild(
+        tableCell(view, this.model, "th", value, this.model.alignments[index], {
+          section: "header",
+          row: 0,
+          column: index,
+        }),
+      );
     });
     head.appendChild(headRow);
     table.appendChild(head);
 
     if (this.model.rows.length > 0) {
       const body = document.createElement("tbody");
-      for (const row of this.model.rows) {
+      for (const [rowIndex, row] of this.model.rows.entries()) {
         const rowElement = document.createElement("tr");
         row.forEach((value, index) => {
-          rowElement.appendChild(tableCell("td", value, this.model.alignments[index]));
+          rowElement.appendChild(
+            tableCell(view, this.model, "td", value, this.model.alignments[index], {
+              section: "body",
+              row: rowIndex,
+              column: index,
+            }),
+          );
         });
         body.appendChild(rowElement);
       }
@@ -151,27 +211,170 @@ class TableWidget extends WidgetType {
     }
     wrap.appendChild(table);
 
-    // A block replacement has no editable DOM text. Put the selection at the
-    // table start, then focus the editor; the focus state rebuild reveals all
-    // original Markdown for direct editing.
-    wrap.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-      view.dispatch({ selection: { anchor: this.model.from }, scrollIntoView: true });
-      view.focus();
-    });
+    return wrap;
+  }
+}
+
+class HtmlBlockWidget extends WidgetType {
+  constructor(readonly source: string) {
+    super();
+  }
+  eq(other: HtmlBlockWidget) {
+    return other.source === this.source;
+  }
+  toDOM() {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-md-html-block";
+    wrap.setAttribute("contenteditable", "false");
+    appendRichBlocks(wrap, this.source);
+    return wrap;
+  }
+}
+
+class CodeBlockWidget extends WidgetType {
+  constructor(readonly source: string) {
+    super();
+  }
+  eq(other: CodeBlockWidget) {
+    return other.source === this.source;
+  }
+  toDOM() {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-md-code-block";
+    wrap.setAttribute("contenteditable", "false");
+    appendRichBlocks(wrap, this.source);
     return wrap;
   }
 }
 
 function tableCell(
+  view: EditorView,
+  model: MarkdownTableModel,
   tag: "th" | "td",
   value: string,
   alignment: TableAlignment | undefined,
+  address: MarkdownTableCellAddress,
 ): HTMLTableCellElement {
   const cell = document.createElement(tag);
-  cell.textContent = value;
+  const renderRich = () => {
+    cell.replaceChildren();
+    appendRichInline(cell, value);
+  };
+  renderRich();
   if (alignment) cell.style.textAlign = alignment;
+  cell.tabIndex = 0;
+  cell.dataset.tableCell = tableCellKey(address);
+  cell.setAttribute("role", "button");
+  cell.setAttribute("aria-label", `Edit table cell: ${value || "empty"}`);
+  cell.title = "Click or press Enter to edit; Cmd/Ctrl-click a link to open it";
+
+  const activate = (selection: { start: number; end: number } | null = null) => {
+    if (cell.querySelector("input")) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "cm-md-table-cell-input";
+    input.value = value;
+    input.setAttribute("aria-label", "Table cell Markdown");
+    cell.replaceChildren(input);
+    let finished = false;
+
+    const finish = (
+      next: MarkdownTableCellAddress | null = null,
+      boundary: "before" | "after" | null = null,
+    ) => {
+      if (finished) return;
+      finished = true;
+      const replacement = updateMarkdownTableCell(model, address, input.value);
+      if (replacement === null || replacement === model.source) {
+        renderRich();
+        focusRenderedTableCell(
+          view,
+          model.from,
+          next,
+          boundary === "before" ? model.from : boundary === "after" ? model.to : null,
+        );
+        return;
+      }
+      const anchor = boundary === "before" ? model.from : model.from + replacement.length;
+      view.dispatch({
+        changes: { from: model.from, to: model.to, insert: replacement },
+        selection: { anchor },
+        scrollIntoView: true,
+      });
+      focusRenderedTableCell(
+        view,
+        model.from,
+        next,
+        boundary === null ? null : anchor,
+      );
+    };
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finished = true;
+        renderRich();
+        cell.focus();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(address);
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const direction = event.shiftKey ? -1 : 1;
+        const next = nextMarkdownTableCell(model, address, direction);
+        finish(next, next ? null : direction < 0 ? "before" : "after");
+      }
+    });
+    input.addEventListener("blur", () => finish());
+    input.focus();
+    if (selection) {
+      input.setSelectionRange(selection.start, selection.end);
+      requestAnimationFrame(() => {
+        if (!input.isConnected) return;
+        input.setSelectionRange(selection.start, selection.end);
+        input.scrollLeft = 0;
+      });
+    } else input.select();
+  };
+
+  cell.addEventListener("click", (event) => {
+    const targetLink = (event.target as HTMLElement | null)?.closest?.("a") ?? null;
+    const action = tableCellPointerAction(
+      Boolean(targetLink),
+      event.metaKey || event.ctrlKey,
+    );
+    if (action === "follow-link") return;
+    event.preventDefault();
+    activate(tableCellLinkSelection(value, targetLink?.textContent ?? null));
+  });
+  cell.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== "F2") return;
+    event.preventDefault();
+    activate();
+  });
   return cell;
+}
+
+export function tableCellPointerAction(
+  targetIsLink: boolean,
+  modified: boolean,
+): "edit" | "follow-link" {
+  return targetIsLink && modified ? "follow-link" : "edit";
+}
+
+export function tableCellLinkSelection(
+  value: string,
+  linkText: string | null,
+): { start: number; end: number } | null {
+  if (!linkText) return null;
+  const marker = `[${linkText}]`;
+  const markerStart = value.indexOf(marker);
+  if (markerStart < 0) return null;
+  return { start: markerStart + 1, end: markerStart + 1 + linkText.length };
 }
 
 // Marks that, when present as a node's child, denote raw markdown syntax we hide.
@@ -190,7 +393,16 @@ const HIDDEN_MARK_NODES = new Set<string>([
 ]);
 
 // Container nodes whose presence we style with a mark class.
-function headingClass(name: string): string | null {
+function isSetextHeading(name: string | null): boolean {
+  return name === "SetextHeading1" || name === "SetextHeading2";
+}
+
+export function headingPreviewClass(name: string, active: boolean): string | null {
+  // A Setext heading spans two source lines. Keep both lines visibly raw while
+  // the cursor is anywhere inside them, so typing `---` as a separator cannot
+  // silently restyle the preceding prose. Moving away deliberately settles the
+  // valid Markdown back into rich heading preview.
+  if (active && isSetextHeading(name)) return null;
   switch (name) {
     case "ATXHeading1":
     case "SetextHeading1":
@@ -209,6 +421,18 @@ function headingClass(name: string): string | null {
     default:
       return null;
   }
+}
+
+/** Whether a heading marker should be hidden in rich preview. Kept separate from
+ * the DOM decoration builder so active Setext editing has a direct regression
+ * contract: the underline belongs to the whole two-line heading, not just its
+ * own line. */
+export function shouldHideHeadingMark(
+  parentName: string | null,
+  headingActive: boolean,
+  markActive: boolean,
+): boolean {
+  return !markActive && !(headingActive && isSetextHeading(parentName));
 }
 
 function inlineMarkClass(name: string): string | null {
@@ -245,11 +469,28 @@ function selectionOnRange(view: EditorView, from: number, to: number): boolean {
 
 const hiddenMark = Decoration.replace({});
 
+export function previewStyleNeedsRebuild(change: {
+  docChanged: boolean;
+  viewportChanged: boolean;
+  selectionSet: boolean;
+  focusChanged: boolean;
+  treeChanged: boolean;
+}): boolean {
+  return (
+    change.docChanged ||
+    change.viewportChanged ||
+    change.selectionSet ||
+    change.focusChanged ||
+    change.treeChanged
+  );
+}
+
 // ── STYLE plugin ──────────────────────────────────────────────────────────────
 function buildStyle(view: EditorView): DecorationSet {
   // Collect ranges then sort by (from, startSide) so the builder never receives
   // out-of-order input — heading marks and inline marks can interleave.
   const ranges: Range<Decoration>[] = [];
+  const standaloneInsertions = standaloneInsertionTokens(view.state);
   const quoteLineClass = Decoration.line({ class: "cm-md-quote-line" });
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
@@ -258,13 +499,23 @@ function buildStyle(view: EditorView): DecorationSet {
       to: vTo,
       enter: (node) => {
         const name = node.name;
+        if (
+          standaloneInsertions.some(
+            (insertion) => insertion.from <= node.from && node.to <= insertion.to,
+          )
+        ) {
+          return false;
+        }
         // Don't descend into CriticMarkup — its view owns styling there.
         if (name.startsWith("CM")) return false;
         // Inactive tables are one block widget; active tables deliberately stay
         // raw, without nested preview styling obscuring the editable source.
-        if (name === "Table") return false;
+        if (name === "Table" || name === "FencedCode" || name === "CodeBlock") return false;
 
-        const hClass = headingClass(name);
+        const hClass = headingPreviewClass(
+          name,
+          selectionOnRange(view, node.from, node.to),
+        );
         if (hClass) {
           ranges.push(Decoration.mark({ class: hClass }).range(node.from, node.to));
           return;
@@ -302,7 +553,15 @@ const styleViewPlugin = ViewPlugin.fromClass(
     update(u: ViewUpdate) {
       // syntaxTree check: the parse is async on large docs — rebuild when the
       // tree extends, or styling freezes at the first-paint parse boundary.
-      if (u.docChanged || u.viewportChanged || u.selectionSet || syntaxTree(u.state) !== syntaxTree(u.startState)) {
+      if (
+        previewStyleNeedsRebuild({
+          docChanged: u.docChanged,
+          viewportChanged: u.viewportChanged,
+          selectionSet: u.selectionSet,
+          focusChanged: u.focusChanged,
+          treeChanged: syntaxTree(u.state) !== syntaxTree(u.startState),
+        })
+      ) {
         this.decorations = buildStyle(u.view);
       }
     }
@@ -313,6 +572,7 @@ const styleViewPlugin = ViewPlugin.fromClass(
 // ── HIDE plugin ─────────────────────────────────────────────────────────────
 function buildHide(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
+  const standaloneInsertions = standaloneInsertionTokens(view.state);
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
@@ -320,6 +580,13 @@ function buildHide(view: EditorView): DecorationSet {
       to: vTo,
       enter: (node) => {
         const name = node.name;
+        if (
+          standaloneInsertions.some(
+            (insertion) => insertion.from <= node.from && node.to <= insertion.to,
+          )
+        ) {
+          return false;
+        }
         // CriticMarkup stays rendered ALWAYS — its delimiters never reveal on the
         // active line (you interact via the dot/✓/✗ controls, not the raw braces),
         // so clicking a line keeps the WYSIWYG view. Comment markup is replaced
@@ -339,7 +606,7 @@ function buildHide(view: EditorView): DecorationSet {
         // Table rendering lives in a StateField because block replacements may
         // not be supplied by a ViewPlugin. Never emit nested hide ranges: when
         // active, every cell and delimiter must remain raw and editable.
-        if (name === "Table") return false;
+        if (name === "Table" || name === "FencedCode" || name === "CodeBlock") return false;
 
         // Images: replace the whole `![alt](url)` with the rendered image (off
         // the active line). `return false` throughout — the node's LinkMark/URL
@@ -375,9 +642,22 @@ function buildHide(view: EditorView): DecorationSet {
         // bare/autolink URL in prose must stay visible (GFM emits a top-level URL
         // node for those too).
         if (name === "URL" && node.node.parent?.name !== "Link") return;
-        // Reveal markers on the active line so they can be edited.
-        if (selectionOnRange(view, node.from, node.to)) return;
+        // Reveal markers on the active line so they can be edited. Setext
+        // HeaderMark needs the parent heading's active state too because its
+        // title and underline occupy different lines.
+        const markActive = selectionOnRange(view, node.from, node.to);
+        if (name !== "HeaderMark" && markActive) return;
         if (name === "HeaderMark") {
+          const parent = node.node.parent;
+          if (
+            !shouldHideHeadingMark(
+              parent?.name ?? null,
+              parent ? selectionOnRange(view, parent.from, parent.to) : markActive,
+              markActive,
+            )
+          ) {
+            return;
+          }
           // Also hide the single space after `#`/`##` so the heading text renders
           // flush — otherwise the hidden marker leaves a leading space (looks like
           // the line isn't really a heading).
@@ -417,87 +697,76 @@ const hideViewPlugin = ViewPlugin.fromClass(
   },
 );
 
-interface TablePreviewState {
-  focused: boolean;
-  decorations: DecorationSet;
-}
-
-const setTablePreviewFocus = StateEffect.define<boolean>();
-
-function buildTablePreviews(
-  state: EditorState,
-  focused: boolean,
-): DecorationSet {
+function buildBlockPreviews(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   syntaxTree(state).iterate({
     enter(node) {
-      if (node.name !== "Table") return;
-      const model = tablePreviewForNode(
-        state.doc,
-        node.node,
-        state.selection.ranges,
-        focused,
-      );
-      if (model) {
+      if (
+        (node.name === "FencedCode" || node.name === "CodeBlock") &&
+        node.node.parent?.name === "Document"
+      ) {
         ranges.push(
           Decoration.replace({
-            widget: new TableWidget(model),
+            widget: new CodeBlockWidget(state.doc.sliceString(node.from, node.to)),
             block: true,
             inclusive: false,
           }).range(node.from, node.to),
         );
+        return false;
       }
-      return false;
+      if (node.name === "HTMLBlock" && node.node.parent?.name === "Document") {
+        ranges.push(
+          Decoration.replace({
+            widget: new HtmlBlockWidget(state.doc.sliceString(node.from, node.to)),
+            block: true,
+            inclusive: false,
+          }).range(node.from, node.to),
+        );
+        return false;
+      }
+      if (node.name === "Table") {
+        const model = tablePreviewForNode(state.doc, node.node);
+        if (model) {
+          ranges.push(
+            Decoration.replace({
+              widget: new TableWidget(model),
+              block: true,
+              inclusive: false,
+            }).range(node.from, node.to),
+          );
+        }
+        return false;
+      }
+      return;
     },
   });
 
+  ranges.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
   const builder = new RangeSetBuilder<Decoration>();
   for (const range of ranges) builder.add(range.from, range.to, range.value);
   return builder.finish();
 }
 
-const tablePreviewField = StateField.define<TablePreviewState>({
-  create(state) {
-    return { focused: false, decorations: buildTablePreviews(state, false) };
-  },
+const blockPreviewField = StateField.define<DecorationSet>({
+  create: buildBlockPreviews,
   update(value, transaction) {
-    let focused = value.focused;
-    for (const effect of transaction.effects) {
-      if (effect.is(setTablePreviewFocus)) focused = effect.value;
-    }
     if (
       transaction.docChanged ||
-      transaction.selection ||
-      focused !== value.focused ||
       syntaxTree(transaction.state) !== syntaxTree(transaction.startState)
     ) {
-      return {
-        focused,
-        decorations: buildTablePreviews(transaction.state, focused),
-      };
+      return buildBlockPreviews(transaction.state);
     }
     return value;
   },
-  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
-});
-
-const tableFocusHandlers = EditorView.domEventHandlers({
-  focus(_event, view) {
-    if (!view.state.field(tablePreviewField).focused) {
-      view.dispatch({ effects: setTablePreviewFocus.of(true) });
-    }
-  },
-  blur(_event, view) {
-    if (view.state.field(tablePreviewField).focused) {
-      view.dispatch({ effects: setTablePreviewFocus.of(false) });
-    }
-  },
+  provide: (field) => [
+    EditorView.decorations.from(field),
+    EditorView.atomicRanges.from(field, (decorations) => () => decorations),
+  ],
 });
 
 /** The live-preview extension: inline styling/hiding plus block table previews. */
 export const markdownPreview: Extension = [
   styleViewPlugin,
   hideViewPlugin,
-  tablePreviewField,
-  tableFocusHandlers,
+  blockPreviewField,
 ];

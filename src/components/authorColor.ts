@@ -1,6 +1,6 @@
 // Deterministic per-author color. Hashes the author name to one of the eight
 // --author-N hues defined in src/index.css, so the same author always renders
-// in the same color across the sidebar and nav panel. A null / empty author
+// in the same color across review surfaces. A null / empty author
 // falls back to the neutral --muted var.
 
 const AUTHOR_HUE_COUNT = 8;

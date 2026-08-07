@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../../server";
-import type { AcmServer } from "../../server";
+import type { AcmServer, StartServerOptions } from "../../server";
 
 const SEED = "Para one.\n\nPara two is here.\n";
 const HUMAN = "Para one EDITED.\n\nPara two is here.\n"; // edits line 0
@@ -35,11 +35,14 @@ afterEach(() => {
   while (live.length) live.pop()!.stop();
 });
 
-async function boot(seed: string): Promise<{ url: string; docPath: string }> {
+async function boot(
+  seed: string,
+  opts: Omit<Partial<StartServerOptions>, "docPath" | "port" | "staticDir"> = {},
+): Promise<{ url: string; docPath: string }> {
   const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
   await Bun.write(docPath, seed);
   // Port 0 → the OS hands out a free ephemeral port, so parallel runs can't collide.
-  const srv = startServer({ docPath, port: 0, staticDir: "./dist" });
+  const srv = startServer({ docPath, port: 0, staticDir: "./dist", ...opts });
   live.push(srv);
   // 127.0.0.1, not localhost: Bun's fetch can resolve localhost to ::1 while the
   // server listens on IPv4 only, and that connect hangs instead of refusing.
@@ -57,11 +60,29 @@ async function boot(seed: string): Promise<{ url: string; docPath: string }> {
 
 const J = { "content-type": "application/json" };
 const put = async (url: string, content: string, baseVersion: number) => {
-  const r = await fetch(`${url}/api/doc`, { method: "PUT", headers: J, body: JSON.stringify({ content, baseVersion }) });
+  const snapshot = (await (await fetch(`${url}/api/doc`)).json()) as {
+    path: string;
+    serverEpoch: string;
+  };
+  const r = await fetch(`${url}/api/doc`, {
+    method: "PUT",
+    headers: J,
+    body: JSON.stringify({
+      content,
+      baseVersion,
+      documentPath: snapshot.path,
+      serverEpoch: snapshot.serverEpoch,
+    }),
+  });
   return { status: r.status, body: (await r.json()) as { version: number; content?: string; conflict?: string } };
 };
 const agentWrite = async (url: string, base: string, content: string) => {
-  const r = await fetch(`${url}/api/agent-write`, { method: "POST", headers: J, body: JSON.stringify({ base, content }) });
+  const snapshot = (await (await fetch(`${url}/api/doc`)).json()) as { path: string };
+  const r = await fetch(`${url}/api/agent-write`, {
+    method: "POST",
+    headers: J,
+    body: JSON.stringify({ base, content, documentPath: snapshot.path }),
+  });
   return { status: r.status, body: (await r.json()) as { version: number; content?: string; conflict?: string } };
 };
 const presence = (url: string, from: number, to: number) =>
@@ -131,6 +152,103 @@ describe("#38 — CLI never fakes success against a non-agent-write server (vers
   // 20s timeout: this test pays a full `bun cli.ts` subprocess boot (transpiling the
   // whole CLI graph, ~1–2.5s idle, worse under machine load) that the in-process
   // tests above don't; the default 5s trips on a loaded machine.
+  test(
+    "a live audit failure compensates the edit instead of losing the decision event",
+    async () => {
+      const seed = "Before {==old words==}{>>@maya: SUGGEST: new words<<} after.\n";
+      const { url, docPath } = await boot(seed, {
+        appendDecisionEvents: async (_path, events) => {
+          if (events.length > 0) throw new Error("decision disk unavailable");
+          return { appended: 0 };
+        },
+      });
+
+      const proc = Bun.spawn(
+        ["bun", "cli.ts", "accept", "new words", "--author", "Reviewer", "--doc", docPath],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const exit = await proc.exited;
+      const stderr = await new Response(proc.stderr).text();
+
+      expect(exit).not.toBe(0);
+      expect(stderr).toContain("decision history could not be persisted");
+      expect(stderr).toContain("document was restored; no review decision was applied");
+      expect(await disk(docPath)).toBe(seed);
+      expect(await (await fetch(`${url}/api/decision-recovery`)).json()).toEqual({
+        decisionEvents: [],
+      });
+    },
+    20_000,
+  );
+
+  test(
+    "an older editor accepts the write but omits audit acknowledgement → CLI reports audit failure",
+    async () => {
+      const docPath = join(mkdtempSync(join(tmpdir(), "acm-doc-")), "doc.md");
+      const seed = "Before {==old words==}{>>@maya: SUGGEST: new words<<} after.\n";
+      await Bun.write(docPath, seed);
+      let current = seed;
+      let oldVersion = 0;
+
+      // Stand-in for the immediately previous ACM protocol: it supports
+      // /api/agent-write and commits content, but ignores decisionEvents and
+      // returns no audit receipt.
+      const oldAcm = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const pathname = new URL(req.url).pathname;
+          if (pathname === "/api/doc") {
+            return Response.json({ content: current, version: oldVersion });
+          }
+          if (pathname === "/api/agent-write" && req.method === "POST") {
+            const body = (await req.json()) as { content: string };
+            current = body.content;
+            oldVersion += 1;
+            await Bun.write(docPath, current);
+            return Response.json({ content: current, version: oldVersion });
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+      const cfg = join(process.env.XDG_CONFIG_HOME!, "acm");
+      mkdirSync(cfg, { recursive: true });
+      await Bun.write(
+        join(cfg, "instances.json"),
+        JSON.stringify({
+          [String(oldAcm.port)]: {
+            port: oldAcm.port,
+            doc: docPath,
+            pid: process.pid,
+            startedAt: "2026-08-05T00:00:00Z",
+          },
+        }),
+      );
+
+      const proc = Bun.spawn(
+        ["bun", "cli.ts", "accept", "new words", "--author", "Reviewer", "--doc", docPath],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const exit = await proc.exited;
+      const stderr = await new Response(proc.stderr).text();
+      oldAcm.stop();
+
+      expect(exit).not.toBe(0);
+      expect(stderr).toContain("does not support durable decision history");
+      expect(await disk(docPath)).toBe(seed);
+    },
+    20_000,
+  );
+
   test(
     "an older editor (serves HTML for /api/agent-write) → CLI hard-fails, no direct write",
     async () => {
