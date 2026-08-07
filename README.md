@@ -39,6 +39,9 @@ acm edit path/to/doc.md    # open that file, creating it if missing
 acm --help                 # every command and option
 ```
 
+The old `acm path/to/doc.md` spelling is deliberately rejected; use
+`acm edit path/to/doc.md` so opening a document is always explicit.
+
 The launcher creates nothing until you confirm a Markdown filename. Each editor
 process/window still owns exactly one document; the lightweight launcher adds
 New, Open and Recent Documents without turning ACM into a workspace or file
@@ -115,19 +118,30 @@ accessible labels name every icon. The old overview panel, filter strip and
 aggregate suggestion count were removed: use the inline/edge decision controls,
 the open-comment pill and `Alt+↓`/`Alt+↑` review navigation instead.
 
+### Where are comments and suggestions composed?
+
+Select prose to reveal **Add comment** and **Make suggestion** beside the
+selection. The composer and thread actions live in the comments edge on desktop
+and in the comments sheet on narrow screens, so authoring and review use one
+consistent surface instead of the old top-bar composer.
+
 ### Can I edit a rendered table without switching the whole document to source?
 
-Yes. Click a rich table cell to edit it in place; press Tab or Shift-Tab to move
-between cells. Modified-click follows a link instead of editing it. Type `/table`
-on an otherwise empty line and press Enter to insert a two-column starter table.
-The global code/eye control remains the deliberate escape to raw Markdown, where
-the command palette can also align the table source.
+Yes. Click a rich table cell, or focus it and press Enter/F2, to edit it in
+place. Enter commits, Escape cancels, and Tab or Shift-Tab moves between cells.
+A normal click edits a linked cell and selects its readable label; modified-click
+follows the link. Type `/table` on an otherwise empty line and press Enter to
+insert a two-column starter table. The global code/eye control remains the
+deliberate, byte-preserving escape to raw Markdown. Source alignment is a separate
+explicit, undoable **Format table source** action rather than an automatic rewrite.
 
 ### Why can a tracked addition appear in the page and in the comments edge?
 
 The page is the proposed content in context. The compact card beside it is only
 the decision surface for accepting or rejecting it; it does not repeat the rich
-content. On narrow screens that decision surface moves into the comments sheet.
+content. In raw mode, where the in-document rich block is disabled, the full
+proposal remains visible in the review card. On narrow screens that decision
+surface moves into the comments sheet.
 
 ### Does ACM render HTML from Markdown?
 
@@ -135,6 +149,15 @@ It renders a conservative, sanitised subset of standard HTML, including tables,
 lists, links and inline formatting. That supports a two-column bullet layout with
 a standard HTML table. Scripts, event handlers, unsafe URLs, styles and custom
 elements such as `<columns>` are removed or left inspectable as source.
+
+### How does printing work?
+
+Cmd/Ctrl-P prints the accepted document state without CriticMarkup delimiters or
+review chrome. **Simple** keeps the article conventional and collects footnotes as
+endnotes. **Tufte** moves short references into an outer rib; the alternating-side
+option places odd-page ribs on the right and even-page ribs on the left, or can be
+disabled to keep every rib on the right. ACM measures at A4 print width before the
+browser produces the final PDF.
 
 ### How does the comments edge behave?
 
@@ -149,25 +172,42 @@ the comments edge becomes a bottom sheet, selection actions stay close to the
 selected text, and the document uses the available width instead of reserving a
 desktop rail.
 
+### What quality checks does ACM run?
+
+`bun run typecheck` runs TypeScript's `tsc --noEmit`, the closest equivalent to a
+Python static type checker such as `ty`. `bun run check` runs that typecheck, the
+full Bun test suite, the production and standalone-binary builds, a binary smoke
+from outside `node_modules`, and setup tests. ACM currently has no separate
+ESLint/Biome-style lint command.
+
 ### How was the product demo made?
 
 The Playwright Recast capture was tried first and recorded the real interaction,
 but its timing was too abrupt for a clear product story. The final film uses
 retina captures from the genuine compiled app, composed with HyperFrames into
 slower camera moves, held before/action/after states and larger local captions.
-No product UI is mocked.
+No product UI is mocked. For future demos, `webapp-agent-demo` is the better fit
+for naturally flowing live interaction, while HyperFrames remains useful for
+deterministic framing; a hybrid can use both.
 
 ## How it works for an agent
 
-An agent has two equally first-class ways to participate — both end as plain text in the same `.md`:
+An agent has two ways to participate, but they are not equally safe while an
+editor is live. Reading the `.md` directly is always fine; writes should use the
+live ACM instance whenever one owns the document.
 
-1. **Write the file directly.** Append/insert CriticMarkup. e.g.
+1. **Write the file directly only when no ACM editor is running.** Append/insert
+   CriticMarkup, for example:
    ```bash
    printf '\n\nNew section. {>>@claude: is this the right place?<<}\n' >> sample-essay.md
    ```
-   ACM picks it up and renders it live.
+   A blind file write while an editor is live skips ACM's merge and cursor guards
+   and can overwrite unsaved human typing.
 
-2. **Drop a comment via the HTTP endpoint** (no need to hand-write markup at a precise offset):
+2. **Use the ACM verbs or HTTP endpoint while an editor is live.** They route the
+   mutation through the owning instance so concurrent human edits are merged or
+   rejected safely. For example, to drop a comment without hand-writing markup at
+   a precise offset:
    ```bash
    curl -X POST localhost:12001/api/comment \
      -H 'content-type: application/json' \
