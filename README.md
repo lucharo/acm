@@ -20,6 +20,10 @@ standalone `acm` binary, installs it in a user-local directory already on
 `PATH` (normally `~/.local/bin`), installs the agent-review skill through the
 standard `skills` CLI, and verifies both are discoverable. Re-run the same
 command after pulling changes.
+
+Setup atomically replaces the installed executable. It does not restart or hot-reload an
+ACM server that is already running; restart that server to use the new version.
+
 `just install` is a convenience alias. To choose the binary directory explicitly:
 
 ```bash
