@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { merge3, changedSpan, changedFragments } from "./merge";
+import { merge3, changedSpan, changedFragments, textChangeHunks } from "./merge";
 
 // Byte-preservation is the whole point. This helper asserts a clean merge AND that
 // the round-trip is lossless: both sides' changes are present in the result.
@@ -210,5 +210,27 @@ describe("changedSpan — extracts the agent's additive insert", () => {
   });
   test("no change → empty inserted span", () => {
     expect(changedSpan("x\n", "x\n").inserted).toBe("");
+  });
+});
+
+describe("textChangeHunks — bounded provenance diff", () => {
+  test("keeps distant edits separate when the line matrix exceeds its budget", () => {
+    const before = "head\na\nstable\nb\ntail";
+    const after = "head\nA\nstable\nB\ntail";
+
+    expect(textChangeHunks(before, after, 0)).toEqual([
+      {
+        beforeFrom: before.indexOf("\na\n") + 1,
+        beforeTo: before.indexOf("\na\n") + 2,
+        afterFrom: after.indexOf("\nA\n") + 1,
+        afterTo: after.indexOf("\nA\n") + 2,
+      },
+      {
+        beforeFrom: before.lastIndexOf("b"),
+        beforeTo: before.lastIndexOf("b") + 1,
+        afterFrom: after.lastIndexOf("B"),
+        afterTo: after.lastIndexOf("B") + 1,
+      },
+    ]);
   });
 });

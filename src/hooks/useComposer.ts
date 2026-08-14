@@ -1,9 +1,4 @@
-// ── Selection-anchored comment composer + one-click suggestion hand-off ──────
-// All composer state and the three actions that write comments into the buffer:
-// open (capture the selection + disclose anchor/point), post (span-anchored when
-// wrappable, else clamped point comment; optional mark-seen), and the canned
-// suggest-edit hand-off. Extracted whole from Workspace — the editor view ref,
-// author name and seen-setter arrive as inputs.
+// ── Selection-anchored comment / suggestion composer ───────────────────────
 
 import { useCallback, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
@@ -13,20 +8,21 @@ import {
   clampAnchorOutsideComments,
   wrappableSpan,
   commentKey,
+  selectionAnnotationEdit,
 } from "../lib/criticmarkup";
+import type { SelectionAnnotationKind } from "../lib/criticmarkup";
 import { isComment } from "../lib/types";
-
-// Canned body for the one-click "Suggest edit" hand-off action (also matched by
-// replyAndSeen in App — the one shared definition).
-export const SUGGEST_EDIT_TEXT = "suggest edit";
+import type { ComposerAnchorRange } from "../editor/composerAnchor";
 
 export function useComposer(
   viewRef: React.MutableRefObject<EditorView | null>,
   author: string,
   setSeen: React.Dispatch<React.SetStateAction<Set<string>>>,
+  setComposerAnchor: (range: ComposerAnchorRange | null) => void,
 ) {
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [composerKind, setComposerKind] = useState<SelectionAnnotationKind>("comment");
   // Whether the captured selection can anchor as a `{==span==}` (vs falling back to
   // a point comment) — surfaced in the composer so the fallback is never silent.
   const [composerAnchored, setComposerAnchored] = useState(true);
@@ -35,28 +31,37 @@ export function useComposer(
   // the SPAN (wrapping it in `{==…==}`), not just a point — set in openComposer.
   const commentRange = useRef<{ from: number; to: number } | null>(null);
 
-  // ── Add a comment from the current selection ──────────────────────────────────
-  const openComposer = useCallback(() => {
+  const openSelectionComposer = useCallback((kind: SelectionAnnotationKind) => {
     const v = viewRef.current;
     if (!v) return;
     const sel = v.state.selection.main;
     if (sel.empty) return;
     commentAnchor.current = sel.to;
-    commentRange.current = { from: sel.from, to: sel.to };
+    const range = { from: sel.from, to: sel.to };
+    commentRange.current = range;
+    setComposerAnchor(range);
     // Tell the composer up front whether this selection anchors as a span or will
     // fall back to a point comment (selection cuts markup / crosses a paragraph).
     setComposerAnchored(wrappableSpan(v.state.doc.toString(), sel.from, sel.to));
+    setComposerKind(kind);
     setDraft("");
     setComposing(true);
-  }, [viewRef]);
+  }, [viewRef, setComposerAnchor]);
+
+  const openComposer = useCallback(() => openSelectionComposer("comment"), [openSelectionComposer]);
+  const openSuggestionComposer = useCallback(
+    () => openSelectionComposer("suggestion"),
+    [openSelectionComposer],
+  );
 
   const cancelComposer = useCallback(() => {
     setComposing(false);
     setDraft("");
     commentAnchor.current = null;
     commentRange.current = null;
+    setComposerAnchor(null);
     viewRef.current?.focus();
-  }, [viewRef]);
+  }, [viewRef, setComposerAnchor]);
 
   const postComment = useCallback(
     // markSeen (⌘⇧↵): post the comment and immediately mark it seen — the
@@ -78,14 +83,23 @@ export function useComposer(
 
       let commentStart: number;
       if (range && wrappableSpan(content, range.from, range.to)) {
-        const open = `{==${content.slice(range.from, range.to)}==}`;
-        const marker = open + formatComment(author, text);
+        const result = selectionAnnotationEdit(
+          content,
+          range.from,
+          range.to,
+          author,
+          text,
+          composerKind,
+        );
+        if (!result.ok) return;
+        const marker = result.change.insert;
         v.dispatch({
-          changes: { from: range.from, to: range.to, insert: marker },
+          changes: result.change,
           selection: { anchor: range.from + marker.length },
         });
-        commentStart = range.from + open.length; // the `{>>` lands right after the highlight
+        commentStart = range.from + marker.indexOf("{>>");
       } else {
+        if (composerKind === "suggestion") return;
         const raw = range ? range.to : commentAnchor.current!;
         const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(raw, content.length)));
         const prev = at > 0 ? content.slice(at - 1, at) : "";
@@ -97,7 +111,7 @@ export function useComposer(
         });
         commentStart = at + lead.length;
       }
-      if (markSeen) {
+      if (markSeen && composerKind === "comment") {
         const after = v.state.doc.toString();
         const fresh = scanTokens(after)
           .filter(isComment)
@@ -108,53 +122,20 @@ export function useComposer(
       setDraft("");
       commentAnchor.current = null;
       commentRange.current = null;
+      setComposerAnchor(null);
     },
-    [draft, viewRef, author, setSeen],
+    [draft, viewRef, author, setSeen, composerKind, setComposerAnchor],
   );
-
-  // One-click "Make suggestion" on the current selection: anchor a canned
-  // "suggest edit" comment + mark it seen, handing the span to the agent — no
-  // composer or typing. Mirrors postComment's span/point fallback.
-  const suggestEditOnSelection = useCallback(() => {
-    const v = viewRef.current;
-    if (!v) return;
-    const sel = v.state.selection.main;
-    if (sel.empty) return;
-    const content = v.state.doc.toString();
-    let commentStart: number;
-    if (wrappableSpan(content, sel.from, sel.to)) {
-      const open = `{==${content.slice(sel.from, sel.to)}==}`;
-      const marker = open + formatComment(author, SUGGEST_EDIT_TEXT);
-      v.dispatch({
-        changes: { from: sel.from, to: sel.to, insert: marker },
-        selection: { anchor: sel.from + marker.length },
-      });
-      commentStart = sel.from + open.length;
-    } else {
-      const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(sel.to, content.length)));
-      const prev = at > 0 ? content.slice(at - 1, at) : "";
-      const lead = at > 0 && !/\s/.test(prev) ? " " : "";
-      const marker = lead + formatComment(author, SUGGEST_EDIT_TEXT);
-      v.dispatch({
-        changes: { from: at, insert: marker },
-        selection: { anchor: at + marker.length },
-      });
-      commentStart = at + lead.length;
-    }
-    const fresh = scanTokens(v.state.doc.toString())
-      .filter(isComment)
-      .find((c) => c.from === commentStart);
-    if (fresh) setSeen((p) => new Set(p).add(commentKey(fresh)));
-  }, [viewRef, author, setSeen]);
 
   return {
     composing,
     draft,
     setDraft,
+    composerKind,
     composerAnchored,
     openComposer,
+    openSuggestionComposer,
     cancelComposer,
     postComment,
-    suggestEditOnSelection,
   };
 }

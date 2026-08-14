@@ -37,6 +37,7 @@
     "dictionary-en": "^4.0.0",
     "dictionary-en-gb": "^3.0.0",
     "fflate": "^0.8.3",
+    "katex": "0.18.4",
     "lucide-react": "^1.30.0",
     "nspell": "^2.1.5",
     "react": "^19.0.0",

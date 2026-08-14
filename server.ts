@@ -26,7 +26,11 @@ import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
 import { saveAsset, resolveUnderDocDir } from "./src/server/asset";
 import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
-import { isDecisionEvent, type DecisionEvent } from "./src/lib/decision";
+import {
+  isDecisionEvent,
+  rebaseDecisionEventsForCommit,
+  type DecisionEvent,
+} from "./src/lib/decision";
 import {
   appendDecisionEvent as appendDecisionEventToStore,
   appendDecisionEvents as appendDecisionEventsToStore,
@@ -35,6 +39,11 @@ import {
 import { isAllowedOrigin, isLoopbackHost, serveAppAsset } from "./src/server/http";
 import { mergeConfigPatch } from "./src/lib/seenState";
 import { documentUpdateLockPath, withFileUpdateLock } from "./src/server/fileLock";
+import {
+  readDocumentProvenanceRange,
+  recordProvenanceWrite,
+} from "./src/server/provenance";
+import type { ProvenanceAttribution, ProvenanceSource } from "./src/lib/provenance";
 import {
   clearDecisionRecoveryEvents as clearDecisionRecoveryEventsInStore,
   readDecisionRecoveryEvents as readDecisionRecoveryEventsFromStore,
@@ -175,10 +184,22 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // On divergence it 3-way merges so disjoint edits from both writers survive; only a
   // genuine same-line overlap is a conflict (nothing written). Caller holds withLock.
   type CommitResult =
-    | { ok: true; content: string; version: number }
+    | { ok: true; content: string; version: number; decisionEvents: DecisionEvent[] }
     | { ok: false; reason: "overlap" | "containment"; content: string; version: number };
 
-  async function commitWrite(mine: string, base: string, guards?: string[]): Promise<CommitResult> {
+  interface WriteIdentity {
+    author: string;
+    source: ProvenanceSource;
+    operation: string;
+    decisionEvents?: readonly DecisionEvent[];
+  }
+
+  async function commitWrite(
+    mine: string,
+    base: string,
+    guards: string[] | undefined,
+    identity: WriteIdentity,
+  ): Promise<CommitResult> {
     return withFileUpdateLock(
       documentUpdateLockPath(docPath),
       `document ${docPath}`,
@@ -195,14 +216,37 @@ export function startServer(opts: StartServerOptions): AcmServer {
           }
           toWrite = m.result;
         }
-        if (toWrite === theirs) return { ok: true, content: theirs, version }; // no-op
+        const decisionEvents = rebaseDecisionEventsForCommit(
+          identity.decisionEvents ?? [],
+          { base, mine, theirs, committed: toWrite },
+        );
+        if (toWrite === theirs) {
+          return { ok: true, content: theirs, version, decisionEvents }; // no-op
+        }
         await Bun.write(docPath, toWrite);
+        const attribution: ProvenanceAttribution = {
+          author: identity.author.trim() || "Unknown",
+          source: identity.source,
+          timestamp: new Date().toISOString(),
+          operation: identity.operation,
+        };
+        try {
+          await recordProvenanceWrite(
+            docPath,
+            theirs,
+            toWrite,
+            attribution,
+            decisionEvents,
+          );
+        } catch (error) {
+          console.error(`ACM warning: provenance could not be recorded: ${(error as Error).message}`);
+        }
         lastKnownHash = Bun.hash(toWrite); // hash the BYTES WRITTEN so the watcher drops our echo
         version++;
         recordVersion(toWrite);
         pushUpdate(toWrite); // broadcast the FINAL (possibly merged) bytes to every client
         recordHistorySoon("edit");
-        return { ok: true, content: toWrite, version };
+        return { ok: true, content: toWrite, version, decisionEvents };
       },
     );
   }
@@ -264,6 +308,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
   };
   const decisionDocumentMatches = (body: Record<string, unknown>): boolean =>
     body.documentPath === docPath;
+  const authorFrom = (body: Record<string, unknown>, fallback: string): string =>
+    typeof body.author === "string" && body.author.trim() ? body.author.trim() : fallback;
   const decisionDocumentMismatch = () =>
     Response.json(
       {
@@ -315,6 +361,18 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return Response.json({ content, version, path: docPath, serverEpoch });
       }
 
+      if (pathname === "/api/provenance" && req.method === "GET") {
+        const content = await Bun.file(docPath).text();
+        const parsedFrom = Number(url.searchParams.get("from") ?? 0);
+        const parsedTo = Number(url.searchParams.get("to") ?? content.length);
+        if (!Number.isInteger(parsedFrom) || !Number.isInteger(parsedTo)) {
+          return new Response("Bad request: provenance range must use integer offsets", { status: 400 });
+        }
+        const from = Math.max(0, Math.min(content.length, parsedFrom));
+        const to = Math.max(from, Math.min(content.length, parsedTo));
+        return Response.json(await readDocumentProvenanceRange(docPath, content, from, to));
+      }
+
       // PUT /api/doc → the human editor's save. Reconciles against the base the
       // editor started from (baseVersion), so a concurrent agent write is MERGED in
       // rather than clobbered. Returns the final (possibly merged) content for the
@@ -337,12 +395,17 @@ export function startServer(opts: StartServerOptions): AcmServer {
             const disk = await Bun.file(docPath).text();
             return Response.json({ content: disk, version, conflict: "stale" }, { status: 409 });
           }
-          const r = await commitWrite(content, base);
+          const r = await commitWrite(content, base, undefined, {
+            author: authorFrom(body, "You"),
+            source: "human",
+            operation: "edit",
+            decisionEvents,
+          });
           if (!r.ok) return Response.json({ content: r.content, version: r.version, conflict: r.reason }, { status: 409 });
           try {
-            await persistDecisionEvents(decisionEvents);
+            await persistDecisionEvents(r.decisionEvents);
           } catch {
-            const recovery = await retainCommittedDecisionEvents(decisionEvents);
+            const recovery = await retainCommittedDecisionEvents(r.decisionEvents);
             return Response.json(
               {
                 version: r.version,
@@ -351,14 +414,14 @@ export function startServer(opts: StartServerOptions): AcmServer {
                   status: "failed",
                   code: "decision-persistence",
                   retryable: true,
-                  decisionEvents,
+                  decisionEvents: r.decisionEvents,
                   recovery,
                 },
               },
               { status: 500 },
             );
           }
-          const recovery = await clearCommittedDecisionEvents(decisionEvents);
+          const recovery = await clearCommittedDecisionEvents(r.decisionEvents);
           return Response.json({
             version: r.version,
             content: r.content,
@@ -366,7 +429,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
               ? {
                   audit: {
                     status: "persisted",
-                    decisionEventIds: decisionEvents.map((event) => event.id),
+                    decisionEventIds: r.decisionEvents.map((event) => event.id),
                     ...(recovery ? { recovery } : {}),
                   },
                 }
@@ -458,7 +521,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return withLock(async () => {
           const before = await Bun.file(docPath).text();
           const next = insertComment(before, anchor, text, author);
-          const r = await commitWrite(next, before);
+          const r = await commitWrite(next, before, undefined, {
+            author: author?.trim() || "You",
+            source: "human",
+            operation: "comment",
+          });
           if (!r.ok) return Response.json({ conflict: r.reason }, { status: 409 });
           return Response.json({ version: r.version });
         });
@@ -486,10 +553,17 @@ export function startServer(opts: StartServerOptions): AcmServer {
               return Response.json({ conflict: "cursor" }, { status: 409 });
             }
           }
-          const r = await commitWrite(content, base, changedFragments(base, content));
+          const r = await commitWrite(content, base, changedFragments(base, content), {
+            author: authorFrom(body, "Agent"),
+            source: "agent",
+            operation: typeof body.operation === "string" && body.operation.trim()
+              ? body.operation.trim()
+              : "agent edit",
+            decisionEvents,
+          });
           if (!r.ok) return Response.json({ conflict: r.reason }, { status: 409 });
           try {
-            await persistDecisionEvents(decisionEvents);
+            await persistDecisionEvents(r.decisionEvents);
           } catch {
             return Response.json(
               {
@@ -499,7 +573,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
                   status: "failed",
                   code: "decision-persistence",
                   retryable: true,
-                  decisionEvents,
+                  decisionEvents: r.decisionEvents,
                 },
               },
               { status: 500 },
@@ -512,7 +586,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
               ? {
                   audit: {
                     status: "persisted",
-                    decisionEventIds: decisionEvents.map((event) => event.id),
+                    decisionEventIds: r.decisionEvents.map((event) => event.id),
                   },
                 }
               : {}),
@@ -628,11 +702,22 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const content = await file.text();
         const hash = Bun.hash(content);
         if (hash === lastKnownHash) return; // our own write — drop the echo
+        const before = contentByVersion.get(version) ?? content;
+        try {
+          await recordProvenanceWrite(docPath, before, content, {
+            author: "External edit",
+            source: "external",
+            timestamp: new Date().toISOString(),
+            operation: "external edit",
+          });
+        } catch (error) {
+          console.error(`ACM warning: external-edit provenance could not be recorded: ${(error as Error).message}`);
+        }
         lastKnownHash = hash;
         version++;
         recordVersion(content); // so a later in-flight save can merge against it
         pushUpdate(content);
-        recordHistorySoon("agent edit");
+        recordHistorySoon("external edit");
       });
     }, 100);
   });

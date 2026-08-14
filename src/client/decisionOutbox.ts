@@ -1,4 +1,8 @@
-import { isDecisionEvent, type DecisionEvent } from "../lib/decision";
+import {
+  isDecisionEvent,
+  rebaseDecisionEventsAfterChange,
+  type DecisionEvent,
+} from "../lib/decision";
 
 const DECISION_OUTBOX_PREFIX = "acm-decision-outbox:";
 const DECISION_OUTBOX_VERSION = 2;
@@ -284,6 +288,24 @@ export function mergeDecisionOutbox(
     merged.push({ event, writeState: "pending" });
   }
   return merged;
+}
+
+/** Keep queued result ranges aligned with the latest debounced editor buffer. */
+export function rebasePendingDecisionOutbox(
+  current: readonly DecisionOutboxEntry[],
+  before: string,
+  after: string,
+): DecisionOutboxEntry[] {
+  if (before === after) return current as DecisionOutboxEntry[];
+  let changed = false;
+  const rebased = current.map((entry) => {
+    if (entry.writeState === "committed") return entry;
+    const [event] = rebaseDecisionEventsAfterChange([entry.event], before, after);
+    if (event === entry.event) return entry;
+    changed = true;
+    return { ...entry, event };
+  });
+  return changed ? rebased : current as DecisionOutboxEntry[];
 }
 
 /** Server recovery is positive evidence that the Markdown mutation committed.

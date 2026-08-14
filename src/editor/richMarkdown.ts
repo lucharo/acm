@@ -8,6 +8,7 @@ import type {
 } from "@xmldom/xmldom";
 
 import { extractMarkdownTable } from "./markdownTable";
+import { appendMath, findMathRanges } from "./math";
 
 const markdownParser = baseMarkdownParser.configure(GFM);
 
@@ -244,13 +245,41 @@ function appendInlineRange(
   from: number,
   to: number,
 ) {
+  const children = directChildren(container).filter(
+    (child) => child.from >= from && child.to <= to,
+  );
+  const maths = findMathRanges(source.slice(from, to)).map((range) => ({
+    ...range,
+    from: range.from + from,
+    to: range.to + from,
+  }));
   let cursor = from;
-  for (const child of directChildren(container)) {
-    if (child.to <= from || child.from >= to) continue;
-    if (child.from < from || child.to > to) continue;
-    appendText(parent, source.slice(cursor, child.from));
-    appendInlineNode(parent, source, child);
-    cursor = child.to;
+  let childIndex = 0;
+  let mathIndex = 0;
+  while (cursor < to) {
+    while (children[childIndex]?.to <= cursor) childIndex += 1;
+    while (maths[mathIndex]?.to <= cursor) mathIndex += 1;
+    const child = children[childIndex];
+    const math = maths[mathIndex];
+    const nextFrom = Math.min(child?.from ?? to, math?.from ?? to);
+    appendText(parent, source.slice(cursor, nextFrom));
+    cursor = nextFrom;
+
+    if (math && math.from <= (child?.from ?? to)) {
+      if (!appendMath(parent, math.latex, math.display)) {
+        appendText(parent, source.slice(math.from, math.to));
+      }
+      cursor = math.to;
+      mathIndex += 1;
+      continue;
+    }
+    if (child) {
+      appendInlineNode(parent, source, child);
+      cursor = child.to;
+      childIndex += 1;
+      continue;
+    }
+    break;
   }
   appendText(parent, source.slice(cursor, to));
 }

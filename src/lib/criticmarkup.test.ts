@@ -26,6 +26,9 @@ import {
   pageBreakLines,
   wrappableSpan,
   isStandaloneInsertion,
+  commentBodyEdit,
+  suggestionProposalEdit,
+  selectionAnnotationEdit,
 } from "./criticmarkup";
 import { isComment, isSuggestion } from "./types";
 import type { CommentToken, SubstituteToken, SuggestionToken } from "./types";
@@ -1211,5 +1214,112 @@ describe("formatComment — close-marker round-trip is faithful", () => {
     expect(t.author).toBe("claude");
     // The displayed body restores the literal <<} (no stray zero-width space).
     expect(t.body).toBe("use <<} to close");
+  });
+});
+
+describe("review-item editing", () => {
+  test("edits a comment body while preserving its original author", () => {
+    const source = "Before {>>@claude: rough note<<} after";
+    const comment = scanTokens(source).find(isComment)!;
+
+    const result = commentBodyEdit(comment, "Clearer note with {braces}\nand a second line.");
+
+    expect(result).toEqual({
+      ok: true,
+      change: {
+        from: comment.from,
+        to: comment.to,
+        insert: formatComment("claude", "Clearer note with {braces}\nand a second line."),
+      },
+    });
+    if (!result.ok) throw new Error("expected editable comment");
+    const edited =
+      source.slice(0, result.change.from) +
+      result.change.insert +
+      source.slice(result.change.to);
+    expect(scanTokens(edited).find(isComment)).toMatchObject({
+      author: "claude",
+      body: "Clearer note with {braces}\nand a second line.",
+    });
+  });
+
+  test("preserves SUGGEST group metadata while editing only its proposed wording", () => {
+    const source = "{==old words==}{>>@codex: SUGGEST[g:clarity]: new words<<}";
+    const comment = scanTokens(source).find(isComment)!;
+
+    const result = suggestionProposalEdit(comment, "much clearer words");
+
+    expect(result).toEqual({
+      ok: true,
+      change: {
+        from: comment.from,
+        to: comment.to,
+        insert: formatComment("codex", "SUGGEST[g:clarity]: much clearer words"),
+      },
+    });
+  });
+
+  test("edits native insertion and substitution proposals without changing the original side", () => {
+    const source = "{++draft++} and {~~old~>draft~~}";
+    const suggestions = scanTokens(source).filter(isSuggestion);
+
+    expect(suggestionProposalEdit(suggestions[0], "final")).toEqual({
+      ok: true,
+      change: { from: 0, to: 11, insert: "{++final++}" },
+    });
+    expect(suggestionProposalEdit(suggestions[1], "final")).toEqual({
+      ok: true,
+      change: {
+        from: source.indexOf("{~~"),
+        to: source.length,
+        insert: "{~~old~>final~~}",
+      },
+    });
+  });
+
+  test("fails safely for an empty comment, a deletion, or markup-breaking proposal text", () => {
+    const comment = scanTokens("{>>@claude: note<<}").find(isComment)!;
+    const deletion = scanTokens("{--remove me--}").find(isSuggestion)!;
+    const insertion = scanTokens("{++draft++}").find(isSuggestion)!;
+
+    expect(commentBodyEdit(comment, "   ")).toEqual({ ok: false, reason: "empty" });
+    expect(suggestionProposalEdit(deletion, "replacement")).toEqual({
+      ok: false,
+      reason: "unsupported",
+    });
+    expect(suggestionProposalEdit(insertion, "break ++} markup")).toEqual({
+      ok: false,
+      reason: "invalid-markup",
+    });
+  });
+});
+
+describe("selection annotation editing", () => {
+  test("creates a real SUGGEST card around selected prose", () => {
+    const source = "Before selected words after";
+    const from = source.indexOf("selected words");
+    const to = from + "selected words".length;
+
+    expect(
+      selectionAnnotationEdit(source, from, to, "Luis", "clearer words", "suggestion"),
+    ).toEqual({
+      ok: true,
+      change: {
+        from,
+        to,
+        insert: "{==selected words==}{>>@Luis: SUGGEST: clearer words<<}",
+      },
+    });
+  });
+
+  test("refuses an empty or unwrappable suggestion instead of writing a point placeholder", () => {
+    const source = "first paragraph\n\nsecond paragraph";
+
+    expect(
+      selectionAnnotationEdit(source, 0, source.length, "Luis", "replacement", "suggestion"),
+    ).toEqual({ ok: false, reason: "not-wrappable" });
+    expect(
+      selectionAnnotationEdit("selected", 0, 8, "Luis", "   ", "suggestion"),
+    ).toEqual({ ok: false, reason: "empty" });
   });
 });

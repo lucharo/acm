@@ -30,6 +30,17 @@ describe("safe rich Markdown rendering", () => {
     );
   });
 
+  test("renders inline and display LaTeX while leaving code literal", () => {
+    const rendered = renderBlocks(
+      "Euler wrote $e^{i\\pi}+1=0$, then:\n\n$$\\int_0^1 x^2 dx$$\n\n`$not_math$`",
+    );
+
+    expect(rendered).toContain('class="katex"');
+    expect(rendered).toContain('class="katex-display"');
+    expect(rendered).toContain("<code>$not_math$</code>");
+    expect(rendered).not.toContain("$e^{i\\pi}+1=0$");
+  });
+
   test("keeps unsafe links and malformed or unsupported markup as visible text", () => {
     const rendered = renderInline(
       "[bad](javascript:alert(1)) broken *em ![image](data:text/html,boom)",

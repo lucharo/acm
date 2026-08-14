@@ -2,6 +2,7 @@
 // exact shape; the server persists it outside the published Markdown document.
 
 import type { CommentThread, CommentToken, SuggestionToken } from "./types";
+import { textChangeHunks } from "./merge";
 import {
   groupThreads,
   resolveAnchorEdit,
@@ -30,6 +31,12 @@ export interface DecisionTarget {
   commentId?: string;
   groupId?: string;
   memberIds?: string[];
+  /** Complete edit range in the document before the decision lands. */
+  beforeFrom?: number;
+  beforeTo?: number;
+  /** Resulting accepted/rejected text range after the decision lands. */
+  afterFrom?: number;
+  afterTo?: number;
 }
 
 /**
@@ -48,6 +55,8 @@ export interface DecisionEvent {
   originalText: string | null;
   proposedText: string | null;
   resultingText: string | null;
+  /** Author of a structured suggestion. The reviewer remains `actor`. */
+  proposer?: string | null;
 }
 
 /** Pending audit changes emitted alongside one editor document transaction. */
@@ -78,6 +87,9 @@ function nullableString(value: unknown): boolean {
 function isDecisionTarget(value: unknown): value is DecisionTarget {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const target = value as Record<string, unknown>;
+  const validRange = (from: unknown, to: unknown) =>
+    (from === undefined && to === undefined) ||
+    (Number.isInteger(from) && Number.isInteger(to) && Number(from) >= 0 && Number(to) >= Number(from));
   return (
     typeof target.kind === "string" &&
     TARGET_KINDS.has(target.kind) &&
@@ -87,7 +99,9 @@ function isDecisionTarget(value: unknown): value is DecisionTarget {
     optionalString(target.commentId) &&
     optionalString(target.groupId) &&
     (target.memberIds === undefined ||
-      (Array.isArray(target.memberIds) && target.memberIds.every((id) => typeof id === "string" && id.length > 0)))
+      (Array.isArray(target.memberIds) && target.memberIds.every((id) => typeof id === "string" && id.length > 0))) &&
+    validRange(target.beforeFrom, target.beforeTo) &&
+    validRange(target.afterFrom, target.afterTo)
   );
 }
 
@@ -109,7 +123,10 @@ export function isDecisionEvent(value: unknown): value is DecisionEvent {
     typeof event.anchor === "string" &&
     nullableString(event.originalText) &&
     nullableString(event.proposedText) &&
-    nullableString(event.resultingText)
+    nullableString(event.resultingText) &&
+    (event.proposer === undefined ||
+      event.proposer === null ||
+      (typeof event.proposer === "string" && event.proposer.trim().length > 0))
   );
 }
 
@@ -143,6 +160,80 @@ export function createDecisionEvent(draft: DecisionEventDraft): DecisionEvent {
     ...draft,
     actor,
   };
+}
+
+function mapPositionThroughDocumentChange(
+  before: string,
+  after: string,
+  position: number,
+  association: -1 | 1,
+): number | null {
+  if (!Number.isInteger(position) || position < 0 || position > before.length) return null;
+  let offset = 0;
+  for (const hunk of textChangeHunks(before, after)) {
+    if (hunk.beforeFrom === hunk.beforeTo && position === hunk.beforeFrom) {
+      return association < 0 ? hunk.afterFrom : hunk.afterTo;
+    }
+    if (position <= hunk.beforeFrom) return position + offset;
+    if (position < hunk.beforeTo) {
+      return association < 0 ? hunk.afterFrom : hunk.afterTo;
+    }
+    if (position === hunk.beforeTo) return hunk.afterTo;
+    offset = hunk.afterTo - hunk.beforeTo;
+  }
+  return position + offset;
+}
+
+function mapTargetRange(
+  event: DecisionEvent,
+  before: string,
+  after: string,
+  prefix: "before" | "after",
+): DecisionEvent {
+  const fromKey = `${prefix}From` as "beforeFrom" | "afterFrom";
+  const toKey = `${prefix}To` as "beforeTo" | "afterTo";
+  const from = event.target[fromKey];
+  const to = event.target[toKey];
+  if (from === undefined || to === undefined) return event;
+  const mappedFrom = mapPositionThroughDocumentChange(before, after, from, 1);
+  const mappedTo = from === to
+    ? mappedFrom
+    : mapPositionThroughDocumentChange(before, after, to, -1);
+  if (mappedFrom === null || mappedTo === null) {
+    const { [fromKey]: _from, [toKey]: _to, ...target } = event.target;
+    return { ...event, target };
+  }
+  const normalizedTo = Math.max(mappedFrom, mappedTo);
+  if (mappedFrom === from && normalizedTo === to) return event;
+  return {
+    ...event,
+    target: { ...event.target, [fromKey]: mappedFrom, [toKey]: normalizedTo },
+  };
+}
+
+/** Carry pending result coordinates through edits made before the debounced save. */
+export function rebaseDecisionEventsAfterChange(
+  events: readonly DecisionEvent[],
+  before: string,
+  after: string,
+): DecisionEvent[] {
+  if (before === after) return events as DecisionEvent[];
+  return events.map((event) => mapTargetRange(event, before, after, "after"));
+}
+
+/** Rebase transaction-time coordinates onto the exact snapshots committed by the server. */
+export function rebaseDecisionEventsForCommit(
+  events: readonly DecisionEvent[],
+  documents: { base: string; mine: string; theirs: string; committed: string },
+): DecisionEvent[] {
+  const afterRebased = rebaseDecisionEventsAfterChange(
+    events,
+    documents.mine,
+    documents.committed,
+  );
+  return afterRebased.map((event) =>
+    mapTargetRange(event, documents.base, documents.theirs, "before")
+  );
 }
 
 /** A write is audit-complete only when the server explicitly acknowledges the
@@ -185,7 +276,14 @@ export function inlineSuggestionDecision(
     action: mode,
     actor,
     source,
-    target: { kind: "suggestion", id: token.id },
+    target: {
+      kind: "suggestion",
+      id: token.id,
+      beforeFrom: token.from,
+      beforeTo: token.to,
+      afterFrom: token.from,
+      afterTo: token.from + (mode === "accept" ? proposedText.length : originalText.length),
+    },
     anchor: originalText || proposedText,
     originalText,
     proposedText,
@@ -212,6 +310,12 @@ export function structuredSuggestionDecision(
   const highlight = threadAnchorHighlightFor(content, comment, tokens, threads);
   if (!thread || !highlight || highlight.type !== "highlight") return null;
   const groupId = suggestionGroupId(comment.body);
+  const discussion = action === "apply-resolve" ? "resolve-thread" : "keep-discussion";
+  const edit = suggestionThreadEdit(content, comment, mode, discussion);
+  if (!edit) return null;
+  const resultingText = mode === "accept" ? proposedText : highlight.inner;
+  const resultOffset = resultingText.length === 0 ? 0 : edit.insert.indexOf(resultingText);
+  if (resultOffset < 0) return null;
   return createDecisionEvent({
     action,
     actor,
@@ -221,11 +325,16 @@ export function structuredSuggestionDecision(
       id: comment.id,
       threadId: thread.id,
       ...(groupId ? { groupId } : {}),
+      beforeFrom: edit.from,
+      beforeTo: edit.to,
+      afterFrom: edit.from + resultOffset,
+      afterTo: edit.from + resultOffset + resultingText.length,
     },
     anchor: highlight.inner,
     originalText: highlight.inner,
     proposedText,
-    resultingText: mode === "accept" ? proposedText : highlight.inner,
+    resultingText,
+    proposer: comment.author,
   });
 }
 
@@ -259,7 +368,20 @@ export function structuredSuggestionGroupDecisions(
       if (editIndex < 0) return [];
       remainingEdits.splice(editIndex, 1);
       const event = structuredSuggestionDecision(content, comment, mode, action, actor, source);
-      return event?.target.groupId === groupId ? [event] : [];
+      if (!event || event.target.groupId !== groupId) return [];
+      const shift = edits
+        .filter((candidate) => candidate.to <= edit.from)
+        .reduce((total, candidate) => total + candidate.insert.length - (candidate.to - candidate.from), 0);
+      const localFrom = (event.target.afterFrom ?? edit.from) - edit.from;
+      const localTo = (event.target.afterTo ?? edit.from) - edit.from;
+      return [{
+        ...event,
+        target: {
+          ...event.target,
+          afterFrom: edit.from + shift + localFrom,
+          afterTo: edit.from + shift + localTo,
+        },
+      }];
     });
 }
 

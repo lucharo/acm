@@ -24,6 +24,7 @@ import {
   mergeCommittedDecisionOutbox,
   mergeDecisionOutbox,
   reconcileDeferredDecisionOutbox,
+  rebasePendingDecisionOutbox,
   removeDecisionOutboxEvents,
   storeDecisionOutbox,
   type DecisionOutboxEntry,
@@ -32,6 +33,8 @@ import { merge3 } from "../lib/merge";
 import { reconcileSave } from "./reconcile";
 
 interface UseDocSyncOptions {
+  /** Human identity attached to each persisted edit. */
+  author: string;
   /**
    * Called when the document changes outside this editor: an external file edit
    * (WS push), a reconnect resync, or a 409 conflict on save. The App rebases the
@@ -57,6 +60,15 @@ export type SaveState =
   | "conflict"
   | "audit-error"
   | "audit-recovery";
+
+/** Selection offsets are meaningful to the server only while the live editor
+ * buffer is byte-for-byte aligned with the persisted document. */
+export function canQuerySelectionProvenance(
+  saveState: SaveState,
+  connected: boolean,
+): boolean {
+  return connected && saveState === "saved";
+}
 
 interface UseDocSyncResult {
   initialDoc: string | null;
@@ -210,6 +222,21 @@ export async function postDecisionEvents(
   }
 }
 
+export function decisionEventsForAuditRetry(
+  sent: readonly DecisionEvent[],
+  committed: unknown,
+): DecisionEvent[] {
+  if (
+    !Array.isArray(committed) ||
+    committed.length !== sent.length ||
+    !committed.every(isDecisionEvent) ||
+    !committed.every((event, index) => event.id === sent[index]?.id)
+  ) {
+    return [...sent];
+  }
+  return committed;
+}
+
 export type DecisionEndpointRead<T> =
   | { status: "ready"; value: T; needsReview: boolean }
   | { status: "unavailable" }
@@ -354,6 +381,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   // Keep the latest callback in a ref so the socket lifecycle effect runs once.
   const onRemoteUpdate = useRef(opts.onRemoteUpdate);
   onRemoteUpdate.current = opts.onRemoteUpdate;
+  const author = useRef(opts.author);
+  author.current = opts.author;
 
   const settledSaveState = (): SaveState => {
     if (decisionRecoveryQuarantined.current) return "audit-recovery";
@@ -792,6 +821,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
           baseVersion,
           serverEpoch: requestEpoch,
           documentPath: documentPath.current,
+          author: author.current,
           decisionEvents: sentDecisionEvents,
         }),
       });
@@ -856,10 +886,14 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       // evidence before the audit-only retry so a crash can never turn this
       // into an ambiguous pre-commit event or a ghost replay.
       markSentDecisionEventsCommitted();
+      const retryDecisionEvents = decisionEventsForAuditRetry(
+        sentDecisionEvents,
+        data.audit?.decisionEvents,
+      );
       const auditRequestEpoch = currentServerEpoch.current;
       const auditResult = await postDecisionEvents(
         documentPath.current,
-        sentDecisionEvents,
+        retryDecisionEvents,
       );
       if (auditResult.recoveryNeedsReview) decisionRecoveryQuarantined.current = true;
       if (auditResult.persisted) {
@@ -936,10 +970,23 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     decisionUpdate: DecisionQueueUpdate = { enqueue: [], cancel: [] },
   ) => {
     // Coalesce rapid calls: always send the latest content on the next fire.
+    const previousContent = pendingContent.current ?? lastConfirmedContent.current;
+    let decisionQueueChanged = false;
+    if (previousContent !== null && previousContent !== content) {
+      const rebased = rebasePendingDecisionOutbox(
+        pendingDecisionEntries.current,
+        previousContent,
+        content,
+      );
+      if (rebased !== pendingDecisionEntries.current) {
+        pendingDecisionEntries.current = rebased;
+        decisionQueueChanged = true;
+      }
+    }
     pendingContent.current = content;
     let outboxStored = true;
     if (decisionUpdate.enqueue.length > 0 || decisionUpdate.cancel.length > 0) {
-      decisionQueueRevision.current += 1;
+      decisionQueueChanged = true;
     }
     if (decisionUpdate.cancel.length > 0) {
       pendingDecisionEntries.current = removeDecisionOutboxEvents(
@@ -953,9 +1000,10 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
         decisionUpdate.enqueue,
       );
     }
+    if (decisionQueueChanged) decisionQueueRevision.current += 1;
     if (
       documentPath.current &&
-      (decisionUpdate.enqueue.length > 0 || decisionUpdate.cancel.length > 0)
+      decisionQueueChanged
     ) {
       const stored = storeDecisionOutbox(
         documentPath.current,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   renderedTableCellSelector,
+  tableCellReviewState,
   tableCellLinkSelection,
   tableCellPointerAction,
 } from "./markdownPreview";
@@ -33,5 +34,20 @@ describe("rich table keyboard navigation", () => {
     expect(renderedTableCellSelector(10, address)).not.toBe(
       renderedTableCellSelector(200, address),
     );
+  });
+
+  test("commented cells expose accepted rich text and exact document offsets", () => {
+    const value = "{==Result $x^2$==}{>>@Maya: Check this cell<<}";
+
+    expect(tableCellReviewState(value, 40)).toEqual({
+      markdown: "Result $x^2$",
+      comments: [
+        {
+          from: 40 + value.indexOf("{>>"),
+          author: "Maya",
+          body: "Check this cell",
+        },
+      ],
+    });
   });
 });

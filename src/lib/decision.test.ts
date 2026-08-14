@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { scanTokens } from "./criticmarkup";
+import { scanTokens, suggestionGroupEdits } from "./criticmarkup";
 import {
   inlineSuggestionDecision,
+  rebaseDecisionEventsAfterChange,
+  rebaseDecisionEventsForCommit,
   structuredSuggestionDecision,
   structuredSuggestionGroupDecisions,
 } from "./decision";
@@ -27,7 +29,14 @@ describe("inline suggestion decision events", () => {
       action: "accept",
       actor: "You",
       source: "gui",
-      target: { kind: "suggestion", id: token.id },
+      target: {
+        kind: "suggestion",
+        id: token.id,
+        beforeFrom: 0,
+        beforeTo: token.to,
+        afterFrom: 0,
+        afterTo: 9,
+      },
       anchor: "new words",
       originalText: "",
       proposedText: "new words",
@@ -46,7 +55,14 @@ describe("inline suggestion decision events", () => {
       action: "reject",
       actor: "acm-cli",
       source: "cli",
-      target: { kind: "suggestion", id: token.id },
+      target: {
+        kind: "suggestion",
+        id: token.id,
+        beforeFrom: 0,
+        beforeTo: token.to,
+        afterFrom: 0,
+        afterTo: 9,
+      },
       anchor: "old words",
       originalText: "old words",
       proposedText: "",
@@ -65,7 +81,14 @@ describe("inline suggestion decision events", () => {
       action: "accept",
       actor: "Luis",
       source: "gui",
-      target: { kind: "suggestion", id: token.id },
+      target: {
+        kind: "suggestion",
+        id: token.id,
+        beforeFrom: 0,
+        beforeTo: token.to,
+        afterFrom: 0,
+        afterTo: 9,
+      },
       anchor: "new words",
       originalText: "",
       proposedText: "new words",
@@ -84,7 +107,14 @@ describe("inline suggestion decision events", () => {
       action: "reject",
       actor: "Luis",
       source: "gui",
-      target: { kind: "suggestion", id: token.id },
+      target: {
+        kind: "suggestion",
+        id: token.id,
+        beforeFrom: 0,
+        beforeTo: token.to,
+        afterFrom: 0,
+        afterTo: 9,
+      },
       anchor: "old words",
       originalText: "old words",
       proposedText: "",
@@ -103,7 +133,14 @@ describe("inline suggestion decision events", () => {
       action: "accept",
       actor: "Luis",
       source: "gui",
-      target: { kind: "suggestion", id: token.id },
+      target: {
+        kind: "suggestion",
+        id: token.id,
+        beforeFrom: 0,
+        beforeTo: token.to,
+        afterFrom: 0,
+        afterTo: 9,
+      },
       anchor: "old words",
       originalText: "old words",
       proposedText: "new words",
@@ -140,11 +177,16 @@ describe("structured suggestion decision events", () => {
         id: comment.id,
         threadId: expect.any(String),
         groupId: "copy",
+        beforeFrom: 4,
+        beforeTo: content.length - 1,
+        afterFrom: 4,
+        afterTo: 13,
       },
       anchor: "old words",
       originalText: "old words",
       proposedText: "new words",
       resultingText: "new words",
+      proposer: "b",
     });
   });
 
@@ -183,6 +225,68 @@ describe("structured suggestion decision events", () => {
       id: expect.any(String),
       threadId: expect.any(String),
       groupId: "g1",
+      beforeFrom: 2,
+      beforeTo: content.length - 1,
+      afterFrom: 5,
+      afterTo: 9,
     });
+  });
+
+  test("group decision result ranges use final document coordinates", () => {
+    const content =
+      "A {==one==}{>>@a: SUGGEST[g:g1]: first<<} and {==two==}{>>@b: SUGGEST[g:g1]: second longer<<}.";
+    const { edits } = suggestionGroupEdits(content, "g1", "accept");
+    let after = content;
+    for (const edit of [...edits].reverse()) {
+      after = after.slice(0, edit.from) + edit.insert + after.slice(edit.to);
+    }
+
+    const events = structuredSuggestionGroupDecisions(
+      content,
+      "g1",
+      "accept",
+      "apply",
+      "Luis",
+      "gui",
+    );
+
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => after.slice(event.target.afterFrom, event.target.afterTo))).toEqual([
+      "first",
+      "second longer",
+    ]);
+  });
+});
+
+describe("decision range rebasing", () => {
+  test("later local typing and a server merge move the persisted result range", () => {
+    const base = "Header\n{~~old~>new~~}\nnew\n";
+    const token = suggestion("{~~old~>new~~}");
+    const event = {
+      ...inlineSuggestionDecision(token, "accept", "Luis", "gui"),
+      target: {
+        ...inlineSuggestionDecision(token, "accept", "Luis", "gui").target,
+        beforeFrom: "Header\n".length,
+        beforeTo: "Header\n".length + token.to,
+        afterFrom: "Header\n".length,
+        afterTo: "Header\nnew".length,
+      },
+      proposer: "Claude",
+    };
+    const immediate = "Header\nnew\nnew\n";
+    const mine = "Local note\n" + immediate;
+    const theirs = "Agent note\n" + base;
+    const committed = "Agent note\n" + mine;
+    const [locallyRebased] = rebaseDecisionEventsAfterChange([event], immediate, mine);
+
+    const [rebased] = rebaseDecisionEventsForCommit(
+      [locallyRebased],
+      { base, mine, theirs, committed },
+    );
+
+    const expectedFrom = committed.indexOf("new");
+    expect(rebased.target.afterFrom).toBe(expectedFrom);
+    expect(rebased.target.afterTo).toBe(expectedFrom + 3);
+    expect(committed.slice(rebased.target.afterFrom, rebased.target.afterTo)).toBe("new");
   });
 });

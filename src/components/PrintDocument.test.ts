@@ -48,6 +48,22 @@ describe("print document DOM", () => {
     expect(rendered).not.toContain('loading="lazy"');
   });
 
+  test("print output renders inline and display LaTeX", () => {
+    const root = rootElement();
+    const model = preparePrintDocument(
+      "Inline $E=mc^2$.\n\n$$\\sum_{i=1}^n i$$",
+      "simple",
+      true,
+    );
+
+    renderPrintDocument(root, { ok: true, model });
+    const rendered = new XMLSerializer().serializeToString(root as never);
+
+    expect(rendered).toContain('class="katex"');
+    expect(rendered).toContain('class="katex-display"');
+    expect(rendered).not.toContain("$E=mc^2$");
+  });
+
   test("image preparation waits for both load and error without hanging", async () => {
     class FakeImage extends EventTarget {
       complete = false;

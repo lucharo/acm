@@ -11,6 +11,15 @@ export interface MarkdownTableModel {
   header: string[];
   alignments: TableAlignment[];
   rows: string[][];
+  cellRanges: {
+    header: MarkdownTableCellRange[];
+    rows: MarkdownTableCellRange[][];
+  };
+}
+
+export interface MarkdownTableCellRange {
+  from: number;
+  to: number;
 }
 
 export interface MarkdownTableCellAddress {
@@ -23,30 +32,48 @@ export interface SliceableDocument {
   sliceString(from: number, to: number): string;
 }
 
-function splitTableRow(source: string): string[] {
-  const cells: string[] = [];
-  let cell = "";
+interface ParsedTableCell extends MarkdownTableCellRange {
+  value: string;
+}
+
+function splitTableRow(source: string, rowFrom = 0): ParsedTableCell[] {
+  const slices: { from: number; to: number }[] = [];
+  let cellFrom = 0;
   let escaped = false;
 
-  for (const char of source) {
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
     if (char === "|" && !escaped) {
-      cells.push(cell);
-      cell = "";
-    } else {
-      cell += char;
+      slices.push({ from: cellFrom, to: index });
+      cellFrom = index + 1;
     }
     escaped = char === "\\" && !escaped;
   }
-  cells.push(cell);
+  slices.push({ from: cellFrom, to: source.length });
 
   // Leading/trailing pipes delimit the row rather than introducing cells.
-  if (cells.length > 1 && cells[0].trim() === "") cells.shift();
-  if (cells.length > 1 && cells.at(-1)?.trim() === "") cells.pop();
+  if (slices.length > 1 && source.slice(slices[0].from, slices[0].to).trim() === "") {
+    slices.shift();
+  }
+  const last = slices.at(-1);
+  if (slices.length > 1 && last && source.slice(last.from, last.to).trim() === "") {
+    slices.pop();
+  }
 
   // Keep each cell's inline Markdown source intact. Decoding `\|` here loses
   // the escape parity needed to distinguish an escaped pipe from a literal
   // backslash followed by an escaped pipe when the table is serialised again.
-  return cells.map((value) => value.trim());
+  return slices.map((slice) => {
+    let from = slice.from;
+    let to = slice.to;
+    while (from < to && /\s/.test(source[from])) from += 1;
+    while (to > from && /\s/.test(source[to - 1])) to -= 1;
+    return {
+      value: source.slice(from, to),
+      from: rowFrom + from,
+      to: rowFrom + to,
+    };
+  });
 }
 
 function alignmentFromSeparator(separator: string): TableAlignment {
@@ -59,18 +86,25 @@ function alignmentFromSeparator(separator: string): TableAlignment {
   return null;
 }
 
-function normaliseRow(cells: string[], columnCount: number): string[] | null {
+function normaliseRow(cells: ParsedTableCell[], columnCount: number, rowEnd: number): ParsedTableCell[] | null {
   // Never preview a row whose extra cells would be thrown away. Keeping the
   // source visible is safer than presenting a lossy table.
   if (cells.length > columnCount) return null;
   const row = cells.slice(0, columnCount);
-  while (row.length < columnCount) row.push("");
+  while (row.length < columnCount) row.push({ value: "", from: rowEnd, to: rowEnd });
   return row;
 }
 
-function hasCriticMarkup(node: SyntaxNode): boolean {
+function hasUnpreviewableCriticMarkup(node: SyntaxNode): boolean {
   for (let child = node.firstChild; child; child = child.nextSibling) {
-    if (child.name.startsWith("CM") || hasCriticMarkup(child)) return true;
+    if (
+      child.name === "CMInsert" ||
+      child.name === "CMDelete" ||
+      child.name === "CMSubstitute" ||
+      hasUnpreviewableCriticMarkup(child)
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -79,7 +113,7 @@ function isPreviewEligible(node: SyntaxNode): boolean {
   return (
     node.name === "Table" &&
     node.parent?.name === "Document" &&
-    !hasCriticMarkup(node)
+    !hasUnpreviewableCriticMarkup(node)
   );
 }
 
@@ -99,18 +133,28 @@ export function extractMarkdownTable(
   }
   if (!headerNode || !separatorNode) return null;
 
-  const header = splitTableRow(doc.sliceString(headerNode.from, headerNode.to));
-  const separator = splitTableRow(doc.sliceString(separatorNode.from, separatorNode.to));
+  const headerCells = splitTableRow(
+    doc.sliceString(headerNode.from, headerNode.to),
+    headerNode.from,
+  );
+  const separator = splitTableRow(
+    doc.sliceString(separatorNode.from, separatorNode.to),
+    separatorNode.from,
+  );
+  const header = headerCells.map((cell) => cell.value);
   if (header.length === 0 || separator.length !== header.length) return null;
 
   const rows: string[][] = [];
+  const rowRanges: MarkdownTableCellRange[][] = [];
   for (const rowNode of rowNodes) {
     const row = normaliseRow(
-      splitTableRow(doc.sliceString(rowNode.from, rowNode.to)),
+      splitTableRow(doc.sliceString(rowNode.from, rowNode.to), rowNode.from),
       header.length,
+      rowNode.to,
     );
     if (!row) return null;
-    rows.push(row);
+    rows.push(row.map((cell) => cell.value));
+    rowRanges.push(row.map(({ from, to }) => ({ from, to })));
   }
 
   return {
@@ -118,9 +162,24 @@ export function extractMarkdownTable(
     to: node.to,
     source: doc.sliceString(node.from, node.to),
     header,
-    alignments: separator.map(alignmentFromSeparator),
+    alignments: separator.map((cell) => alignmentFromSeparator(cell.value)),
     rows,
+    cellRanges: {
+      header: headerCells.map(({ from, to }) => ({ from, to })),
+      rows: rowRanges,
+    },
   };
+}
+
+export function markdownTableCellRange(
+  model: MarkdownTableModel,
+  address: MarkdownTableCellAddress,
+): MarkdownTableCellRange | null {
+  if (address.column < 0 || address.column >= model.header.length) return null;
+  if (address.section === "header") {
+    return address.row === 0 ? model.cellRanges.header[address.column] ?? null : null;
+  }
+  return model.cellRanges.rows[address.row]?.[address.column] ?? null;
 }
 
 export function tablePreviewForNode(

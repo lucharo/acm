@@ -76,4 +76,13 @@ describe("rich block preview cursor boundaries", () => {
     expect(atomicSpans(editorState(doc))).toContainEqual({ from, to });
     expect(atomicSpans(editorState(doc, false))).not.toContainEqual({ from, to });
   });
+
+  test("multi-line display math is a state-owned atomic block", () => {
+    const doc = "Before\n\n$$\n\\int_0^1 x^2 dx\n$$\n\nAfter";
+    const from = doc.indexOf("$$");
+    const to = doc.lastIndexOf("$$") + 2;
+
+    expect(atomicSpans(editorState(doc))).toContainEqual({ from, to });
+    expect(atomicSpans(editorState(doc, false))).not.toContainEqual({ from, to });
+  });
 });

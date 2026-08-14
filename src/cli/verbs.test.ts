@@ -27,6 +27,7 @@ import {
   listDecisionEvents,
 } from "../server/decisions";
 import { readDecisionRecoveryEvents } from "../server/decisionRecovery";
+import { readDocumentProvenanceRange } from "../server/provenance";
 import type { DecisionEvent } from "../lib/decision";
 import { commentKey, groupThreads, scanTokens } from "../lib/criticmarkup";
 import type { CommentToken } from "../lib/types";
@@ -110,6 +111,8 @@ test("a compensating live rollback stays bound to the original document", async 
     base: "after\n",
     content: "before\n",
     documentPath: "/docs/original.md",
+    author: "acm-cli",
+    operation: "audit rollback",
     decisionEvents: [],
   });
 });
@@ -138,6 +141,8 @@ test("a compensating rollback preserves a disjoint concurrent human edit", async
     base: "new wording\nstable\nhuman after\n",
     content: "old wording\nstable\nhuman after\n",
     documentPath: "/docs/original.md",
+    author: "acm-cli",
+    operation: "audit rollback",
     decisionEvents: [],
   });
 });
@@ -164,6 +169,63 @@ test("a compensating direct transaction preserves a disjoint concurrent file edi
     message: "audit blocked",
   });
   expect(readFileSync(doc, "utf8")).toBe("old wording\nstable\nhuman after\n");
+});
+
+test("a direct CLI merge rebases accepted-suggestion audit and provenance ranges", async () => {
+  const before = "Header\n{~~old~>new~~}\nnew\n";
+  const proposed = "Header\nnew\nnew\n";
+  const current = "Agent note\n" + before;
+  const final = "Agent note\n" + proposed;
+  writeFileSync(doc, current);
+  const beforeFrom = before.indexOf("{~~");
+  const afterFrom = proposed.indexOf("new");
+  const decision: DecisionEvent = {
+    id: "direct-merged-suggestion",
+    timestamp: "2026-08-14T10:30:00.000Z",
+    action: "accept",
+    actor: "Luis",
+    source: "cli",
+    target: {
+      kind: "suggestion",
+      id: "suggestion-direct-merge",
+      beforeFrom,
+      beforeTo: beforeFrom + "{~~old~>new~~}".length,
+      afterFrom,
+      afterTo: afterFrom + 3,
+    },
+    anchor: "old",
+    originalText: "old",
+    proposedText: "new",
+    resultingText: "new",
+    proposer: "Claude",
+  };
+
+  const result = await writeDirectWithAudit(
+    doc,
+    before,
+    proposed,
+    [decision],
+    appendDecisionEvents,
+    { author: "Codex", operation: "accept suggestion" },
+  );
+
+  expect(result).toEqual({ status: "written", content: final });
+  expect(readFileSync(doc, "utf8")).toBe(final);
+  const finalFrom = final.indexOf("new");
+  expect((await listDecisionEvents(doc))[0].target).toMatchObject({
+    afterFrom: finalFrom,
+    afterTo: finalFrom + 3,
+  });
+  expect(await readDocumentProvenanceRange(doc, final, finalFrom, finalFrom + 3)).toMatchObject({
+    segments: [{
+      from: finalFrom,
+      to: finalFrom + 3,
+      author: "Claude",
+      source: "suggestion",
+      reviewedBy: "Luis",
+      decisionId: decision.id,
+    }],
+  });
 });
 
 test("a compensating direct transaction refuses an overlapping concurrent file edit", async () => {
@@ -471,11 +533,20 @@ test("accept persists a complete CLI decision only after the edit lands", async 
       action: "accept",
       actor: "Reviewer",
       source: "cli",
-      target: { kind: "suggestion", id: comment.id, threadId: thread.id },
+      target: {
+        kind: "suggestion",
+        id: comment.id,
+        threadId: thread.id,
+        beforeFrom: 7,
+        beforeTo: 53,
+        afterFrom: 7,
+        afterTo: 16,
+      },
       anchor: "old words",
       originalText: "old words",
       proposedText: "new words",
       resultingText: "new words",
+      proposer: "maya",
     },
   ]);
 });
@@ -548,11 +619,20 @@ test("reject persists the declined proposal and retained original wording", asyn
       action: "reject",
       actor: "Reviewer",
       source: "cli",
-      target: { kind: "suggestion", id: comment.id, threadId: thread.id },
+      target: {
+        kind: "suggestion",
+        id: comment.id,
+        threadId: thread.id,
+        beforeFrom: 7,
+        beforeTo: 53,
+        afterFrom: 7,
+        afterTo: 16,
+      },
       anchor: "old words",
       originalText: "old words",
       proposedText: "new words",
       resultingText: "old words",
+      proposer: "maya",
     },
   ]);
 });
@@ -583,11 +663,16 @@ test("accepting a suggestion group records every applied member with its group i
         id: comment.id,
         threadId: threads[index].id,
         groupId: "pair",
+        beforeFrom: index === 0 ? 6 : 66,
+        beforeTo: index === 0 ? 56 : 116,
+        afterFrom: index === 0 ? 6 : 23,
+        afterTo: index === 0 ? 13 : 30,
       },
       anchor: index === 0 ? "old one" : "old two",
       originalText: index === 0 ? "old one" : "old two",
       proposedText: index === 0 ? "new one" : "new two",
       resultingText: index === 0 ? "new one" : "new two",
+      proposer: "maya",
     })),
   );
 });

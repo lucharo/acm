@@ -19,7 +19,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import { MOD } from "../lib/platform";
-import type { SidebarCard, CommentToken } from "../lib/types";
+import type { SidebarCard, CommentToken, SuggestionToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
 import { commentStatusOccluded } from "../lib/commentRail";
@@ -27,6 +27,7 @@ import { visibleReviewCards } from "../lib/visibleReviewCards";
 import { authorColor, groupColor } from "./authorColor";
 import CommentComposer from "./CommentComposer";
 import { handleCommentKey } from "./commentKeys";
+import ReviewTextEditor, { closeReviewEditorAfterSuccessfulSave } from "./ReviewTextEditor";
 
 interface CommentSidebarProps {
   view: EditorView | null;
@@ -48,11 +49,15 @@ interface CommentSidebarProps {
   onResolveThread: (card: SidebarCard) => void;
   /** Delete a single comment (vs. resolving the whole thread). */
   onDeleteComment: (comment: CommentToken) => void;
+  /** Edit one comment body while preserving its original Author. */
+  onEditComment: (comment: CommentToken, body: string) => boolean;
+  /** Edit the proposed wording of a SUGGEST card or native Suggestion. */
+  onEditSuggestion: (suggestion: CommentToken | SuggestionToken, proposal: string) => boolean;
   onReply: (card: SidebarCard, text: string) => void;
   /** Reply AND mark the whole thread seen (dismiss it + advance) — ⌘⇧↵. */
   onReplyAndSeen: (card: SidebarCard, text: string) => void;
-  /** One-click: post a "suggest edit" reply + mark the thread seen (agent hand-off). */
-  onSuggestEdit: (card: SidebarCard) => void;
+  /** Post a structured replacement proposal on this anchored discussion. */
+  onSuggestEdit: (card: SidebarCard, proposal: string) => void;
   /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
    *  proposed wording. */
   onApplySuggestion: (comment: CommentToken) => void;
@@ -82,6 +87,7 @@ interface CommentSidebarProps {
   onCardContextMenu?: (card: SidebarCard, e: ReactMouseEvent) => void;
   /** New-comment composer, anchored beside the current editor selection. */
   composerOpen: boolean;
+  composerKind: "comment" | "suggestion";
   composerDraft: string;
   composerAnchored: boolean;
   onComposerDraftChange: (value: string) => void;
@@ -148,6 +154,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     replyTarget,
     onResolveThread,
     onDeleteComment,
+    onEditComment,
+    onEditSuggestion,
     onReply,
     onReplyAndSeen,
     onSuggestEdit,
@@ -165,6 +173,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onFocusThread,
     onCardContextMenu,
     composerOpen,
+    composerKind,
     composerDraft,
     composerAnchored,
     onComposerDraftChange,
@@ -228,6 +237,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
+  const [replyMode, setReplyMode] = useState<"reply" | "suggestion">("reply");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   // Which group CONTROL's "see the whole set" surface is open (popover / inline
   // expand), keyed by the member comment whose chip was clicked — so opening it on
   // one member card doesn't fan the popover out across every sibling card. One at a
@@ -250,6 +262,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     if (replyTarget) {
       setReplyingId(replyTarget.id);
       setReplyDraft("");
+      setReplyMode("reply");
     }
   }, [replyTarget]);
 
@@ -299,11 +312,20 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         if (contentRect.height === 0 || cRect.height === 0) return { valid: false as const };
         const padTop = view0.documentPadding.top;
         const docTop = contentRect.top + view0.scrollDOM.scrollTop - cRect.top + padTop;
-        const measured = layoutItems.map((item) => ({
-          id: item.id,
-          anchorY: docTop + view0.lineBlockAt(item.from).top,
-          height: cardRefs.current.get(item.id)?.offsetHeight ?? 0,
-        }));
+        const measured = layoutItems.map((item) => {
+          const tableMarker = view0.dom.querySelector<HTMLElement>(
+            `[data-comment-from="${item.from}"]`,
+          );
+          const tableCell = tableMarker?.closest<HTMLElement>("th,td");
+          const cellRect = tableCell?.getBoundingClientRect();
+          return {
+            id: item.id,
+            anchorY: cellRect
+              ? cellRect.top - cRect.top + view0.scrollDOM.scrollTop + Math.min(18, cellRect.height / 2)
+              : docTop + view0.lineBlockAt(item.from).top,
+            height: cardRefs.current.get(item.id)?.offsetHeight ?? 0,
+          };
+        });
         // Bottom of the LAST text line in column coords — the reference for how far
         // the card stack overflows the prose (independent of any applied spacer,
         // so there's no feedback loop with the padding this ultimately drives).
@@ -439,9 +461,13 @@ export default function CommentSidebar(props: CommentSidebarProps) {
 
   function submitReply(card: SidebarCard, markSeen: boolean) {
     const text = replyDraft;
-    if (text.trim()) (markSeen ? onReplyAndSeen : onReply)(card, text);
+    if (text.trim()) {
+      if (replyMode === "suggestion") onSuggestEdit(card, text);
+      else (markSeen ? onReplyAndSeen : onReply)(card, text);
+    }
     setReplyingId(null);
     setReplyDraft("");
+    setReplyMode("reply");
   }
 
   return (
@@ -535,6 +561,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                     }}
                   >
                     <CommentComposer
+                      kind={composerKind}
                       draft={composerDraft}
                       anchored={composerAnchored}
                       onDraftChange={onComposerDraftChange}
@@ -576,9 +603,13 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       // No layout entry yet → HIDDEN with no transition, so a card
                       // never animates a "flight" up from top:0 (the visible amplifier
                       // behind the lift). Once positioned: mid-exit fades + shrinks,
-                      // seen-but-unfocused dims, and the transition smooths it.
+                      // seen-but-unfocused recedes without lowering the contrast
+                      // of every nested label and action.
                       visibility: l ? "visible" : "hidden",
-                      opacity: isExiting ? 0 : isSeen && !isActive ? 0.45 : 1,
+                      opacity: isExiting ? 0 : 1,
+                      backgroundColor: isSeen && !isActive ? "var(--bg)" : undefined,
+                      boxShadow: isSeen && !isActive ? "none" : undefined,
+                      outline: isSeen && !isActive ? "1px solid var(--line)" : undefined,
                       transform: isExiting ? "scale(0.96)" : undefined,
                       transition: l ? "opacity 200ms ease, transform 200ms ease" : "none",
                     }}
@@ -603,6 +634,24 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                         return (
                           <>
                             <div className="absolute right-2 top-2.5 flex gap-1">
+                              {s.type !== "delete" ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingId(s.id);
+                                    setEditDraft(s.type === "insert" ? s.inner : s.newText);
+                                  }}
+                                  title="Edit suggestion"
+                                  aria-label="Edit suggestion"
+                                  className="flex h-6 w-6 items-center justify-center rounded-full border border-[var(--line-strong)] text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+                                >
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M12 20h9" />
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                  </svg>
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 onClick={(e) => { e.stopPropagation(); onAcceptSuggestion(card); }}
@@ -630,7 +679,18 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 {badge}
                               </span>
                             </div>
-                            {s.type === "insert" && card.standalone && richPreview ? (
+                            {editingId === s.id ? (
+                              <ReviewTextEditor
+                                value={editDraft}
+                                label="Edit suggestion"
+                                onChange={setEditDraft}
+                                onSave={() => closeReviewEditorAfterSuccessfulSave(
+                                  () => onEditSuggestion(s, editDraft),
+                                  () => setEditingId(null),
+                                )}
+                                onCancel={() => setEditingId(null)}
+                              />
+                            ) : s.type === "insert" && card.standalone && richPreview ? (
                               <div className="mb-0.5 pr-8">
                                 <p className="truncate text-[13px] font-medium leading-relaxed text-[var(--ink)]">
                                   {standaloneAdditionTitle(s.inner)}
@@ -667,7 +727,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           className={`absolute right-9 top-2.5 rounded p-1 transition-opacity hover:bg-[var(--line)] ${
                             isSeen
                               ? "text-[var(--accent)] opacity-100"
-                              : "text-[var(--faint)] opacity-0 hover:text-[var(--ink)] group-hover:opacity-100"
+                              : "text-[var(--faint)] opacity-0 hover:text-[var(--ink)] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                           }`}
                           aria-label={isSeen ? "Mark unseen" : "Mark seen"}
                         >
@@ -680,7 +740,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onResolveThread(card); }}
                           title="Resolve thread"
-                          className="absolute right-2 top-2.5 rounded p-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--line)] hover:text-[var(--ink)] group-hover:opacity-100"
+                          className="absolute right-2 top-2.5 rounded p-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--line)] hover:text-[var(--ink)] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                           aria-label="Resolve thread"
                         >
                           <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -706,11 +766,28 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              const replacement = suggestionReplacement(c.body);
+                              setEditingId(c.id);
+                              setEditDraft(replacement ?? c.body);
+                            }}
+                            title={suggestionReplacement(c.body) === null ? "Edit comment" : "Edit suggestion"}
+                            aria-label={suggestionReplacement(c.body) === null ? "Edit comment" : "Edit suggestion"}
+                            className="ml-auto shrink-0 rounded p-0.5 text-[var(--faint)] opacity-0 transition-opacity hover:text-[var(--ink)] group-hover/cmt:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M12 20h9" />
+                              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
                               onDeleteComment(c);
                             }}
                             title="Delete this comment"
                             aria-label="Delete comment"
-                            className="ml-auto shrink-0 rounded p-0.5 text-[var(--faint)] opacity-0 transition-opacity hover:text-[var(--crit-del)] group-hover/cmt:opacity-100"
+                            className="shrink-0 rounded p-0.5 text-[var(--faint)] opacity-0 transition-opacity hover:text-[var(--crit-del)] group-hover/cmt:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                           >
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <polyline points="3 6 5 6 21 6" />
@@ -720,6 +797,22 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                         </div>
                         {(() => {
                           const repl = suggestionReplacement(c.body);
+                          if (editingId === c.id) {
+                            return (
+                              <ReviewTextEditor
+                                value={editDraft}
+                                label={repl === null ? "Edit comment" : "Edit suggestion"}
+                                onChange={setEditDraft}
+                                onSave={() => closeReviewEditorAfterSuccessfulSave(
+                                  () => repl === null
+                                    ? onEditComment(c, editDraft)
+                                    : onEditSuggestion(c, editDraft),
+                                  () => setEditingId(null),
+                                )}
+                                onCancel={() => setEditingId(null)}
+                              />
+                            );
+                          }
                           if (repl === null) {
                             // Non-active cards CLAMP long bodies (some review replies run
                             // hundreds of words) — otherwise the greedy stack cascades tens
@@ -814,8 +907,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           rows={1}
                           value={replyDraft}
                           onChange={(e) => setReplyDraft(e.target.value)}
-                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, card.kind === "comment"), () => { setReplyingId(null); setReplyDraft(""); })}
-                          placeholder="Reply…  (⇧↵ for a new line)"
+                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, card.kind === "comment"), () => { setReplyingId(null); setReplyDraft(""); setReplyMode("reply"); })}
+                          aria-label={replyMode === "suggestion" ? "Suggested replacement" : "Reply"}
+                          placeholder={replyMode === "suggestion" ? "Write the replacement text…" : "Reply…  (⇧↵ for a new line)"}
                           className="block max-h-40 w-full resize-none overflow-y-auto rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1.5 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
                         />
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -824,9 +918,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                             onClick={() => submitReply(card, false)}
                             className="flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--panel)]"
                           >
-                            Reply <span className="text-[10px] font-normal opacity-70">{MOD}↵</span>
+                            {replyMode === "suggestion" ? "Create suggestion" : "Reply"} <span className="text-[10px] font-normal opacity-70">{MOD}↵</span>
                           </button>
-                          {card.kind === "comment" ? (
+                          {card.kind === "comment" && replyMode === "reply" ? (
                             <button
                               type="button"
                               onClick={() => submitReply(card, true)}
@@ -846,23 +940,24 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                             e.stopPropagation();
                             setReplyingId(card.id);
                             setReplyDraft("");
+                            setReplyMode("reply");
                             onFocusThread(card);
                           }}
                           className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
                         >
                           Reply
                         </button>
-                        {/* One-click hand-off: posts a "suggest edit" reply + marks the
-                            thread seen, so it leaves your inbox and the agent picks it up.
-                            (Comment cards only — a suggestion already IS an edit.) */}
                         {card.kind === "comment" ? (
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onSuggestEdit(card);
+                              setReplyingId(card.id);
+                              setReplyDraft("");
+                              setReplyMode("suggestion");
+                              onFocusThread(card);
                             }}
-                            title="Ask the agent for an edit here — posts “suggest edit” and marks the thread seen"
+                            title="Write a replacement proposal for this anchored text"
                             className="flex items-center gap-1 text-[12px] text-[var(--crit-comment)] hover:opacity-80"
                           >
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

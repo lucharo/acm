@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorView } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 
-import { useDocSync } from "./client/useDocSync";
+import { canQuerySelectionProvenance, useDocSync } from "./client/useDocSync";
 import type { SaveState } from "./client/useDocSync";
 import { fetchAcmSession } from "./client/session";
 import type { AcmSession } from "./client/session";
@@ -45,7 +45,7 @@ import {
 } from "./editor/spellcheck";
 import type { FlaggedWord } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
-import { useComposer, SUGGEST_EDIT_TEXT } from "./hooks/useComposer";
+import { useComposer } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import ShortcutsOverlay from "./components/ShortcutsOverlay";
@@ -55,7 +55,11 @@ import type { ToastItem } from "./components/Toast";
 import PrintDocument, { waitForPrintImages } from "./components/PrintDocument";
 import Launcher from "./components/Launcher";
 import { toggleStrong, toggleEmphasis } from "./editor/formatting";
+import { ALT } from "./lib/platform";
+import { selectionAuthoringShortcut } from "./lib/shortcuts";
+import type { ProvenanceSegment } from "./lib/provenance";
 import { formatMarkdownTableAt } from "./editor/markdownTable";
+import { TABLE_CELL_COMMENT_EVENT } from "./editor/markdownPreview";
 import { flashRange } from "./editor/footnotes";
 import {
   scanTokens,
@@ -74,6 +78,8 @@ import {
   acceptedMarkdown,
   suggestionGroupEdits,
   commentKey,
+  commentBodyEdit,
+  suggestionProposalEdit,
   type SuggestionDiscussion,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
@@ -156,6 +162,7 @@ function DocumentApp({
   );
   const pendingRemote = useRef<{ content: string; version: number } | null>(null);
   const sync = useDocSync({
+    author: settings.author,
     onRemoteUpdate: (content, version) => {
       if (remoteRef.current) remoteRef.current(content, version);
       else pendingRemote.current = { content, version };
@@ -424,6 +431,39 @@ function Workspace({
   // Selection state powers the "Add comment" affordance.
   const [hasSelection, setHasSelection] = useState(false);
   const [selectionRange, setSelectionRange] = useState<{ from: number; to: number } | null>(null);
+  const [selectionProvenance, setSelectionProvenance] = useState<ProvenanceSegment[] | null>(null);
+  const [selectionProvenanceLoading, setSelectionProvenanceLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectionRange || !canQuerySelectionProvenance(saveState, connected)) {
+      setSelectionProvenance(null);
+      setSelectionProvenanceLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSelectionProvenanceLoading(true);
+    const query = new URLSearchParams({
+      from: String(selectionRange.from),
+      to: String(selectionRange.to),
+    });
+    void fetch(`/api/provenance?${query}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`provenance request failed (${response.status})`);
+        return response.json() as Promise<{ segments?: ProvenanceSegment[] }>;
+      })
+      .then((result) => {
+        if (!controller.signal.aborted) {
+          setSelectionProvenance(Array.isArray(result.segments) ? result.segments : []);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSelectionProvenance([]);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSelectionProvenanceLoading(false);
+      });
+    return () => controller.abort();
+  }, [selectionRange, lastSavedAt, saveState, connected]);
 
   // Spelling review modal: a deduped list of every flagged word in the document.
   // `flagged` is recomputed fresh whenever the list is shown (settings popover or the
@@ -455,12 +495,49 @@ function Workspace({
     composing,
     draft,
     setDraft,
+    composerKind,
     composerAnchored,
     openComposer,
+    openSuggestionComposer,
     cancelComposer,
     postComment,
-    suggestEditOnSelection,
-  } = useComposer(editor.viewRef, settings.author, setSeen);
+  } = useComposer(
+    editor.viewRef,
+    settings.author,
+    setSeen,
+    editor.setComposerAnchor,
+  );
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const action = selectionAuthoringShortcut(event);
+      if (!action) return;
+      const current = editor.viewRef.current;
+      if (!current?.hasFocus || current.state.selection.main.empty) return;
+      event.preventDefault();
+      if (action === "comment") openComposer();
+      else openSuggestionComposer();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editor.viewRef, openComposer, openSuggestionComposer]);
+
+  useEffect(() => {
+    const current = view ?? editor.viewRef.current;
+    if (!current) return;
+    const onTableCellComment = (event: Event) => {
+      const detail = (event as CustomEvent<{ from: number; to: number }>).detail;
+      if (!detail || detail.to <= detail.from) return;
+      current.dispatch({
+        selection: { anchor: detail.from, head: detail.to },
+        scrollIntoView: true,
+      });
+      current.focus();
+      openComposer();
+    };
+    current.dom.addEventListener(TABLE_CELL_COMMENT_EVENT, onTableCellComment);
+    return () => current.dom.removeEventListener(TABLE_CELL_COMMENT_EVENT, onTableCellComment);
+  }, [view, editor.viewRef, openComposer]);
 
   // A new composer belongs to the comment rail just like an existing thread. Keep
   // the surface mounted for its final fade, but collapse the column immediately
@@ -798,9 +875,20 @@ function Workspace({
   // dot) — the whole span is a target, not just the tiny glyph. A no-op for plain
   // highlights or normal prose, so it never interferes with cursor placement.
   const focusCommentAtPoint = useCallback(
-    (clientX: number, clientY: number) => {
+    (clientX: number, clientY: number, target: HTMLElement | null = null) => {
       const v = editor.viewRef.current;
       if (!v) return;
+      const directFrom = Number(target?.closest<HTMLElement>("[data-comment-from]")?.dataset.commentFrom);
+      if (Number.isFinite(directFrom)) {
+        const direct = tokens.find((token) => isComment(token) && token.from === directFrom);
+        const thread = direct
+          ? threads.find((candidate) => candidate.comments.some((comment) => comment.id === direct.id))
+          : null;
+        if (thread) {
+          focusThread(thread);
+          return;
+        }
+      }
       const pos = v.posAtCoords({ x: clientX, y: clientY });
       if (pos == null) return;
       const hl = tokens.find((t) => t.type === "highlight" && pos >= t.from && pos <= t.to);
@@ -1003,6 +1091,59 @@ function Workspace({
     [editor.viewRef, threads],
   );
 
+  const editComment = useCallback(
+    (comment: CommentToken, body: string) => {
+      const v = editor.viewRef.current;
+      if (!v) return false;
+      const current = scanTokens(v.state.doc.toString()).find(
+        (token): token is CommentToken => isComment(token) && token.id === comment.id,
+      );
+      if (!current) return false;
+      const result = commentBodyEdit(current, body);
+      if (!result.ok) {
+        pushToast("A comment cannot be empty.", "error");
+        return false;
+      }
+      v.dispatch({ changes: result.change });
+      const fresh = scanTokens(v.state.doc.toString()).find(
+        (token): token is CommentToken =>
+          isComment(token) && token.from === result.change.from,
+      );
+      setActiveId(fresh?.id ?? null);
+      return true;
+    },
+    [editor.viewRef, pushToast],
+  );
+
+  const editSuggestion = useCallback(
+    (suggestion: CommentToken | SuggestionToken, proposal: string) => {
+      const v = editor.viewRef.current;
+      if (!v) return false;
+      const current = scanTokens(v.state.doc.toString()).find(
+        (token): token is CommentToken | SuggestionToken =>
+          token.id === suggestion.id && (isComment(token) || isSuggestion(token)),
+      );
+      if (!current) return false;
+      const result = suggestionProposalEdit(current, proposal);
+      if (!result.ok) {
+        const message =
+          result.reason === "invalid-markup"
+            ? "That wording contains CriticMarkup delimiters that cannot be embedded safely."
+            : "This kind of suggestion has no editable proposed wording.";
+        pushToast(message, "error");
+        return false;
+      }
+      v.dispatch({ changes: result.change });
+      const fresh = scanTokens(v.state.doc.toString()).find(
+        (token) =>
+          token.from === result.change.from && (isComment(token) || isSuggestion(token)),
+      );
+      setActiveId(fresh?.id ?? null);
+      return true;
+    },
+    [editor.viewRef, pushToast],
+  );
+
   const replyToThread = useCallback(
     (thread: CommentThread, text: string) => {
       const v = editor.viewRef.current;
@@ -1090,7 +1231,8 @@ function Workspace({
       { id: "print", label: "Print / save as PDF", hint: `${MOD}P`, run: requestPrint },
       { id: "wrap", label: "Hard-wrap prose to 88 columns", hint: "acm wrap", run: wrapDoc },
       { id: "format-table", label: "Format table source at cursor", disabled: settings.richPreview, run: formatTableSource },
-      { id: "comment", label: "Comment on selection", hint: `${MOD}↵ to post`, disabled: !hasSelection, run: openComposer },
+      { id: "comment", label: "Comment on selection", hint: `${MOD}${ALT}M`, disabled: !hasSelection, run: openComposer },
+      { id: "suggest", label: "Suggest replacement", hint: `${MOD}${ALT}S`, disabled: !hasSelection, run: openSuggestionComposer },
       { id: "last-thread", label: "Go to the last comment", disabled: threads.length === 0, run: goToLastThread },
       { id: "first-issue", label: "Jump to first markup issue", hint: diagnostics.length ? String(diagnostics.length) : undefined, disabled: diagnostics.length === 0, run: goToFirstIssue },
       { id: "theme-light", label: "Use light theme", disabled: settings.theme === "light", run: () => onChangeSettings({ theme: "light" }) },
@@ -1109,7 +1251,7 @@ function Workspace({
       { id: "spell-review", label: "Review spelling", disabled: !settings.spellcheck, run: openSpellReview },
       { id: "toc", label: tocOpen ? "Hide table of contents" : "Show table of contents", run: () => setTocOpen((o) => !o) },
     ];
-  }, [editor.viewRef, threads, wrapDoc, formatTableSource, hasSelection, openComposer, diagnostics.length, goToFirstIssue, requestPrint, settings, onChangeSettings, tocOpen, openSpellReview, commentsEdgeVisible, toggleCommentRail]);
+  }, [editor.viewRef, threads, wrapDoc, formatTableSource, hasSelection, openComposer, openSuggestionComposer, diagnostics.length, goToFirstIssue, requestPrint, settings, onChangeSettings, tocOpen, openSpellReview, commentsEdgeVisible, toggleCommentRail]);
 
 
   // ── Right-click context menu ──────────────────────────────────────────────────
@@ -1173,6 +1315,7 @@ function Workspace({
         if (!sel.empty) {
           if (items.length) items.push({ separator: true });
           items.push({ label: "Add comment", onClick: () => openComposer() });
+          items.push({ label: "Suggest replacement", onClick: () => openSuggestionComposer() });
         }
       }
       if (items.length === 0) return; // nothing actionable — let the native menu show
@@ -1180,7 +1323,7 @@ function Workspace({
       e.stopPropagation(); // don't let the open-menu's window closer eat this one
       setMenu({ x: e.clientX, y: e.clientY, items });
     },
-    [editor.viewRef, tokens, threads, acceptToken, rejectToken, resolveThread, requestReply, openComposer, settings.spellcheck, addWord],
+    [editor.viewRef, tokens, threads, acceptToken, rejectToken, resolveThread, requestReply, openComposer, openSuggestionComposer, settings.spellcheck, addWord],
   );
 
   const openCommentMenu = useCallback(
@@ -1256,7 +1399,7 @@ function Workspace({
   // "save page as HTML". The file is the source of truth; this is the manual save.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "s" || e.key === "S")) {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
         e.preventDefault();
         flushNow();
       }
@@ -1392,7 +1535,7 @@ function Workspace({
                 ref={editor.containerRef}
                 className="h-full w-full"
                 onContextMenu={openEditorMenu}
-                onClick={(e) => focusCommentAtPoint(e.clientX, e.clientY)}
+                onClick={(e) => focusCommentAtPoint(e.clientX, e.clientY, e.target as HTMLElement)}
                 style={
                   railExpanded && scrollReach
                     ? ({ ["--acm-scroll-reach" as string]: `${scrollReach}px` })
@@ -1404,7 +1547,9 @@ function Workspace({
                   view={view}
                   selection={selectionRange}
                   onAddComment={openComposer}
-                  onMakeSuggestion={suggestEditOnSelection}
+                  onMakeSuggestion={openSuggestionComposer}
+                  provenance={selectionProvenance}
+                  provenanceLoading={selectionProvenanceLoading}
                 />
               ) : null}
             </main>
@@ -1427,9 +1572,11 @@ function Workspace({
                     replyTarget={replyTarget}
                     onResolveThread={resolveThread}
                     onDeleteComment={deleteComment}
+                    onEditComment={editComment}
+                    onEditSuggestion={editSuggestion}
                     onReply={replyToThread}
                     onReplyAndSeen={replyAndSeen}
-                    onSuggestEdit={(t) => replyAndSeen(t, SUGGEST_EDIT_TEXT)}
+                    onSuggestEdit={(t, proposal) => replyAndSeen(t, `SUGGEST: ${proposal}`)}
                     onApplySuggestion={(c) =>
                       runSuggestionEdit(
                         c,
@@ -1460,6 +1607,7 @@ function Workspace({
                     onFocusThread={focusThread}
                     onCardContextMenu={openCommentMenu}
                     composerOpen={composing}
+                    composerKind={composerKind}
                     composerDraft={draft}
                     composerAnchored={composerAnchored}
                     onComposerDraftChange={setDraft}
@@ -1530,6 +1678,7 @@ function Workspace({
           to open the first unseen comment when nothing's focused. */}
       {!commentRailWideEnough && composing ? (
         <MobileCommentComposer
+          kind={composerKind}
           draft={draft}
           anchored={composerAnchored}
           onDraftChange={setDraft}
@@ -1551,7 +1700,9 @@ function Workspace({
             onReply={replyToThread}
             onReplyAndSeen={replyAndSeen}
             onResolveThread={resolveThread}
-            onSuggestEdit={(t) => replyAndSeen(t, SUGGEST_EDIT_TEXT)}
+            onEditComment={editComment}
+            onEditSuggestion={editSuggestion}
+            onSuggestEdit={(t, proposal) => replyAndSeen(t, `SUGGEST: ${proposal}`)}
             onToggleSeen={toggleSeen}
             onApplySuggestion={(c) =>
               runSuggestionEdit(

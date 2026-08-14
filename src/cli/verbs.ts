@@ -45,12 +45,14 @@ import { storeDecisionRecoveryEvents } from "../server/decisionRecovery";
 import { documentUpdateLockPath, withFileUpdateLock } from "../server/fileLock";
 import {
   decisionEventsAcknowledged,
+  rebaseDecisionEventsForCommit,
   structuredSuggestionDecision,
   structuredSuggestionGroupDecisions,
   threadResolveDecision,
   type DecisionEvent,
 } from "../lib/decision";
 import { merge3 } from "../lib/merge";
+import { recordProvenanceWrite } from "../server/provenance";
 
 const VERBS = new Set(["reply", "apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "decisions", "restore", "spell"]);
 export function isAgentVerb(cmd?: string): boolean {
@@ -171,6 +173,8 @@ export async function rollBackUnauditedLiveWrite(
         base: committed,
         content: inverse.result,
         documentPath,
+        author: "acm-cli",
+        operation: "audit rollback",
         decisionEvents: [],
       }),
       signal: AbortSignal.timeout(Number(process.env.ACM_AGENT_WRITE_TIMEOUT_MS) || 10_000),
@@ -203,6 +207,11 @@ export type DirectWriteResult =
   | { status: "conflict"; content: string }
   | DirectAuditFailure;
 
+export interface DirectWriteIdentity {
+  author: string;
+  operation?: string;
+}
+
 export function directAuditFailureGuidance(result: DirectAuditFailure): string[] {
   if (result.retainedForAuditConsistency) {
     const recovery = result.auditRecovery;
@@ -229,6 +238,7 @@ export async function writeDirectWithAudit(
     docPath: string,
     events: readonly DecisionEvent[],
   ) => Promise<{ appended: number }> = appendDecisionEvents,
+  identity: DirectWriteIdentity = { author: "Agent", operation: "agent edit" },
 ): Promise<DirectWriteResult> {
   return withFileUpdateLock(
     documentUpdateLockPath(documentPath),
@@ -237,13 +247,31 @@ export async function writeDirectWithAudit(
       const current = await Bun.file(documentPath).text();
       const merged = merge3(proposed, before, current);
       if (!merged.clean) return { status: "conflict", content: current };
+      const committedDecisionEvents = rebaseDecisionEventsForCommit(
+        decisionEvents,
+        { base: before, mine: proposed, theirs: current, committed: merged.result },
+      );
       await Bun.write(documentPath, merged.result);
-      if (decisionEvents.length === 0) {
+      const recordCommittedProvenance = async () => {
+        try {
+          await recordProvenanceWrite(documentPath, current, merged.result, {
+            author: identity.author.trim() || "Agent",
+            source: "agent",
+            timestamp: new Date().toISOString(),
+            operation: identity.operation ?? "agent edit",
+          }, committedDecisionEvents);
+        } catch {
+          // Markdown remains authoritative; a later editor can start a fresh baseline.
+        }
+      };
+      if (committedDecisionEvents.length === 0) {
+        await recordCommittedProvenance();
         return { status: "written", content: merged.result };
       }
 
       try {
-        await persistDecisionEvents(documentPath, decisionEvents);
+        await persistDecisionEvents(documentPath, committedDecisionEvents);
+        await recordCommittedProvenance();
         return { status: "written", content: merged.result };
       } catch (initialError) {
         const readPersistedIds = async (): Promise<Set<string> | null> => {
@@ -256,19 +284,20 @@ export async function writeDirectWithAudit(
           }
         };
         const allPersisted = (ids: Set<string> | null): boolean =>
-          ids !== null && decisionEvents.every((event) => ids.has(event.id));
+          ids !== null && committedDecisionEvents.every((event) => ids.has(event.id));
         const anyPersisted = (ids: Set<string> | null): boolean =>
-          ids === null || decisionEvents.some((event) => ids.has(event.id));
+          ids === null || committedDecisionEvents.some((event) => ids.has(event.id));
 
         let persistedIds = await readPersistedIds();
         if (allPersisted(persistedIds)) {
+          await recordCommittedProvenance();
           return { status: "written", content: merged.result };
         }
 
         const initialPersistedIds = persistedIds;
         const missingEvents = initialPersistedIds === null
-          ? decisionEvents
-          : decisionEvents.filter((event) => !initialPersistedIds.has(event.id));
+          ? committedDecisionEvents
+          : committedDecisionEvents.filter((event) => !initialPersistedIds.has(event.id));
         let auditError: unknown = initialError;
         let retrySucceeded = false;
         try {
@@ -280,6 +309,7 @@ export async function writeDirectWithAudit(
 
         persistedIds = await readPersistedIds();
         if (allPersisted(persistedIds) || (retrySucceeded && persistedIds === null)) {
+          await recordCommittedProvenance();
           return { status: "written", content: merged.result };
         }
         if (retrySucceeded) {
@@ -287,8 +317,8 @@ export async function writeDirectWithAudit(
         }
         if (anyPersisted(persistedIds)) {
           const missingRecoveryEvents = persistedIds === null
-            ? decisionEvents
-            : decisionEvents.filter((event) => !persistedIds.has(event.id));
+            ? committedDecisionEvents
+            : committedDecisionEvents.filter((event) => !persistedIds.has(event.id));
           let auditRecovery: DirectAuditRecovery;
           try {
             await storeDecisionRecoveryEvents(documentPath, missingRecoveryEvents);
@@ -303,6 +333,7 @@ export async function writeDirectWithAudit(
               message: (recoveryError as Error).message,
             };
           }
+          await recordCommittedProvenance();
           return {
             status: "audit-failed",
             restored: false,
@@ -345,7 +376,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
 
   // ── Spell: list / add / replace — its own sub-dispatch (add needs no doc) ────
   if (cmd === "spell") {
-    await runSpell(f);
+    await runSpell(f, author);
     return;
   }
 
@@ -406,9 +437,20 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       console.error(`acm restore: ${ref} not found in the history (see \`acm history\`)`);
       process.exit(1);
     }
+    const beforeRestore = await Bun.file(docPath).text();
     const snap = await snapshot(docPath, "restore"); // keep the pre-restore state
     await recordHistory(docPath, "pre-restore"); // and record it in the history, so restore is reversible
     await Bun.write(docPath, content);
+    try {
+      await recordProvenanceWrite(docPath, beforeRestore, content, {
+        author: author.trim() || "Agent",
+        source: "restore",
+        timestamp: new Date().toISOString(),
+        operation: `restore ${ref}`,
+      });
+    } catch {
+      // The restored Markdown remains authoritative if auxiliary provenance fails.
+    }
     console.log(`acm restore: doc restored to ${ref}`);
     if (snap) console.log(`  pre-restore backup → ${snap}`);
     return;
@@ -563,7 +605,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  await commitWrite(docPath, before, after, cmd, note, decisionEvents);
+  await commitWrite(docPath, before, after, cmd, note, decisionEvents, author);
 }
 
 /** Snapshot → write (through a live editor's 3-way merge if one's open, else direct)
@@ -577,6 +619,7 @@ async function commitWrite(
   cmd: string,
   note: string,
   decisionEvents: DecisionEvent[] = [],
+  author = "Agent",
 ): Promise<void> {
   if (after === before) {
     console.log(`acm ${cmd}: no change. ${note}`);
@@ -591,7 +634,14 @@ async function commitWrite(
   let final = after;
   let viaEditorPort: number | null = null;
   const commitDirect = async () => {
-    const result = await writeDirectWithAudit(docPath, before, after, decisionEvents);
+    const result = await writeDirectWithAudit(
+      docPath,
+      before,
+      after,
+      decisionEvents,
+      undefined,
+      { author, operation: cmd },
+    );
     if (result.status === "written") {
       final = result.content;
       return;
@@ -634,6 +684,8 @@ async function commitWrite(
           base: before,
           content: after,
           documentPath: docPath,
+          author,
+          operation: cmd,
           decisionEvents,
         }),
         // Env override exists for the test suite (a black-holed-port test shouldn't
@@ -833,7 +885,7 @@ function lineOf(text: string, offset: number): number {
   return line;
 }
 
-async function runSpell(f: Flags): Promise<void> {
+async function runSpell(f: Flags, author: string): Promise<void> {
   const sub = f.positional[0] ?? "list";
   if (sub === "add") return runSpellAdd(f);
   if (sub !== "list" && sub !== "ignore" && sub !== "replace") {
@@ -867,7 +919,15 @@ async function runSpell(f: Flags): Promise<void> {
     console.log(`acm spell replace: no flagged "${word}" in the document — nothing to replace`);
     return;
   }
-  await commitWrite(docPath, before, after, "spell replace", `replaced every flagged "${word}" → "${replacement}"`);
+  await commitWrite(
+    docPath,
+    before,
+    after,
+    "spell replace",
+    `replaced every flagged "${word}" → "${replacement}"`,
+    [],
+    author,
+  );
 }
 
 /** `acm spell add <word…>` — append to the personal dictionary. Routed through a live

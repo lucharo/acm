@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { selectionToolbarPosition } from "./SelectionActions";
+import { provenanceSummary, selectionToolbarPosition } from "./SelectionActions";
 
 describe("selection action toolbar positioning", () => {
   test("centres above a same-line selection", () => {
@@ -34,5 +34,33 @@ describe("selection action toolbar positioning", () => {
         1000,
       ),
     ).toBeNull();
+  });
+});
+
+describe("selection authorship summary", () => {
+  test("names an accepted suggestion's proposer and reviewer", () => {
+    const summary = provenanceSummary([{
+      from: 4,
+      to: 12,
+      author: "Claude",
+      source: "suggestion",
+      timestamp: "2026-08-12T10:02:00.000Z",
+      reviewedBy: "Luis",
+      decisionId: "decision-1",
+    }]);
+    expect(summary?.label).toBe("By Claude · reviewed by Luis");
+    expect(summary?.title).toContain("Claude · accepted suggestion · reviewed by Luis");
+    expect(summary?.title).toContain("12 Aug 2026");
+  });
+
+  test("summarises a mixed-author selection without repeating an author", () => {
+    expect(provenanceSummary([
+      { from: 0, to: 3, author: "Luis", source: "human", timestamp: "2026-08-12T10:00:00.000Z" },
+      { from: 3, to: 5, author: "Luis", source: "human", timestamp: "2026-08-12T10:01:00.000Z" },
+      { from: 5, to: 9, author: "Codex", source: "agent", timestamp: "2026-08-12T10:02:00.000Z" },
+    ])).toEqual({
+      label: "Mixed: Luis, Codex",
+      title: "Selection contains text by Luis and Codex",
+    });
   });
 });

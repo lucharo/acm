@@ -23,4 +23,23 @@ describe("mobile comment composer", () => {
     expect(html).toContain("disabled:bg-transparent");
     expect(html).not.toContain("⌘");
   });
+
+  test("labels replacement proposals as suggestions and omits the done action", () => {
+    const noop = () => {};
+    const html = renderToStaticMarkup(
+      createElement(MobileCommentComposer, {
+        kind: "suggestion",
+        draft: "Clearer wording",
+        anchored: true,
+        onDraftChange: noop,
+        onPost: noop,
+        onPostDone: noop,
+        onCancel: noop,
+      }),
+    );
+
+    expect(html).toContain('aria-label="Suggested replacement"');
+    expect(html).toContain("Create suggestion");
+    expect(html).not.toContain("Post &amp; done");
+  });
 });

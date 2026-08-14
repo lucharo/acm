@@ -246,3 +246,217 @@ export function changedFragments(base: string, content: string): string[] {
     .filter((h) => h.sideLen > 0)
     .map((h) => x.slice(h.sideStart, h.sideStart + h.sideLen).join("\n"));
 }
+
+/** One exact changed region, expressed in both the old and new documents. */
+export interface TextChangeHunk {
+  beforeFrom: number;
+  beforeTo: number;
+  afterFrom: number;
+  afterTo: number;
+}
+
+type CharacterEdit = "equal" | "delete" | "insert";
+
+/** Myers diff over UTF-16 code units (the same offsets CodeMirror uses). Large
+ * rewrites deliberately fall back to one conservative range instead of building
+ * an unbounded trace; ordinary prose edits stay exact down to the changed text. */
+function characterEdits(before: string, after: string, maxDistance = 512): CharacterEdit[] | null {
+  const n = before.length;
+  const m = after.length;
+  const limit = Math.min(n + m, maxDistance);
+  let frontier = new Map<number, number>([[1, 0]]);
+  const trace: Map<number, number>[] = [];
+
+  for (let distance = 0; distance <= limit; distance++) {
+    trace.push(new Map(frontier));
+    const next = new Map(frontier);
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+      const right = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+      let x = diagonal === -distance || (diagonal !== distance && right < down)
+        ? Math.max(0, down)
+        : Math.max(0, right + 1);
+      let y = x - diagonal;
+      while (x < n && y < m && before.charCodeAt(x) === after.charCodeAt(y)) {
+        x++;
+        y++;
+      }
+      next.set(diagonal, x);
+      if (x >= n && y >= m) {
+        const edits: CharacterEdit[] = [];
+        let bx = n;
+        let ay = m;
+        for (let d = distance; d >= 0; d--) {
+          const prior = trace[d];
+          const k = bx - ay;
+          const priorDown = prior.get(k + 1) ?? Number.NEGATIVE_INFINITY;
+          const priorRight = prior.get(k - 1) ?? Number.NEGATIVE_INFINITY;
+          const previousK = k === -d || (k !== d && priorRight < priorDown) ? k + 1 : k - 1;
+          const previousX = Math.max(0, prior.get(previousK) ?? 0);
+          const previousY = previousX - previousK;
+          while (bx > previousX && ay > previousY) {
+            edits.push("equal");
+            bx--;
+            ay--;
+          }
+          if (d === 0) break;
+          if (bx === previousX) {
+            edits.push("insert");
+            ay--;
+          } else {
+            edits.push("delete");
+            bx--;
+          }
+        }
+        return edits.reverse();
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+function characterChangeHunks(
+  before: string,
+  after: string,
+  beforeOffset: number,
+  afterOffset: number,
+): TextChangeHunk[] {
+  let prefix = 0;
+  const maxPrefix = Math.min(before.length, after.length);
+  while (prefix < maxPrefix && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix++;
+
+  let suffix = 0;
+  const maxSuffix = maxPrefix - prefix;
+  while (
+    suffix < maxSuffix &&
+    before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)
+  ) {
+    suffix++;
+  }
+
+  const oldMiddle = before.slice(prefix, before.length - suffix);
+  const newMiddle = after.slice(prefix, after.length - suffix);
+  if (oldMiddle.length === 0 && newMiddle.length === 0) return [];
+  const edits = characterEdits(oldMiddle, newMiddle);
+  if (!edits) {
+    return [{
+      beforeFrom: beforeOffset + prefix,
+      beforeTo: beforeOffset + before.length - suffix,
+      afterFrom: afterOffset + prefix,
+      afterTo: afterOffset + after.length - suffix,
+    }];
+  }
+
+  const hunks: TextChangeHunk[] = [];
+  let oldPos = prefix;
+  let newPos = prefix;
+  let open: TextChangeHunk | null = null;
+  const close = () => {
+    if (open) hunks.push(open);
+    open = null;
+  };
+  for (const edit of edits) {
+    if (edit === "equal") {
+      close();
+      oldPos++;
+      newPos++;
+      continue;
+    }
+    open ??= {
+      beforeFrom: beforeOffset + oldPos,
+      beforeTo: beforeOffset + oldPos,
+      afterFrom: afterOffset + newPos,
+      afterTo: afterOffset + newPos,
+    };
+    if (edit === "delete") {
+      oldPos++;
+      open.beforeTo = beforeOffset + oldPos;
+    } else {
+      newPos++;
+      open.afterTo = afterOffset + newPos;
+    }
+  }
+  close();
+  return hunks;
+}
+
+function lineStarts(text: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  return starts;
+}
+
+function lineBoundary(text: string, starts: number[], line: number): number {
+  if (line <= 0) return 0;
+  if (line >= starts.length) return text.length;
+  return starts[line];
+}
+
+const MAX_TEXT_CHANGE_LINE_CELLS = 250_000;
+
+/** Exact changed ranges between two document states. Line LCS keeps the search
+ * bounded to changed paragraphs; a character diff inside each line hunk preserves
+ * independently-authored edits even when they share one Markdown line. Large
+ * rewrites use the bounded character diff instead of allocating an unbounded
+ * quadratic line matrix; that diff itself falls back to one conservative range
+ * when its edit-distance budget is exceeded. */
+export function textChangeHunks(
+  before: string,
+  after: string,
+  maxLineDiffCells = MAX_TEXT_CHANGE_LINE_CELLS,
+): TextChangeHunk[] {
+  if (before === after) return [];
+  const oldLines = lines(before);
+  const newLines = lines(after);
+  const oldStarts = lineStarts(before);
+  const newStarts = lineStarts(after);
+
+  let prefixLines = 0;
+  while (
+    prefixLines < oldLines.length &&
+    prefixLines < newLines.length &&
+    oldLines[prefixLines] === newLines[prefixLines]
+  ) {
+    prefixLines++;
+  }
+  let suffixLines = 0;
+  while (
+    suffixLines < oldLines.length - prefixLines &&
+    suffixLines < newLines.length - prefixLines &&
+    oldLines[oldLines.length - 1 - suffixLines] === newLines[newLines.length - 1 - suffixLines]
+  ) {
+    suffixLines++;
+  }
+
+  const oldEndLine = oldLines.length - suffixLines;
+  const newEndLine = newLines.length - suffixLines;
+  const oldWindow = oldLines.slice(prefixLines, oldEndLine);
+  const newWindow = newLines.slice(prefixLines, newEndLine);
+  const beforeWindowFrom = lineBoundary(before, oldStarts, prefixLines);
+  const beforeWindowTo = lineBoundary(before, oldStarts, oldEndLine);
+  const afterWindowFrom = lineBoundary(after, newStarts, prefixLines);
+  const afterWindowTo = lineBoundary(after, newStarts, newEndLine);
+
+  if (oldWindow.length * newWindow.length > Math.max(0, maxLineDiffCells)) {
+    return characterChangeHunks(
+      before.slice(beforeWindowFrom, beforeWindowTo),
+      after.slice(afterWindowFrom, afterWindowTo),
+      beforeWindowFrom,
+      afterWindowFrom,
+    );
+  }
+
+  return diffHunks(oldWindow, newWindow, "a").flatMap((hunk) => {
+    const beforeFrom = lineBoundary(before, oldStarts, prefixLines + hunk.oStart);
+    const beforeTo = lineBoundary(before, oldStarts, prefixLines + hunk.oStart + hunk.oLen);
+    const afterFrom = lineBoundary(after, newStarts, prefixLines + hunk.sideStart);
+    const afterTo = lineBoundary(after, newStarts, prefixLines + hunk.sideStart + hunk.sideLen);
+    return characterChangeHunks(
+      before.slice(beforeFrom, beforeTo),
+      after.slice(afterFrom, afterTo),
+      beforeFrom,
+      afterFrom,
+    );
+  });
+}

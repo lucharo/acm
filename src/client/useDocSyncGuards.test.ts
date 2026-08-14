@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   auditEndpointReadyForEpoch,
+  canQuerySelectionProvenance,
   decisionEntriesForFlush,
+  decisionEventsForAuditRetry,
   fetchDecisionRecoveryEvents,
   fetchPersistedDecisionEventIds,
   parseDocSnapshot,
@@ -31,6 +33,21 @@ const EVENT: DecisionEvent = {
 };
 
 describe("document sync guards", () => {
+  test("selection provenance is queried only when the live buffer matches disk", () => {
+    expect(canQuerySelectionProvenance("saved", true)).toBe(true);
+    expect(canQuerySelectionProvenance("saved", false)).toBe(false);
+    for (const state of [
+      "unsaved",
+      "saving",
+      "offline",
+      "conflict",
+      "audit-error",
+      "audit-recovery",
+    ] as const) {
+      expect(canQuerySelectionProvenance(state, true)).toBe(false);
+    }
+  });
+
   test("decision history reads distinguish persisted ids from an unavailable endpoint", async () => {
     const ready = (async () =>
       Response.json({
@@ -163,6 +180,17 @@ describe("document sync guards", () => {
       persisted: true,
       recoveryNeedsReview: true,
     });
+  });
+
+  test("an audit retry uses the server's rebased committed coordinates", () => {
+    const rebased = {
+      ...EVENT,
+      target: { ...EVENT.target, afterFrom: 12, afterTo: 19 },
+    };
+
+    expect(decisionEventsForAuditRetry([EVENT], [rebased])).toEqual([rebased]);
+    expect(decisionEventsForAuditRetry([EVENT], [{ ...rebased, id: "other" }])).toEqual([EVENT]);
+    expect(decisionEventsForAuditRetry([EVENT], [{ ...rebased, actor: 42 }])).toEqual([EVENT]);
   });
 
   test("audit-only retries exclude decisions without document-commit evidence", () => {

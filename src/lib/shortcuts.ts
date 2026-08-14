@@ -23,6 +23,19 @@ export interface ShortcutGroup {
   items: Shortcut[];
 }
 
+export function selectionAuthoringShortcut(event: {
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}): "comment" | "suggestion" | null {
+  if (!(event.metaKey || event.ctrlKey) || !event.altKey || event.shiftKey) return null;
+  if (event.code === "KeyM") return "comment";
+  if (event.code === "KeyS") return "suggestion";
+  return null;
+}
+
 export function shortcutGroups(): ShortcutGroup[] {
   const groups: ShortcutGroup[] = [
     {
@@ -49,6 +62,8 @@ export function shortcutGroups(): ShortcutGroup[] {
     {
       title: "Comments",
       items: [
+        { keys: `${MOD}${ALT}M`, label: "Comment on selected text" },
+        { keys: `${MOD}${ALT}S`, label: "Suggest replacement for selected text" },
         { keys: `${MOD}↵`, label: "Post comment on the selection" },
         { keys: `${MOD}${SHIFT}↵`, label: "Post comment & mark it seen" },
         { keys: `${SHIFT}↵`, label: "New line inside a comment" },

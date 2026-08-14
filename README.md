@@ -103,9 +103,9 @@ Comments support an author prefix: `{>>@claude: needs a citation<<}` → the bub
 ## How it works for the human
 
 - **Suggestion mode** — every insertion/deletion/substitution has inline ✓ (accept) / ✗ (reject) controls. Accept applies the change and strips the markup *in the file*; reject reverts and strips.
-- **Comments** — each `{>>…<<}` is a margin bubble connected to its anchor. **Resolve** removes it. **Add a comment** by selecting text and clicking *Add comment*.
+- **Comments** — each `{>>…<<}` is a margin bubble connected to its anchor. **Resolve** removes it. Select text to add a comment or suggestion; existing comments and text-bearing suggestions can be edited in place.
 - **Navigation** — the top-left table-of-contents button jumps between headings. Review cards stay beside the prose on desktop and in a bottom sheet on narrow screens.
-- **Keyboard** — `Alt+↓`/`Alt+J` next · `Alt+↑`/`Alt+K` prev · `Alt+Y` accept · `Alt+N` reject (the active item).
+- **Keyboard** — `Cmd+Option+M` / `Ctrl+Alt+M` comments on selected text · `Cmd+Option+S` / `Ctrl+Alt+S` suggests a replacement · `Alt+↓`/`Alt+J` next · `Alt+↑`/`Alt+K` prev · `Alt+Y` accept · `Alt+N` reject (the active item).
 - **Live** — when an agent rewrites the file on disk, the UI updates within ~1s without losing your scroll position.
 
 ## FAQ
@@ -123,7 +123,10 @@ the open-comment pill and `Alt+↓`/`Alt+↑` review navigation instead.
 Select prose to reveal **Add comment** and **Make suggestion** beside the
 selection. The composer and thread actions live in the comments edge on desktop
 and in the comments sheet on narrow screens, so authoring and review use one
-consistent surface instead of the old top-bar composer.
+consistent surface instead of the old top-bar composer. The selected anchor stays
+visibly highlighted while its composer is open, then clears when the composer
+closes. Existing comments and text-bearing suggestions can be edited without
+changing their original author label or CriticMarkup group.
 
 ### Can I edit a rendered table without switching the whole document to source?
 
@@ -134,6 +137,21 @@ follows the link. Type `/table` on an otherwise empty line and press Enter to
 insert a two-column starter table. The global code/eye control remains the
 deliberate, byte-preserving escape to raw Markdown. Source alignment is a separate
 explicit, undoable **Format table source** action rather than an automatic rewrite.
+Each cell also has a separate comment control. Whole-cell comments use the cell's
+exact source range and reopen the matching thread without disrupting table parsing.
+
+### Does ACM render LaTeX?
+
+Yes. Use `$…$` for inline maths and `$$…$$` for display maths. ACM renders both
+through KaTeX in prose, table cells, tracked additions and print, including the
+standalone binary. Code spans, code fences and currency-like prose stay literal.
+
+### How does ACM track who wrote reviewed text?
+
+Markdown remains the source of truth. ACM keeps inspectable range attribution in
+`.acm/provenance/<document>.json`, preserving unchanged authors and attributing
+human, agent, CLI, external-file and accepted-suggestion writes. Select text to
+see its provenance; accepted suggestions retain both proposer and reviewer context.
 
 ### Why can a tracked addition appear in the page and in the comments edge?
 

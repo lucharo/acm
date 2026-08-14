@@ -66,6 +66,12 @@ export const acmTheme: Extension = EditorView.theme(
     "::selection": {
       backgroundColor: "var(--cm-selection)",
     },
+    // The browser's native selection belongs to whichever control has focus. When
+    // the review composer takes focus, this mapped mark keeps its anchor visible.
+    ".cm-composer-anchor": {
+      backgroundColor: "var(--cm-selection)",
+      borderRadius: "2px",
+    },
 
     // ── Markdown live-preview classes (styled by markdownPreview.ts marks) ──────
     ".cm-md-h1": {
@@ -95,6 +101,15 @@ export const acmTheme: Extension = EditorView.theme(
       background: "var(--line)",
       borderRadius: "4px",
       padding: "0.08em 0.32em",
+    },
+    ".cm-math-widget": {
+      color: "inherit",
+      cursor: "text",
+    },
+    ".cm-math-widget .katex-display": {
+      margin: "0.55em 0",
+      overflowX: "auto",
+      overflowY: "hidden",
     },
     ".cm-md-quote": {
       color: "var(--muted)",
@@ -194,14 +209,12 @@ export const acmTheme: Extension = EditorView.theme(
       cursor: "text",
       outline: "none",
       transition: "background-color 120ms ease, box-shadow 120ms ease",
+      position: "relative",
     },
     "@media (hover: hover)": {
       ".cm-md-table th:hover, .cm-md-table td:hover": {
         boxShadow: "inset 0 0 0 1px var(--accent)",
       },
-    },
-    ".cm-md-table th:focus-visible, .cm-md-table td:focus-visible": {
-      boxShadow: "inset 0 0 0 2px var(--accent)",
     },
     ".cm-md-table th": {
       backgroundColor: "var(--line)",
@@ -210,6 +223,52 @@ export const acmTheme: Extension = EditorView.theme(
     },
     ".cm-md-table td": {
       backgroundColor: "var(--panel)",
+    },
+    ".cm-md-table-cell-commented": {
+      boxShadow: "inset 3px 0 0 var(--crit-comment)",
+      backgroundColor: "var(--crit-hl-bg)",
+    },
+    ".cm-md-table-action": {
+      appearance: "none",
+      border: "0",
+      borderRadius: "999px",
+      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+      cursor: "pointer",
+    },
+    ".cm-md-table-edit, .cm-md-table-comment-add": {
+      position: "absolute",
+      top: "2px",
+      width: "1.3rem",
+      height: "1.3rem",
+      backgroundColor: "var(--panel)",
+      boxShadow: "0 0 0 1px var(--line-strong)",
+      opacity: "0",
+      transition: "opacity 100ms ease",
+    },
+    ".cm-md-table-edit": {
+      right: "1.55rem",
+      color: "var(--muted)",
+      fontSize: "0.78em",
+    },
+    ".cm-md-table-comment-marker": {
+      marginLeft: "0.35em",
+      backgroundColor: "transparent",
+      padding: "0 0.12em",
+      color: "var(--crit-comment)",
+      fontSize: "0.72em",
+      verticalAlign: "super",
+    },
+    ".cm-md-table-comment-add": {
+      right: "2px",
+      color: "var(--crit-comment)",
+    },
+    ".cm-md-table th:hover .cm-md-table-edit, .cm-md-table td:hover .cm-md-table-edit, .cm-md-table th:hover .cm-md-table-comment-add, .cm-md-table td:hover .cm-md-table-comment-add, .cm-md-table th:focus-within .cm-md-table-edit, .cm-md-table td:focus-within .cm-md-table-edit, .cm-md-table th:focus-within .cm-md-table-comment-add, .cm-md-table td:focus-within .cm-md-table-comment-add": {
+      opacity: "1",
+    },
+    ".cm-md-table-action:focus-visible": {
+      outline: "2px solid var(--accent)",
+      outlineOffset: "2px",
+      opacity: "1",
     },
     ".cm-md-table-cell-input": {
       boxSizing: "border-box",
@@ -604,6 +663,11 @@ export const acmTheme: Extension = EditorView.theme(
       },
       ".cm-md-table th, .cm-md-table td": {
         padding: "0.3em 0.24em",
+      },
+    },
+    "@media (hover: none)": {
+      ".cm-md-table-comment-add": {
+        opacity: "1",
       },
     },
     // Fatten inline review affordances through tablet widths. Inline controls

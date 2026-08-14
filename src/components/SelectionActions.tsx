@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
+import { ALT, MOD } from "../lib/platform";
+import type { ProvenanceSegment, ProvenanceSource } from "../lib/provenance";
 
 interface SelectionRange {
   from: number;
@@ -12,6 +14,8 @@ interface SelectionActionsProps {
   selection: SelectionRange | null;
   onAddComment: () => void;
   onMakeSuggestion: () => void;
+  provenance: ProvenanceSegment[] | null;
+  provenanceLoading?: boolean;
 }
 
 interface CoordinateRect {
@@ -34,6 +38,43 @@ interface ToolbarPosition {
 
 const TOOLBAR_EDGE = 132;
 const TOOLBAR_GAP = 10;
+
+const SOURCE_LABELS: Record<ProvenanceSource, string> = {
+  baseline: "existing text",
+  human: "human edit",
+  agent: "agent edit",
+  external: "external edit",
+  suggestion: "accepted suggestion",
+  restore: "restored text",
+};
+
+export function provenanceSummary(
+  segments: readonly ProvenanceSegment[],
+): { label: string; title: string } | null {
+  if (segments.length === 0) return null;
+  const authors = [...new Set(segments.map((segment) => segment.author))];
+  if (authors.length > 1) {
+    const visible = authors.slice(0, 3);
+    return {
+      label: `Mixed: ${visible.join(", ")}${authors.length > visible.length ? ` +${authors.length - visible.length}` : ""}`,
+      title: `Selection contains text by ${authors.join(authors.length === 2 ? " and " : ", ")}`,
+    };
+  }
+
+  const first = segments[0];
+  const sameDetails = segments.every((segment) =>
+    segment.source === first.source && segment.reviewedBy === first.reviewedBy
+  );
+  const reviewed = sameDetails && first.reviewedBy ? ` · reviewed by ${first.reviewedBy}` : "";
+  const timestamp = new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(first.timestamp));
+  return {
+    label: `By ${first.author}${reviewed}`,
+    title: `${first.author} · ${sameDetails ? SOURCE_LABELS[first.source] : "multiple edits"}${reviewed} · ${timestamp}`,
+  };
+}
 
 export function selectionToolbarPosition(
   start: CoordinateRect,
@@ -58,6 +99,8 @@ export default function SelectionActions({
   selection,
   onAddComment,
   onMakeSuggestion,
+  provenance,
+  provenanceLoading = false,
 }: SelectionActionsProps) {
   const [position, setPosition] = useState<ToolbarPosition | null>(null);
 
@@ -106,6 +149,7 @@ export default function SelectionActions({
 
   if (!position) return null;
   const keepSelection = (event: ReactMouseEvent) => event.preventDefault();
+  const authorship = provenance ? provenanceSummary(provenance) : null;
 
   return (
     <div
@@ -119,10 +163,24 @@ export default function SelectionActions({
       }}
       onMouseDown={keepSelection}
     >
+      {provenanceLoading ? (
+        <span className="px-2 text-[11px] text-[var(--ink-muted)]">Authorship…</span>
+      ) : authorship ? (
+        <span
+          className="max-w-52 truncate px-2 text-[11px] text-[var(--ink-muted)]"
+          title={authorship.title}
+        >
+          {authorship.label}
+        </span>
+      ) : null}
+      {provenanceLoading || authorship ? (
+        <span className="h-5 w-px bg-[var(--line)]" aria-hidden="true" />
+      ) : null}
       <button
         type="button"
         onMouseDown={keepSelection}
         onClick={onAddComment}
+        title={`Add comment (${MOD}${ALT}M)`}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[var(--ink)] hover:bg-[var(--line)]"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--crit-comment)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -135,7 +193,7 @@ export default function SelectionActions({
         type="button"
         onMouseDown={keepSelection}
         onClick={onMakeSuggestion}
-        title="Ask the agent to propose an edit for this selection"
+        title={`Suggest replacement (${MOD}${ALT}S)`}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[var(--crit-comment)] hover:bg-[var(--line)]"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

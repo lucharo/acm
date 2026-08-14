@@ -35,6 +35,11 @@ import { pageBreaks } from "./pageBreaks";
 import { spellcheck } from "./spellcheck";
 import { tableSlashKeymap } from "./tableInsert";
 import { acmTheme, pageTheme } from "./theme";
+import {
+  composerAnchorExtension,
+  setComposerAnchor as setComposerAnchorEffect,
+} from "./composerAnchor";
+import type { ComposerAnchorRange } from "./composerAnchor";
 import type { DecisionEvent, DecisionQueueUpdate } from "../lib/decision";
 
 export interface UseCodeMirrorOptions {
@@ -62,6 +67,8 @@ export interface UseCodeMirrorResult {
   applyRemote: (content: string) => void;
   /** Tell the editor which comment-anchor highlights are active / seen / busy (by `from`). */
   setHighlightState: (state: HighlightStateInput) => void;
+  /** Keep the selected review anchor visible while its composer owns focus. */
+  setComposerAnchor: (range: ComposerAnchorRange | null) => void;
 }
 
 /** Marks transactions that originate from a remote/agent edit, so the update
@@ -210,6 +217,9 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         ]),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
+        EditorView.contentAttributes.of({
+          "aria-label": "Markdown document editor",
+        }),
         placeholder("Start writing…"),
         // NB: we deliberately do NOT use drawSelection(). It paints the selection on a
         // layer BEHIND the text, which the doc's pervasive yellow {==..==} highlight
@@ -225,6 +235,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         // reaches the app shell's freshest handler (same pattern as onUpdate).
         imageInsert((msg, kind) => optsRef.current.onToast?.(msg, kind)),
         footnotes,
+        composerAnchorExtension,
         acmTheme,
         callbacksCompartment.current.of(
           critCallbacksFacet.of(optsRef.current.callbacks),
@@ -361,8 +372,12 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     [],
   );
 
+  const setComposerAnchor = useCallback((range: ComposerAnchorRange | null) => {
+    viewRef.current?.dispatch({ effects: setComposerAnchorEffect.of(range) });
+  }, []);
+
   return useMemo(
-    () => ({ containerRef, viewRef, applyRemote, setHighlightState }),
-    [applyRemote, setHighlightState],
+    () => ({ containerRef, viewRef, applyRemote, setHighlightState, setComposerAnchor }),
+    [applyRemote, setHighlightState, setComposerAnchor],
   );
 }

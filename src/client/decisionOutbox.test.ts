@@ -12,6 +12,7 @@ import {
   mergeCommittedDecisionOutbox,
   mergeDecisionOutbox,
   reconcileDeferredDecisionOutbox,
+  rebasePendingDecisionOutbox,
   removeDecisionOutboxEvents,
   storeDecisionOutbox,
   type DecisionOutboxEntry,
@@ -99,6 +100,33 @@ describe("decision audit outbox", () => {
     expect(markDecisionOutboxCommitted(merged, [second])).toEqual([
       COMMITTED,
       { event: second, writeState: "committed" },
+    ]);
+  });
+
+  test("rebases pending result ranges through later debounced edits", () => {
+    const ranged = {
+      ...EVENT,
+      resultingText: "wording",
+      target: { ...EVENT.target, afterFrom: 0, afterTo: 7 },
+    };
+    const committed = { event: ranged, writeState: "committed" as const };
+    const pending = { event: ranged, writeState: "pending" as const };
+
+    const rebased = rebasePendingDecisionOutbox(
+      [committed, pending],
+      "wording tail",
+      "prefix wording tail",
+    );
+
+    expect(rebased).toEqual([
+      committed,
+      {
+        writeState: "pending",
+        event: {
+          ...ranged,
+          target: { ...ranged.target, afterFrom: 7, afterTo: 14 },
+        },
+      },
     ]);
   });
 

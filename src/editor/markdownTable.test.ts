@@ -5,11 +5,13 @@ import type { SyntaxNode } from "@lezer/common";
 import { GFM, parser as markdownParser } from "@lezer/markdown";
 
 import { CriticMarkup } from "./criticMarkupParser";
+import { scanTokens, selectionAnnotationEdit } from "../lib/criticmarkup";
 import {
   extractMarkdownTable,
   formatMarkdownTable,
   formatMarkdownTableAt,
   nextMarkdownTableCell,
+  markdownTableCellRange,
   tablePreviewForNode,
   updateMarkdownTableCell,
 } from "./markdownTable";
@@ -43,7 +45,8 @@ describe("Markdown table model", () => {
     const node = tableNode(source);
 
     expect(node).not.toBeNull();
-    expect(extractMarkdownTable(state.doc, node!)).toEqual({
+    const model = extractMarkdownTable(state.doc, node!);
+    expect(model).toMatchObject({
       from: 0,
       to: source.length,
       source,
@@ -53,6 +56,14 @@ describe("Markdown table model", () => {
         ["Tea", "2"],
         ["Coffee", "1"],
       ],
+    });
+    expect(markdownTableCellRange(model!, { section: "header", row: 0, column: 1 })).toEqual({
+      from: source.indexOf("Quantity"),
+      to: source.indexOf("Quantity") + "Quantity".length,
+    });
+    expect(markdownTableCellRange(model!, { section: "body", row: 1, column: 0 })).toEqual({
+      from: source.indexOf("Coffee"),
+      to: source.indexOf("Coffee") + "Coffee".length,
     });
   });
 
@@ -78,7 +89,7 @@ describe("Markdown table model", () => {
     expect(tablePreviewForNode(state.doc, node!)).not.toBeNull();
   });
 
-  test("keeps tables containing any CriticMarkup raw and editable", () => {
+  test("keeps comment/highlight table cells rich, but leaves tracked changes raw", () => {
     const source = [
       "| Kind | Value |",
       "| --- | --- |",
@@ -99,6 +110,14 @@ describe("Markdown table model", () => {
     ]);
     expect(tablePreviewForNode(state.doc, node!)).toBeNull();
     expect(state.doc.toString()).toBe(source);
+
+    const commented = [
+      "| Kind | Value |",
+      "| --- | --- |",
+      "| comment | {==cell==}{>>@reviewer: note<<} |",
+    ].join("\n");
+    const commentedState = EditorState.create({ doc: commented });
+    expect(tablePreviewForNode(commentedState.doc, tableNode(commented)!)).not.toBeNull();
   });
 
   test("keeps blockquote- and list-nested tables raw", () => {
@@ -190,6 +209,68 @@ describe("Markdown table model", () => {
     expect(source).toBe("| Capability | Result |\n| --- | --- |\n| Raw editing | Deliberate |");
   });
 
+  test("a whole-cell comment preserves table parsing and anchors to that cell", () => {
+    const source = String.raw`| Metric | Value |
+| --- | --- |
+| ratio | $x^2$ and a\|b |`;
+    const state = EditorState.create({ doc: source });
+    const model = extractMarkdownTable(state.doc, tableNode(source)!);
+    const range = markdownTableCellRange(model!, { section: "body", row: 0, column: 1 });
+    const edit = selectionAnnotationEdit(
+      source,
+      range!.from,
+      range!.to,
+      "Maya",
+      "Check this value",
+      "comment",
+    );
+    expect(edit.ok).toBe(true);
+    if (!edit.ok) return;
+
+    const commented =
+      source.slice(0, edit.change.from) + edit.change.insert + source.slice(edit.change.to);
+    const commentedState = EditorState.create({ doc: commented });
+    const commentedNode = tableNode(commented);
+
+    expect(commentedNode).not.toBeNull();
+    expect(tablePreviewForNode(commentedState.doc, commentedNode!)).not.toBeNull();
+    expect(scanTokens(commented).find((token) => token.type === "comment")).toMatchObject({
+      author: "Maya",
+      body: "Check this value",
+    });
+  });
+
+  test("a table-cell comment containing a pipe remains one parseable cell", () => {
+    const source = String.raw`| Metric | Value |
+| --- | --- |
+| ratio | x/y |`;
+    const state = EditorState.create({ doc: source });
+    const model = extractMarkdownTable(state.doc, tableNode(source)!);
+    const range = markdownTableCellRange(model!, { section: "body", row: 0, column: 1 });
+    const edit = selectionAnnotationEdit(
+      source,
+      range!.from,
+      range!.to,
+      "Maya",
+      "Compare x | y",
+      "comment",
+    );
+    expect(edit.ok).toBe(true);
+    if (!edit.ok) return;
+
+    const commented =
+      source.slice(0, edit.change.from) + edit.change.insert + source.slice(edit.change.to);
+    const commentedState = EditorState.create({ doc: commented });
+    const commentedNode = tableNode(commented);
+
+    expect(commentedNode).not.toBeNull();
+    expect(tablePreviewForNode(commentedState.doc, commentedNode!)).not.toBeNull();
+    expect(scanTokens(commented).find((token) => token.type === "comment")).toMatchObject({
+      author: "Maya",
+      body: "Compare x | y",
+    });
+  });
+
   test("Tab and Shift-Tab move through header and body cells without wrapping", () => {
     const model = {
       from: 0,
@@ -198,6 +279,10 @@ describe("Markdown table model", () => {
       header: ["A", "B"],
       alignments: [null, null],
       rows: [["1", "2"]],
+      cellRanges: {
+        header: [{ from: 0, to: 0 }, { from: 0, to: 0 }],
+        rows: [[{ from: 0, to: 0 }, { from: 0, to: 0 }]],
+      },
     };
 
     expect(nextMarkdownTableCell(model, { section: "header", row: 0, column: 1 }, 1)).toEqual({

@@ -314,6 +314,9 @@ function decodeCommentBody(text: string): string | null {
     } else if (text.startsWith("\\u007d", i)) {
       decoded += "}";
       i += 5;
+    } else if (text.startsWith("\\u007c", i)) {
+      decoded += "|";
+      i += 5;
     } else if (text[i + 1] === "n") {
       decoded += "\n";
       i += 1;
@@ -370,6 +373,111 @@ export function formatComment(author: string, text: string): string {
   return `{>>${body}<<}`;
 }
 
+export type ReviewItemEdit =
+  | { ok: true; change: { from: number; to: number; insert: string } }
+  | {
+      ok: false;
+      reason: "empty" | "unsupported" | "invalid-markup" | "not-wrappable";
+    };
+
+/** Replace one comment's body without changing its self-declared Author. */
+export function commentBodyEdit(
+  comment: CommentToken,
+  body: string,
+): ReviewItemEdit {
+  if (!body.trim()) return { ok: false, reason: "empty" };
+  return {
+    ok: true,
+    change: {
+      from: comment.from,
+      to: comment.to,
+      insert: formatComment(comment.author ?? "", body),
+    },
+  };
+}
+
+function validInlineSuggestionText(text: string, close: "++}" | "~~}"): boolean {
+  return (
+    !text.includes(close) &&
+    !BLANK_LINE.test(text) &&
+    !NESTED_OPEN.test(text)
+  );
+}
+
+/**
+ * Edit only the proposed wording of a Suggestion.
+ *
+ * SUGGEST cards keep their Author and optional group id. Native insertions and
+ * substitutions keep their existing CriticMarkup shape; native deletions have no
+ * proposed wording to edit and therefore remain unsupported.
+ */
+export function suggestionProposalEdit(
+  suggestion: CommentToken | SuggestionToken,
+  proposal: string,
+): ReviewItemEdit {
+  if (suggestion.type === "comment") {
+    if (suggestionReplacement(suggestion.body) === null) {
+      return { ok: false, reason: "unsupported" };
+    }
+    const groupId = suggestionGroupId(suggestion.body);
+    const prefix = groupId ? `SUGGEST[g:${groupId}]: ` : "SUGGEST: ";
+    return {
+      ok: true,
+      change: {
+        from: suggestion.from,
+        to: suggestion.to,
+        insert: formatComment(suggestion.author ?? "", prefix + proposal),
+      },
+    };
+  }
+
+  if (suggestion.type === "delete") {
+    return { ok: false, reason: "unsupported" };
+  }
+  const close = suggestion.type === "insert" ? "++}" : "~~}";
+  if (!validInlineSuggestionText(proposal, close)) {
+    return { ok: false, reason: "invalid-markup" };
+  }
+  return {
+    ok: true,
+    change: {
+      from: suggestion.from,
+      to: suggestion.to,
+      insert:
+        suggestion.type === "insert"
+          ? `{++${proposal}++}`
+          : `{~~${suggestion.oldText}~>${proposal}~~}`,
+    },
+  };
+}
+
+export type SelectionAnnotationKind = "comment" | "suggestion";
+
+/** Build one span-anchored comment or SUGGEST card without mutating source. */
+export function selectionAnnotationEdit(
+  content: string,
+  from: number,
+  to: number,
+  author: string,
+  text: string,
+  kind: SelectionAnnotationKind,
+): ReviewItemEdit {
+  if (!text.trim()) return { ok: false, reason: "empty" };
+  if (!wrappableSpan(content, from, to)) {
+    return { ok: false, reason: "not-wrappable" };
+  }
+  const span = content.slice(from, to);
+  const body = kind === "suggestion" ? `SUGGEST: ${text}` : text;
+  return {
+    ok: true,
+    change: {
+      from,
+      to,
+      insert: `{==${span}==}${formatComment(author, body)}`,
+    },
+  };
+}
+
 /** Canonicalise one complete raw comment marker supplied by an agent batch.
  * Non-comment inserts stay byte-identical. The body is decoded without trimming
  * so literal line breaks and boundary whitespace are never silently discarded. */
@@ -397,7 +505,7 @@ function serializeCommentBody(text: string): string {
     text.startsWith(COMMENT_CODEC_PREFIX) ||
     text.trimStart() !== text ||
     text.trimEnd() !== text ||
-    /[\\\r\n{}]/.test(text);
+    /[\\\r\n{}|]/.test(text);
   if (!needsCodec) return neutralizeCloseMarker(text);
 
   let encoded = COMMENT_CODEC_PREFIX;
@@ -407,6 +515,7 @@ function serializeCommentBody(text: string): string {
     else if (char === "\n") encoded += "\\n";
     else if (char === "{") encoded += "\\u007b";
     else if (char === "}") encoded += "\\u007d";
+    else if (char === "|") encoded += "\\u007c";
     else encoded += char;
   }
   return encoded;

@@ -22,11 +22,12 @@
 import { syntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { RangeSetBuilder, StateField } from "@codemirror/state";
+import { RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { EditorState, Extension, Range } from "@codemirror/state";
 
 import {
   nextMarkdownTableCell,
+  markdownTableCellRange,
   tablePreviewForNode,
   updateMarkdownTableCell,
 } from "./markdownTable";
@@ -36,7 +37,30 @@ import type {
   TableAlignment,
 } from "./markdownTable";
 import { appendRichBlocks, appendRichInline } from "./richMarkdown";
+import { appendMath, findMathRanges } from "./math";
 import { standaloneInsertionTokens } from "./standaloneInsertion";
+import { acceptedMarkdown, scanTokens } from "../lib/criticmarkup";
+import { isComment } from "../lib/types";
+
+export const TABLE_CELL_COMMENT_EVENT = "acm:table-cell-comment";
+
+export function tableCellReviewState(value: string, cellFrom: number): {
+  markdown: string;
+  comments: { from: number; author: string | null; body: string }[];
+} {
+  const comments = scanTokens(value)
+    .filter(isComment)
+    .map((comment) => ({
+      from: cellFrom + comment.from,
+      author: comment.author,
+      body: comment.body,
+    }));
+  const accepted = acceptedMarkdown(value);
+  return {
+    markdown: accepted.ok ? accepted.markdown : value,
+    comments,
+  };
+}
 
 // CriticMarkup delimiter nodes we hide (like Markdown markers) so suggestions read
 // as rendered prose: green inserted text, struck deletions, etc. — not raw `{++…++}`.
@@ -125,6 +149,27 @@ class ImageWidget extends WidgetType {
   }
 }
 
+class MathWidget extends WidgetType {
+  constructor(
+    readonly latex: string,
+    readonly display: boolean,
+  ) {
+    super();
+  }
+  eq(other: MathWidget) {
+    return other.latex === this.latex && other.display === this.display;
+  }
+  toDOM() {
+    const wrap = document.createElement(this.display ? "div" : "span");
+    wrap.className = "cm-math-widget";
+    if (!appendMath(wrap, this.latex, this.display)) wrap.textContent = this.latex;
+    return wrap;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
 function tableCellKey(address: MarkdownTableCellAddress): string {
   return `${address.section}:${address.row}:${address.column}`;
 }
@@ -149,7 +194,7 @@ function focusRenderedTableCell(
         renderedTableCellSelector(tableFrom, address),
       );
       if (cell) {
-        cell.focus();
+        (cell.querySelector<HTMLElement>(".cm-md-table-edit") ?? cell).focus();
         return;
       }
     }
@@ -186,7 +231,7 @@ class TableWidget extends WidgetType {
           section: "header",
           row: 0,
           column: index,
-        }),
+        }, markdownTableCellRange(this.model, { section: "header", row: 0, column: index })),
       );
     });
     head.appendChild(headRow);
@@ -202,7 +247,7 @@ class TableWidget extends WidgetType {
               section: "body",
               row: rowIndex,
               column: index,
-            }),
+            }, markdownTableCellRange(this.model, { section: "body", row: rowIndex, column: index })),
           );
         });
         body.appendChild(rowElement);
@@ -254,19 +299,66 @@ function tableCell(
   value: string,
   alignment: TableAlignment | undefined,
   address: MarkdownTableCellAddress,
+  sourceRange: { from: number; to: number } | null,
 ): HTMLTableCellElement {
   const cell = document.createElement(tag);
   const renderRich = () => {
     cell.replaceChildren();
-    appendRichInline(cell, value);
+    const review = tableCellReviewState(value, sourceRange?.from ?? model.from);
+    const content = document.createElement("span");
+    content.className = "cm-md-table-cell-content";
+    appendRichInline(content, review.markdown);
+    cell.appendChild(content);
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "cm-md-table-action cm-md-table-edit";
+    edit.setAttribute("aria-label", `Edit table cell: ${review.markdown || "empty"}`);
+    edit.title = "Edit this table cell";
+    edit.textContent = "✎";
+    edit.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      activate();
+    });
+    cell.appendChild(edit);
+
+    if (review.comments.length > 0) {
+      cell.classList.add("cm-md-table-cell-commented");
+      for (const comment of review.comments) {
+        const marker = document.createElement("button");
+        marker.type = "button";
+        marker.className = "cm-md-table-action cm-md-table-comment-marker";
+        marker.dataset.commentFrom = String(comment.from);
+        marker.setAttribute("aria-label", `Open comment by ${comment.author ?? "anonymous"}`);
+        marker.title = comment.body;
+        marker.textContent = "●";
+        cell.appendChild(marker);
+      }
+    } else if (sourceRange && sourceRange.to > sourceRange.from && value.trim()) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "cm-md-table-action cm-md-table-comment-add";
+      add.setAttribute("aria-label", `Comment on table cell: ${value}`);
+      add.title = "Comment on this table cell";
+      add.textContent = "+";
+      add.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        cell.dispatchEvent(
+          new CustomEvent(TABLE_CELL_COMMENT_EVENT, {
+            bubbles: true,
+            detail: sourceRange,
+          }),
+        );
+      });
+      cell.appendChild(add);
+    }
   };
   renderRich();
   if (alignment) cell.style.textAlign = alignment;
-  cell.tabIndex = 0;
   cell.dataset.tableCell = tableCellKey(address);
-  cell.setAttribute("role", "button");
-  cell.setAttribute("aria-label", `Edit table cell: ${value || "empty"}`);
-  cell.title = "Click or press Enter to edit; Cmd/Ctrl-click a link to open it";
+  cell.title = "Click to edit; Cmd/Ctrl-click a link to open it";
 
   const activate = (selection: { start: number; end: number } | null = null) => {
     if (cell.querySelector("input")) return;
@@ -314,7 +406,7 @@ function tableCell(
         event.preventDefault();
         finished = true;
         renderRich();
-        cell.focus();
+        cell.querySelector<HTMLElement>(".cm-md-table-edit")?.focus();
         return;
       }
       if (event.key === "Enter") {
@@ -342,6 +434,7 @@ function tableCell(
   };
 
   cell.addEventListener("click", (event) => {
+    if ((event.target as HTMLElement | null)?.closest?.(".cm-md-table-action")) return;
     const targetLink = (event.target as HTMLElement | null)?.closest?.("a") ?? null;
     const action = tableCellPointerAction(
       Boolean(targetLink),
@@ -350,11 +443,6 @@ function tableCell(
     if (action === "follow-link") return;
     event.preventDefault();
     activate(tableCellLinkSelection(value, targetLink?.textContent ?? null));
-  });
-  cell.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== "F2") return;
-    event.preventDefault();
-    activate();
   });
   return cell;
 }
@@ -697,6 +785,92 @@ const hideViewPlugin = ViewPlugin.fromClass(
   },
 );
 
+interface MathPreviewState {
+  focused: boolean;
+  decorations: DecorationSet;
+}
+
+const mathFocusChanged = StateEffect.define<boolean>();
+
+function stateSelectionOnRange(
+  state: EditorState,
+  focused: boolean,
+  from: number,
+  to: number,
+): boolean {
+  if (!focused) return false;
+  const startLine = state.doc.lineAt(from);
+  const endLine = state.doc.lineAt(to);
+  return state.selection.ranges.some(
+    (range) => range.to >= startLine.from && range.from <= endLine.to,
+  );
+}
+
+function buildMathPreview(state: EditorState, focused: boolean): DecorationSet {
+  const source = state.doc.toString();
+  const tableRanges: { from: number; to: number }[] = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name === "Table") {
+        tableRanges.push({ from: node.from, to: node.to });
+        return false;
+      }
+      return;
+    },
+  });
+  const standaloneInsertions = standaloneInsertionTokens(state);
+  const ranges = findMathRanges(source)
+    .filter(
+      (math) =>
+        !tableRanges.some((range) => range.from <= math.from && math.to <= range.to) &&
+        !standaloneInsertions.some(
+          (insertion) => insertion.from <= math.from && math.to <= insertion.to,
+        ) &&
+        !stateSelectionOnRange(state, focused, math.from, math.to),
+    )
+    .map((math) =>
+      Decoration.replace({
+        widget: new MathWidget(math.latex, math.display),
+        block: math.display,
+        inclusive: false,
+      }).range(math.from, math.to),
+    );
+
+  ranges.sort((a, b) => a.from - b.from);
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const range of ranges) builder.add(range.from, range.to, range.value);
+  return builder.finish();
+}
+
+const mathPreviewField = StateField.define<MathPreviewState>({
+  create(state) {
+    return { focused: false, decorations: buildMathPreview(state, false) };
+  },
+  update(value, transaction) {
+    let focused = value.focused;
+    for (const effect of transaction.effects) {
+      if (effect.is(mathFocusChanged)) focused = effect.value;
+    }
+    if (
+      transaction.docChanged ||
+      transaction.selection !== undefined ||
+      focused !== value.focused ||
+      syntaxTree(transaction.state) !== syntaxTree(transaction.startState)
+    ) {
+      return { focused, decorations: buildMathPreview(transaction.state, focused) };
+    }
+    return value;
+  },
+  provide: (field) => [
+    EditorView.decorations.from(field, (value) => value.decorations),
+    EditorView.atomicRanges.from(field, (value) => () => value.decorations),
+  ],
+});
+
+const mathFocusExtension = EditorView.focusChangeEffect.of((_state, focusing) =>
+  mathFocusChanged.of(focusing)
+);
+
 function buildBlockPreviews(state: EditorState): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   syntaxTree(state).iterate({
@@ -768,5 +942,7 @@ const blockPreviewField = StateField.define<DecorationSet>({
 export const markdownPreview: Extension = [
   styleViewPlugin,
   hideViewPlugin,
+  mathFocusExtension,
+  mathPreviewField,
   blockPreviewField,
 ];

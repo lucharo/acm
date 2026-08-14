@@ -37,6 +37,7 @@ describe("mobile review state labels", () => {
       comments: [],
     };
     const noop = () => {};
+    const editNoop = () => true;
 
     const html = renderToStaticMarkup(
       createElement(MobileCommentSheet, {
@@ -50,6 +51,8 @@ describe("mobile review state labels", () => {
         onReply: noop,
         onReplyAndSeen: noop,
         onResolveThread: noop,
+        onEditComment: editNoop,
+        onEditSuggestion: editNoop,
         onSuggestEdit: noop,
         onToggleSeen: noop,
         onApplySuggestion: noop,
@@ -64,6 +67,7 @@ describe("mobile review state labels", () => {
     expect(html).not.toContain(">Resolve</button>");
     expect(html).toContain("Accept");
     expect(html).toContain("Reject");
+    expect(html).toContain("Edit suggestion");
   });
 
   test("rich standalone additions stay in the document instead of duplicating raw Markdown", () => {
@@ -85,6 +89,7 @@ describe("mobile review state labels", () => {
       comments: [],
     };
     const noop = () => {};
+    const editNoop = () => true;
     const html = renderToStaticMarkup(
       createElement(MobileCommentSheet, {
         active,
@@ -97,6 +102,8 @@ describe("mobile review state labels", () => {
         onReply: noop,
         onReplyAndSeen: noop,
         onResolveThread: noop,
+        onEditComment: editNoop,
+        onEditSuggestion: editNoop,
         onSuggestEdit: noop,
         onToggleSeen: noop,
         onApplySuggestion: noop,
@@ -133,6 +140,7 @@ describe("mobile review state labels", () => {
       comments: [],
     };
     const noop = () => {};
+    const editNoop = () => true;
     const html = renderToStaticMarkup(
       createElement(MobileCommentSheet, {
         active,
@@ -145,6 +153,8 @@ describe("mobile review state labels", () => {
         onReply: noop,
         onReplyAndSeen: noop,
         onResolveThread: noop,
+        onEditComment: editNoop,
+        onEditSuggestion: editNoop,
         onSuggestEdit: noop,
         onToggleSeen: noop,
         onApplySuggestion: noop,
