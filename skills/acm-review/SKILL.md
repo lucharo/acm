@@ -64,6 +64,15 @@ paragraphs, lists and tables are proposals until the human accepts them.
 - After the write, verify that proposed prose is represented by suggestion tokens rather
   than ordinary Markdown, so the human can accept or reject every contribution.
 
+### Preserve canonical source terminology
+
+Before introducing or renaming a technical term, check the cited primary source and the
+project's existing glossary or research notes. Use the source's term exactly when one exists;
+do not invent a smoother umbrella label (for example, replacing `serial collapse` with
+`anti-collapse`) unless the document explicitly defines it as project-local terminology. If the
+source vocabulary is unclear, mark it unknown or ask in the thread instead of turning a
+paraphrase into a confident technical term.
+
 **Three rules learned the hard way:**
 
 1. **One comment = one suggestion.** A `SUGGEST:` comment's body is ONLY the
