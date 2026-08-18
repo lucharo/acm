@@ -16,6 +16,14 @@ The document path is whatever the human opened (`acm edit <file>`). The file is 
 of truth — read it freely, and write through the `acm` verbs (below). The running ACM
 UI reflects your changes within ~1s. No database, no special format beyond CriticMarkup.
 
+### Recover the document before branching out
+
+When resuming an interrupted or inherited review, first resolve the live document, inspect
+`acm threads` and `acm history`, and state the current review position plus the next
+document-owned action. Finish that review loop before starting diagrams, notebooks,
+launchers or other supporting work unless the support is directly blocking the document.
+An ancillary artefact never substitutes for answering or applying the document's review state.
+
 ## CriticMarkup you'll write
 
 - Comment (anchored): `{==the exact span==}{>>@you: your note<<}`
