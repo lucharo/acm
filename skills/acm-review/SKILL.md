@@ -56,6 +56,10 @@ corruption. To suggest **deleting** a span, leave it empty: `SUGGEST:`. (For
 references/footnotes, which live in free prose, just write the markdown link inline.)
 
 Decision: **free prose → inline `{~~~>~~}`. Commented/anchored text → `SUGGEST:`.**
+A whole-document pass (typos, grammar, spelling) is the exception: write one `SUGGEST:`
+per changed sentence, all in one group (see "Suggestion groups" below), so the human applies
+the pass with one "Apply all". Thirty loose inline cards are thirty clicks (2026-10-19: "you
+know about grouped edits in acm?" after a mechanics pass shipped as loose cards).
 
 ### Human-authored prose stays approval-gated
 
@@ -86,7 +90,11 @@ paraphrase into a confident technical term.
 1. **One comment = one suggestion.** A `SUGGEST:` comment's body is ONLY the
    replacement text — never prefix it with prose (`Moving this… SUGGEST: …`). Mixed
    comments render as a broken/blank card. If you must explain, use a SEPARATE
-   adjacent comment.
+   comment, and know that an adjacent one becomes a reply in the card's thread, which
+   applying the card deletes with it. A note that must outlive the card (a review point,
+   not an explanation of the edit) goes on its own anchor with prose between it and the
+   card's `<<}`, even a single `.` (2026-10-19: an "end on one ask" note threaded under a
+   grouped card vanished when Luis applied the group).
 2. **Anchor directly so it's visible.** Prefer `acm suggest "<span>" "<new>"` — it
    anchors the SUGGEST right on the span, which is what surfaces it in the editor's
    **Suggestions** tab. A SUGGEST *appended at the end of a long thread* still applies
