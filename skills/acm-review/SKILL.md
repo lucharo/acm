@@ -67,8 +67,13 @@ When the human asks for comments or suggestions, or the document is explicitly
 human-authored, **never add substantive prose as a direct document edit**. New headings,
 paragraphs, lists and tables are proposals until the human accepts them.
 
-- Free-standing additions become `{++insertion suggestions++}`. A suggestion may span
-  several lines, but split at blank paragraphs so every construct remains parseable.
+- Free-standing additions become `{++insertion suggestions++}`, one insertion per item or line: a
+  multi-line `{++ ++}` rendered as raw markup in the editor (2026-11-04).
+- Every comment that makes a point about the text carries its fix: the point in one comment, then a
+  `SUGGEST:` card beside it, so the human can apply it rather than retype it (2026-11-04: "you could
+  have a comment making your point then your suggestion"). Only suggestions group; comments do not.
+- Keep one space after a list marker. `1.     text` (four or more spaces) is Markdown for a code
+  block, and the editor then shows the rest of the list as code (2026-11-04).
 - Changes to existing anchored prose use `SUGGEST:`; use a group when several edits form
   one decision.
 - Direct edits are reserved for mechanical markup repair or content the human explicitly
