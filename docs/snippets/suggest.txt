@@ -1,0 +1,4 @@
+$ acm suggest "the only part of the day" "the one part of the day" --doc morning-walk.md
+acm suggest: SUGGEST anchored on "the only part of the day" as @claude
+  backup → .acm/snapshots/morning-walk.md/2026-11-06T23-31-53-981Z-suggest.md
+  comments: 8 | applicable SUGGEST cards: 4

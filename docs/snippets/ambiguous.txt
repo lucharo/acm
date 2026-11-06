@@ -1,0 +1,2 @@
+$ acm suggest "ten minutes" "a quarter of an hour" --doc morning-walk.md
+acm suggest: "ten minutes" occurs 2 times as a wrappable span (need exactly 1)

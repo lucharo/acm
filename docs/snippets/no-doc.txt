@@ -1,0 +1,2 @@
+$ acm threads
+acm: no document — pass --doc <file.md>, set ACM_DOC, or open the doc in ACM first

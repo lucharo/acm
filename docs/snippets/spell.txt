@@ -1,0 +1,7 @@
+$ acm spell --doc morning-walk.md
+  partcular  →  particular   ·  L7
+
+1 word flagged
+  propose fixes as SUGGEST cards: acm spell suggest [word…]
+  fix:  acm spell replace "<word>" "<correction>"
+  keep: acm spell add "<word>" [word…]

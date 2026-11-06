@@ -1,0 +1,4 @@
+$ acm resolve "worth saying how often" --doc morning-walk.md
+acm resolve: resolved the thread matching "worth saying how often"
+  backup → .acm/snapshots/morning-walk.md/2026-11-06T23-31-54-819Z-resolve.md
+  comments: 3 | applicable SUGGEST cards: 1

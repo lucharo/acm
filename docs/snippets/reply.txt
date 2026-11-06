@@ -1,0 +1,4 @@
+$ acm reply "Which bridge" "The one by the lock." --doc morning-walk.md
+acm reply: replied to "Which bridge" as @claude
+  backup → .acm/snapshots/morning-walk.md/2026-11-06T23-31-53-142Z-reply.md
+  comments: 7 | applicable SUGGEST cards: 3

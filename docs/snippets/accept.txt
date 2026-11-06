@@ -1,0 +1,4 @@
+$ acm accept "I walk without headphones" --doc morning-walk.md
+acm accept: accepted the suggestion matching "I walk without headphones"
+  backup → .acm/snapshots/morning-walk.md/2026-11-06T23-31-54-431Z-accept.md
+  comments: 7 | applicable SUGGEST cards: 3

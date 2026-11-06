@@ -1,0 +1,39 @@
+$ acm --help
+acm — Agent CriticMarkup editor
+
+Usage:
+  acm                         Explain ACM and list the main commands
+  acm edit                    Open the New / Open / Recent Documents launcher
+  acm edit <file.md>          Open the file, creating it if missing
+
+Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
+running ACM editor; snapshot before every write):
+  acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]
+  acm comment "<span>" "<text>"     New comment anchored on the unique prose <span>
+  acm reply "<phrase>" "<text>"     Reply to the thread matching <phrase> (= comment -r)
+  acm suggest "<span>" "<new>"      Anchor a SUGGEST: on the unique prose <span>
+  acm accept "<phrase>"             Accept the suggestion matching <phrase>
+  acm reject "<phrase>"             Reject it (keep the original span)
+  acm resolve "<phrase>"            Strip the thread matching <phrase>
+  acm reply --batch <edits.json>    Batch reply-append (idempotent); [{id,match,insert}]
+  acm wrap [width]                  Hard-wrap prose (default 88); markup-safe
+  acm heal                          Repair markup that renders raw; snapshot-first
+  acm import <Google Docs URL|file.docx> [out.md]
+                                     Google Docs/Word → CriticMarkup, including comments
+  acm spell [list] [--json]         List flagged words: count, suggestions, line
+  acm spell add <word…>             Keep words in your personal dictionary
+  acm spell ignore <word…>          Stop flagging words in THIS doc only
+  acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
+  acm spell suggest [word…]         One SUGGEST[g:spelling] card per flagged word
+  acm history [n]                   The doc's version history (auto-recorded)
+  acm decisions [n] [--json]        Durable accept/reject/resolve decision history
+  acm restore <sha>                 Restore a history version (snapshots first)
+    (verbs take --doc <file>, --author <name>; matching fails safe on ambiguity)
+
+Edit options:
+  --port <n>         Port to serve on (default 12000; auto-increments if busy)
+  --allow-host <name> Also accept this remote host, e.g. a Tailscale name (repeatable;
+                     default: ACM_ALLOWED_HOSTS, else this Mac's Tailscale name if up)
+  --asset-root <dir> Folder images may load from (default: the doc's git repo, else its folder)
+  --no-open          Don't auto-open the browser (also ACM_NO_OPEN=1; a set $BROWSER is the opener)
+  -h, --help         Show this help

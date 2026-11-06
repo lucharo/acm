@@ -1,0 +1,7 @@
+$ acm threads --doc morning-walk.md
+#zuryle (2) @Sam @claude  ⟦In winter the towpath floods and I take ⟧ worth saying how often? Once a year or every week?
+#17dw4cg (1) @claude [SUGGEST]  ⟦I don't listen to anything while I walk⟧ SUGGEST: I walk without headphones
+#pescro (1) @claude [SUGGEST]  ⟦the smell of bread at half past seven⟧ SUGGEST[g:time]: the smell of bread at seven
+#1st1xt0 (1) @claude [SUGGEST]  ⟦I work it out at half past seven anyway,⟧ SUGGEST[g:time]: I work it out anyway, just later and worse
+
+4 threads, 4 unseen

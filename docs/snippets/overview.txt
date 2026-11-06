@@ -1,0 +1,13 @@
+$ acm
+ACM — Agent CriticMarkup
+
+A local editor where people and agents review one Markdown document together.
+The Markdown file stays the source of truth.
+
+Start editing:
+  acm edit                 Open New / Open / Recent Documents
+  acm edit essay.md        Open or create an explicitly named document
+
+Review from the shell:
+  acm threads              List open discussions and suggestions
+  acm --help               Show every command and option

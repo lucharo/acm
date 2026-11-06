@@ -1,0 +1,4 @@
+$ acm spell suggest --doc morning-walk.md
+acm spell suggest: 1 SUGGEST[g:spelling] card for flagged words as @claude — review them in the editor (Apply all applies the group)
+  backup → .acm/snapshots/morning-walk.md/2026-11-06T23-31-55-904Z-spell suggest.md
+  comments: 4 | applicable SUGGEST cards: 2

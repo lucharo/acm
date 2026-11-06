@@ -42,3 +42,11 @@ bin:
 # Convenience alias for the canonical clean-machine setup flow.
 install:
     bun run setup
+
+# Docs site (Zensical, run through uvx: no Python project needed). Serves on :8000.
+docs:
+    uvx --from zensical==0.1.0 zensical serve
+
+# Strict docs build into ./site, the same command CI runs.
+docs-build:
+    uvx --from zensical==0.1.0 zensical build --clean --strict

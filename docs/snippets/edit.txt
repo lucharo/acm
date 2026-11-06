@@ -1,0 +1,7 @@
+$ acm edit notes.md
+ACM server on http://localhost:12000 — doc: /Users/you/writing/notes.md
+Created new document: /Users/you/writing/notes.md
+
+  ACM ready → http://localhost:12000
+  editing: /Users/you/writing/notes.md
+

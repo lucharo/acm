@@ -1,0 +1,39 @@
+/* ACM docs: the editor's own palette. White page, ink header, the comment purple for links. */
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: #ffffff;
+  --md-typeset-a-color: #6e40c9;          /* 6.5:1 on white */
+  --md-accent-fg-color: #5a32a8;
+  --md-accent-fg-color--transparent: rgba(110, 64, 201, 0.1);
+  --md-code-bg-color: #f6f6f4;
+}
+[data-md-color-scheme="slate"] {
+  --md-typeset-a-color: #c4a7ff;          /* 7.9:1 on the slate background */
+  --md-accent-fg-color: #d8c6ff;
+}
+.md-header, .md-tabs { background-color: #1a1a18; }
+.md-header__title { font-weight: 600; }
+.md-typeset h1, .md-typeset h2 { letter-spacing: -0.01em; }
+/* Screenshots get a hairline so a white editor page does not melt into the white docs page. */
+.md-typeset img[src*="editor-"], .md-typeset img[src*="suggestion-"] {
+  border: 1px solid #e8e7e2; border-radius: 8px;
+}
+.md-typeset p > img:only-child { display: block; margin-left: auto; margin-right: auto; max-width: 100%; }
+.md-typeset p > img.phone:only-child, .md-typeset img.phone { max-width: min(320px, 100%); }
+/* Header text and icons stay light on the ink header whatever the primary colour resolves to. */
+.md-header, .md-tabs {
+  --md-primary-bg-color: #f4f4f1;
+  --md-primary-bg-color--light: #cfcfca;
+  color: #f4f4f1;
+}
+/* The search trigger takes its colours from the page scheme, so in light mode it drew
+   near-black on the ink header. Give it the light-on-dark tokens. */
+[data-md-color-scheme="default"] .md-header .md-search__button {
+  --md-default-fg-color: #f4f4f1;
+  --md-default-fg-color--lightest: rgba(244, 244, 241, 0.12);
+  --md-default-fg-color--lighter: rgba(244, 244, 241, 0.32);
+  --md-default-fg-color--light: rgba(244, 244, 241, 0.7);
+  --md-default-bg-color--light: rgba(26, 26, 24, 0.54);
+}
+.md-header .md-search__button:focus-visible { outline: 2px solid #f4f4f1; outline-offset: 2px; }
+/* Flags and option names in reference tables stay on one line. */
+.md-typeset td:first-child code { white-space: nowrap; }

@@ -1,0 +1,4 @@
+$ acm comment "the iron bridge" "Which bridge? There are two." --doc morning-walk.md --author Sam
+acm comment: comment anchored on "the iron bridge" as @Sam
+  backup → .acm/snapshots/morning-walk.md/2026-11-06T23-31-52-389Z-comment.md
+  comments: 6 | applicable SUGGEST cards: 3
