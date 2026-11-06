@@ -111,6 +111,57 @@ export function addSuggestion(
   return content.slice(0, at) + marker + content.slice(at + span.length);
 }
 
+/** Anchor a new comment on the unique prose `span` — wraps it as
+ *  `{==span==}{>>@author: text<<}` (a new thread, not a reply). With `group`, the
+ *  body is tagged `NOTE[g:<group>]: text` so related notes travel as one set (#77). */
+export function addAnchoredComment(
+  content: string,
+  span: string,
+  author: string,
+  text: string,
+  group?: string,
+): string {
+  if (group !== undefined && !/^[^\]\s]+$/.test(group)) {
+    throw new Error(`invalid group id "${group}" (no spaces or "]")`);
+  }
+  const at = uniqueProseIndex(content, span);
+  const marker = `{==${span}==}` + formatComment(author, group ? `NOTE[g:${group}]: ${text}` : text);
+  return content.slice(0, at) + marker + content.slice(at + span.length);
+}
+
+export interface SuggestionAt {
+  from: number;
+  to: number;
+  replacement: string;
+}
+
+/** Wrap each exact `[from,to)` span as a `SUGGEST[g:<group>]:` card (one group, so
+ *  the set can be applied as one unit). Spans that can't be wrapped cleanly (inside
+ *  an existing anchor or comment, cutting markup) are skipped and returned. Spans
+ *  must not overlap. */
+export function addSuggestionsAt(
+  content: string,
+  spans: readonly SuggestionAt[],
+  author: string,
+  group: string,
+): { content: string; skipped: SuggestionAt[] } {
+  const skipped: SuggestionAt[] = [];
+  const wrappable = spans.filter((s) => {
+    const ok = wrappableSpan(content, s.from, s.to);
+    if (!ok) skipped.push(s);
+    return ok;
+  });
+  let out = content;
+  // Right to left, so earlier offsets stay valid as we splice.
+  for (const s of [...wrappable].sort((a, b) => b.from - a.from)) {
+    const marker =
+      `{==${content.slice(s.from, s.to)}==}` +
+      formatComment(author, `SUGGEST[g:${group}]: ${s.replacement}`);
+    out = out.slice(0, s.from) + marker + out.slice(s.to);
+  }
+  return { content: out, skipped };
+}
+
 /** Accept or reject EVERY member of suggestion group `groupId` in one write.
  *  Throws when the group has no applyable members. Members that can't resolve
  *  (or would contradict an earlier member on the same thread) are skipped. */

@@ -36,7 +36,8 @@ Usage:
 Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
 running ACM editor; snapshot before every write):
   acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]
-  acm reply "<phrase>" "<text>"     Reply to the thread matching <phrase> (alias: comment)
+  acm comment "<span>" "<text>"     New comment anchored on the unique prose <span>
+  acm reply "<phrase>" "<text>"     Reply to the thread matching <phrase> (= comment -r)
   acm suggest "<span>" "<new>"      Anchor a SUGGEST: on the unique prose <span>
   acm accept "<phrase>"             Accept the suggestion matching <phrase>
   acm reject "<phrase>"             Reject it (keep the original span)
@@ -50,6 +51,7 @@ running ACM editor; snapshot before every write):
   acm spell add <word…>             Keep words in your personal dictionary
   acm spell ignore <word…>          Stop flagging words in THIS doc only
   acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
+  acm spell suggest [word…]         One SUGGEST[g:spelling] card per flagged word
   acm history [n]                   The doc's version history (auto-recorded)
   acm decisions [n] [--json]        Durable accept/reject/resolve decision history
   acm restore <sha>                 Restore a history version (snapshots first)

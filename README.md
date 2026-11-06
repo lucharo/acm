@@ -236,8 +236,10 @@ live ACM instance whenever one owns the document.
      -d '{"documentPath":"/absolute/path/to/sample-essay.md","anchor":1280,"text":"tighten this","author":"claude"}'
    ```
    Copy `documentPath` from the exact `path` returned by `GET /api/doc`; ACM rejects
-   missing or mismatched document identities before writing. `anchor` is a character
-   offset, and the comment uses the same grammar as the UI.
+   missing or mismatched document identities before writing. `anchor` is a unique
+   text span (wrapped `{==…==}` with the comment after it; `422` if absent or
+   ambiguous) or a character offset for a point comment, and the comment uses the same
+   grammar as the UI.
 
 ## Architecture
 

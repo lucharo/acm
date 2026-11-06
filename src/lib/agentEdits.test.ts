@@ -5,6 +5,8 @@ import {
   appendToThread,
   addComment,
   addSuggestion,
+  addAnchoredComment,
+  addSuggestionsAt,
   resolveSuggestion,
   resolveThread,
   threadsSummary,
@@ -81,6 +83,81 @@ describe("addComment / addSuggestion", () => {
   test("addSuggestion still refuses a span that CUTS a tracked change", () => {
     const doc = "Writing it was {++genuinely++} hard.";
     expect(() => addSuggestion(doc, "was {++genuinely", "claude", "x")).toThrow(AmbiguityError);
+  });
+});
+
+describe("addAnchoredComment — a new comment on bare prose (#42)", () => {
+  test("wraps the unique prose span and attaches the comment after it", () => {
+    const out = addAnchoredComment(DOC, "attention and focus", "claude", "which one?");
+    expect(out).toBe(
+      DOC.replace("attention and focus", "{==attention and focus==}{>>@claude: which one?<<}"),
+    );
+  });
+  test("with a group, tags the body NOTE[g:<id>]: (#77)", () => {
+    const out = addAnchoredComment(DOC, "attention and focus", "claude", "which one?", "pass1");
+    expect(out).toBe(
+      DOC.replace(
+        "attention and focus",
+        "{==attention and focus==}{>>@claude: NOTE[g:pass1]: which one?<<}",
+      ),
+    );
+  });
+  test("rejects a group id with a space or a closing bracket", () => {
+    expect(() => addAnchoredComment(DOC, "attention and focus", "claude", "x", "a b")).toThrow("invalid group id");
+    expect(() => addAnchoredComment(DOC, "attention and focus", "claude", "x", "a]")).toThrow("invalid group id");
+  });
+  test("refuses a span that occurs twice or sits inside an existing anchor", () => {
+    expect(() => addAnchoredComment(DOC, "The ", "claude", "x")).toThrow(AmbiguityError);
+    expect(() => addAnchoredComment(DOC, "quick brown fox", "claude", "x")).toThrow(AmbiguityError);
+  });
+});
+
+describe("addSuggestionsAt — SUGGEST cards at exact offsets (#29)", () => {
+  test("wraps each span as a grouped SUGGEST card, leaving the rest byte-identical", () => {
+    const doc = "We recieve teh parcel.";
+    const out = addSuggestionsAt(
+      doc,
+      [
+        { from: 3, to: 10, replacement: "receive" },
+        { from: 11, to: 14, replacement: "the" },
+      ],
+      "claude",
+      "spelling",
+    );
+    expect(out.content).toBe(
+      "We {==recieve==}{>>@claude: SUGGEST[g:spelling]: receive<<} " +
+        "{==teh==}{>>@claude: SUGGEST[g:spelling]: the<<} parcel.",
+    );
+    expect(out.skipped).toEqual([]);
+  });
+  test("skips a span inside existing markup and reports it", () => {
+    const doc = "A {==recieve==}{>>@luis: hm<<} and recieve.";
+    const out = addSuggestionsAt(
+      doc,
+      [
+        { from: 5, to: 12, replacement: "receive" },
+        { from: 35, to: 42, replacement: "receive" },
+      ],
+      "claude",
+      "spelling",
+    );
+    expect(out.content).toBe(
+      "A {==recieve==}{>>@luis: hm<<} and {==recieve==}{>>@claude: SUGGEST[g:spelling]: receive<<}.",
+    );
+    expect(out.skipped).toEqual([{ from: 5, to: 12, replacement: "receive" }]);
+  });
+  test("the cards resolve as one group: accept-all applies every fix", () => {
+    const doc = "We recieve teh parcel.";
+    const { content } = addSuggestionsAt(
+      doc,
+      [
+        { from: 3, to: 10, replacement: "receive" },
+        { from: 11, to: 14, replacement: "the" },
+      ],
+      "claude",
+      "spelling",
+    );
+    expect(resolveSuggestionGroup(content, "spelling", "accept").content).toBe("We receive the parcel.");
   });
 });
 

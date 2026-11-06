@@ -232,11 +232,10 @@ Reply to each — an ack ("good call, resolve"), a decision ("go with X"), or a 
 `SUGGEST:` — via `acm reply` / `acm reply --batch edits.json`, so every thread ends in your
 voice. **Be confident and proactive:** you don't only respond where they commented — add
 standalone `acm suggest` cards wherever you spot an error, a typo, or an unclear bit;
-they anchor on any unique span, no thread needed. **`acm reply` can NOT do this** —
-it's reply-only (anchors by matching an EXISTING comment's text, so it 0-matches on bare
-prose; a standalone-note verb is tracked in lucharo/acm#45). To leave a bare note on
-uncommented prose, insert `{==span==}{>>@you: note<<}` via a direct write (see the
-direct-file rules below).
+they anchor on any unique span, no thread needed. For a note with no replacement
+wording, `acm comment "<unique span>" "<note>"` anchors a new comment on bare prose
+(`{==span==}{>>@you: note<<}`). `acm reply` (= `acm comment --reply`/`-r`) only joins an
+EXISTING thread: it matches a comment's text, so it 0-matches on bare prose.
 
 ## Spelling pass
 
@@ -248,11 +247,15 @@ skip-regions all honoured), so you never flag what the editor wouldn't:
 acm spell --json        # every flagged word: count, suggestions, line (DETECT only)
 ```
 
-Then sort the flagged words into three buckets:
+Then sort the flagged words into three buckets, and clear the last two first:
 
-- **Genuine prose typo** → `acm suggest "<typo>" "<fix>"` — an Apply-able card, never a
-  silent rewrite. (`acm spell replace` exists but auto-fixes every occurrence; in a
-  review, prefer suggest cards the human can accept.)
+- **Genuine prose typo** → `acm spell suggest [word…]` writes one Apply-able card per
+  occurrence, all in the group `spelling`, so the human applies the pass with one
+  "Apply all" (never a silent rewrite). The fix is the speller's TOP suggestion, which can
+  be wrong (`teh` → `ten`): name only the words whose top suggestion is right, and card
+  the rest by hand in the same group, `acm suggest "<typo>" "<fix>" --group spelling`.
+  Re-running skips words already inside cards. (`acm spell replace` auto-fixes every
+  occurrence; in a review, prefer cards the human can accept.)
 - **Name / real word the dictionary lacks** (surnames, jargon) → `acm spell add <word…>`
   — goes to the user's persistent personal dictionary. Only add words that are
   unambiguously legitimate; when unsure, leave a comment instead.
@@ -315,7 +318,8 @@ result within ~1s — and they refuse rather than clobber on conflict.
 
 ```
 acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen]
-acm reply "<phrase>" "<text>"     # reply to the thread whose comment matches <phrase> (alias: comment)
+acm comment "<span>" "<text>"     # NEW comment anchored on the unique prose <span>: {==span==}{>>@you: text<<}
+acm reply "<phrase>" "<text>"     # reply to the thread whose comment matches <phrase> (= acm comment --reply/-r)
 acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
 acm suggest … --group <id>        # tag the suggestion as part of group <id> (a SET applied as one unit)
 acm accept "<phrase>"             # accept by proposed wording; deletion cards also match anchor prose
@@ -341,7 +345,10 @@ single-thread verbs; on `--batch` the author lives inside each `insert` string.
 When a server is running:
 - `GET /api/doc` → `{content, version, path, serverEpoch}` — read the live doc.
 - `POST /api/comment` `{documentPath, anchor, text, author}` — drop a comment via
-  the shared grammar.
+  the shared grammar. A text `anchor` is a unique prose span: it is wrapped `{==…==}`
+  with the comment after it, the same rule as `acm comment`; `422` when it is absent or
+  ambiguous. A number is a character offset for a point comment. Nothing is written
+  on any non-2xx.
 - `POST /api/agent-write` `{documentPath, base, content}` — the **agent write path**: the server
   3-way merges your `content` against disk (so the human's concurrent edits survive)
   and runs a **cursor guard** — `409 {conflict:"cursor"}` if the human's caret sits in

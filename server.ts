@@ -20,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
+import { addAnchoredComment } from "./src/lib/agentEdits";
 import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
@@ -510,17 +511,44 @@ export function startServer(opts: StartServerOptions): AcmServer {
         }
       }
 
-      // POST /api/comment → in-app comment via the shared grammar. Reads under the
-      // lock, so its base == disk → commitWrite takes the fast path; routed through
-      // it anyway for one consistent hash/broadcast path.
+      // POST /api/comment → in-app comment via the shared grammar. `anchor` is either
+      // a unique prose span (wrapped `{==span==}`, comment after it — the same rule as
+      // `acm comment`) or an integer offset for a point comment. Anything it can't place
+      // exactly is refused (#49: never write an unanchored comment at offset 0). Reads
+      // under the lock, so its base == disk → commitWrite takes the fast path; routed
+      // through it anyway for one consistent hash/broadcast path.
       if (pathname === "/api/comment" && req.method === "POST") {
         const body = await jsonBody(req);
         if (!body) return badJson();
         if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
-        const { anchor, text, author } = body as { anchor: number; text: string; author: string };
+        const { anchor, text, author } = body as { anchor: unknown; text: unknown; author: string };
+        if (typeof text !== "string" || !text) {
+          return new Response("Bad request: text must be a non-empty string", { status: 400 });
+        }
+        if (!(typeof anchor === "string" && anchor) && !(Number.isInteger(anchor) && (anchor as number) >= 0)) {
+          return new Response(
+            "Bad request: anchor must be a unique text span or a character offset",
+            { status: 400 },
+          );
+        }
         return withLock(async () => {
           const before = await Bun.file(docPath).text();
-          const next = insertComment(before, anchor, text, author);
+          let next: string;
+          if (typeof anchor === "string") {
+            try {
+              next = addAnchoredComment(before, anchor, author, text);
+            } catch (err) {
+              return Response.json(
+                { error: { code: "anchor-not-unique", message: (err as Error).message } },
+                { status: 422 },
+              );
+            }
+          } else {
+            if ((anchor as number) > before.length) {
+              return new Response("Bad request: anchor offset is past the end of the document", { status: 400 });
+            }
+            next = insertComment(before, anchor as number, text, author);
+          }
           const r = await commitWrite(next, before, undefined, {
             author: author?.trim() || "You",
             source: "human",

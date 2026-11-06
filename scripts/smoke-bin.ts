@@ -75,6 +75,19 @@ try {
     throw new Error("compiled import output did not preserve the anchored comment");
   }
 
+  // The embedded Hunspell dicts must load inside the binary (no node_modules here):
+  // `acm spell suggest` turns a typo into an anchored SUGGEST card.
+  const spellDoc = join(dir, "spell.md");
+  writeFileSync(spellDoc, "We recieve it.\n");
+  const spelled = Bun.spawnSync([binary, "spell", "suggest", "--doc", spellDoc, "--author", "claude"], {
+    cwd: dir,
+    env: isolatedEnv,
+  });
+  const spellExpected = "We {==recieve==}{>>@claude: SUGGEST[g:spelling]: receive<<} it.\n";
+  if (spelled.exitCode !== 0 || readFileSync(spellDoc, "utf8") !== spellExpected) {
+    throw new Error(`compiled spell suggest failed:\n${spelled.stderr.toString()}`);
+  }
+
   const overview = Bun.spawnSync([binary], { cwd: dir, env: isolatedEnv });
   if (overview.exitCode !== 0 || !overview.stdout.toString().includes("acm edit")) {
     throw new Error("bare compiled CLI did not print its command overview");
@@ -160,7 +173,7 @@ try {
   }
 
   console.log(
-    "compiled binary smoke: overview + no alias + import + direct edit + launcher handoff passed outside node_modules",
+    "compiled binary smoke: overview + no alias + import + spell suggest + direct edit + launcher handoff passed outside node_modules",
   );
 } finally {
   rmSync(dir, { recursive: true, force: true });

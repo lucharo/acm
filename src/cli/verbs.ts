@@ -15,7 +15,10 @@ import {
   AmbiguityError,
   appendToThread,
   addComment,
+  addAnchoredComment,
   addSuggestion,
+  addSuggestionsAt,
+  type SuggestionAt,
   resolveSuggestion,
   resolveSuggestionGroup,
   resolveThread,
@@ -33,6 +36,7 @@ import {
 } from "../lib/criticmarkup";
 import { loadSpellEngine } from "./spellEngine";
 import type { SpellEngine } from "./spellEngine";
+import { matchCase } from "../lib/spellModel";
 import type { SpellVariant } from "../lib/viewSettings";
 import { seenStateForDocument } from "../lib/seenState";
 import { importDocument } from "./docxImport";
@@ -65,10 +69,11 @@ interface Flags {
   group?: string;
   batch?: string;
   json: boolean;
+  reply: boolean;
   positional: string[];
 }
 function parseFlags(argv: string[]): Flags {
-  const f: Flags = { json: false, positional: [] };
+  const f: Flags = { json: false, reply: false, positional: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--doc") f.doc = argv[++i];
@@ -76,6 +81,7 @@ function parseFlags(argv: string[]): Flags {
     else if (a === "--group") f.group = argv[++i];
     else if (a === "--batch") f.batch = argv[++i];
     else if (a === "--json") f.json = true;
+    else if (a === "--reply" || a === "-r") f.reply = true;
     else f.positional.push(a);
   }
   return f;
@@ -490,8 +496,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   let note: string;
   let decisionEvents: DecisionEvent[] = [];
   // Bare `reply` (no --batch) is a single-thread reply — the same operation as
-  // `comment`; dispatch both spellings to one implementation (`cmd` keeps the
-  // invoked name for messages).
+  // `comment --reply`; dispatch both spellings to one implementation (`cmd` keeps
+  // the invoked name for messages).
   const op = cmd === "reply" && !f.batch ? "comment" : cmd;
   try {
     switch (op) {
@@ -526,10 +532,22 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         break;
       }
       case "comment": {
-        const [phrase, text] = f.positional;
-        if (!phrase || !text) throw new Error(`usage: acm ${cmd} "<phrase>" "<text>" [--doc] [--author]`);
-        after = addComment(before, phrase, author, text);
-        note = `replied to "${phrase.slice(0, 40)}" as @${author}`;
+        if (cmd === "reply" || f.reply) {
+          // Reply: thread onto the one existing comment whose body matches <phrase>.
+          const [phrase, text] = f.positional;
+          const usage = cmd === "reply" ? "acm reply" : "acm comment --reply";
+          if (!phrase || !text) throw new Error(`usage: ${usage} "<phrase>" "<text>" [--doc] [--author]`);
+          if (f.group) throw new Error(`--group tags a new comment; a reply joins its thread (drop --group)`);
+          after = addComment(before, phrase, author, text);
+          note = `replied to "${phrase.slice(0, 40)}" as @${author}`;
+          break;
+        }
+        // New comment: anchor on the unique prose <span> (#42).
+        const [span, text] = f.positional;
+        if (!span || !text)
+          throw new Error('usage: acm comment "<span>" "<text>" [--group <id>] [--doc] [--author]  (reply: --reply/-r)');
+        after = addAnchoredComment(before, span, author, text, f.group);
+        note = `comment${f.group ? ` [g:${f.group}]` : ""} anchored on "${span.slice(0, 40)}" as @${author}`;
         break;
       }
       case "suggest": {
@@ -832,6 +850,9 @@ async function commitWrite(
 //                    from it, so squiggles agree). For foreign words/names that are
 //                    valid here but don't belong in the global dictionary.
 //   replace <w> <r>— fix every flagged occurrence of <w> in the doc, case-preserving
+//   suggest [word…] — one anchored SUGGEST[g:spelling] card per flagged occurrence
+//                    (top suggestion as the replacement), never auto-applied; the
+//                    human Applies/Rejects each, or the whole group at once (#29)
 
 /** The persisted spelling variant + personal dictionary + per-doc ignore lists
  *  (~/.config/acm/settings.json), with fresh-install defaults (British, empty). */
@@ -888,8 +909,8 @@ function lineOf(text: string, offset: number): number {
 async function runSpell(f: Flags, author: string): Promise<void> {
   const sub = f.positional[0] ?? "list";
   if (sub === "add") return runSpellAdd(f);
-  if (sub !== "list" && sub !== "ignore" && sub !== "replace") {
-    console.error(`acm spell: unknown subcommand "${sub}" — use: list | add | ignore | replace`);
+  if (sub !== "list" && sub !== "ignore" && sub !== "replace" && sub !== "suggest") {
+    console.error(`acm spell: unknown subcommand "${sub}" — use: list | add | ignore | replace | suggest`);
     process.exit(1);
   }
 
@@ -906,6 +927,8 @@ async function runSpell(f: Flags, author: string): Promise<void> {
       console.log(`  (${ignored.length} word${ignored.length === 1 ? "" : "s"} ignored for this doc — acm spell ignore)`);
     return;
   }
+
+  if (sub === "suggest") return runSpellSuggest(f, engine, docPath, before, author);
 
   // replace <word> <replacement>
   const word = f.positional[1];
@@ -928,6 +951,52 @@ async function runSpell(f: Flags, author: string): Promise<void> {
     [],
     author,
   );
+}
+
+/** `acm spell suggest [word…]` — one anchored SUGGEST card per flagged occurrence
+ *  (all flagged words, or only the given ones), the top suggestion as the
+ *  replacement, all in one group (`--group`, default "spelling") so the human can
+ *  Apply all. Proposals only — nothing is corrected until the human applies. Words
+ *  inside existing anchors/markup (including cards from an earlier run) are skipped,
+ *  so a re-run adds only what's new. Writes through commitWrite like every verb. */
+async function runSpellSuggest(
+  f: Flags,
+  engine: SpellEngine,
+  docPath: string,
+  before: string,
+  author: string,
+): Promise<void> {
+  const group = f.group ?? "spelling";
+  if (!/^[^\]\s]+$/.test(group)) {
+    console.error(`acm spell suggest: invalid group id "${group}" (no spaces or "]")`);
+    process.exit(1);
+  }
+  const only = new Set(f.positional.slice(1).map((w) => w.trim().toLowerCase()).filter(Boolean));
+  const top = new Map<string, string | undefined>();
+  const noSuggestion = new Set<string>();
+  const spans: SuggestionAt[] = [];
+  for (const o of engine.occurrences(before)) {
+    const lower = o.word.toLowerCase();
+    if (only.size > 0 && !only.has(lower)) continue;
+    if (!top.has(o.word)) top.set(o.word, engine.suggest(o.word)[0]);
+    const best = top.get(o.word);
+    if (!best) {
+      noSuggestion.add(o.word);
+      continue;
+    }
+    spans.push({ from: o.from, to: o.to, replacement: matchCase(o.word, best) });
+  }
+  const { content: after, skipped } = addSuggestionsAt(before, spans, author, group);
+  const added = spans.length - skipped.length;
+  let note = `${added} SUGGEST[g:${group}] card${added === 1 ? "" : "s"} for flagged words as @${author}` +
+    ` — review them in the editor (Apply all applies the group)`;
+  if (skipped.length)
+    note += `\n  skipped ${skipped.length} inside existing markup: ` +
+      [...new Set(skipped.map((s) => before.slice(s.from, s.to)))].join(", ");
+  if (noSuggestion.size) note += `\n  no suggestion for: ${[...noSuggestion].join(", ")}`;
+  if (only.size > 0 && spans.length === 0 && noSuggestion.size === 0)
+    note += `\n  none of ${[...only].join(", ")} is flagged in the document`;
+  await commitWrite(docPath, before, after, "spell suggest", note, [], author);
 }
 
 /** `acm spell add <word…>` — append to the personal dictionary. Routed through a live
@@ -1057,6 +1126,7 @@ function printFlagged(engine: SpellEngine, text: string, json: boolean): void {
   }
   console.log(
     `\n${rows.length} word${rows.length === 1 ? "" : "s"} flagged` +
+      `\n  propose fixes as SUGGEST cards: acm spell suggest [word…]` +
       `\n  fix:  acm spell replace "<word>" "<correction>"` +
       `\n  keep: acm spell add "<word>" [word…]`,
   );

@@ -678,26 +678,73 @@ test("accepting a suggestion group records every applied member with its group i
 });
 
 describe("acm reply dispatch", () => {
-  test("bare reply threads a comment onto the matched thread (comment alias)", () => {
+  test("bare reply threads a comment onto the matched thread", () => {
     const r = run("reply", "is this clear?", "yes — resolving");
     expect(r.code).toBe(0);
     expect(readFileSync(doc, "utf8")).toContain("<<}{>>@claude: yes — resolving<<}");
     expect(r.out).toContain("acm reply: replied to");
   });
 
-  test("comment alias threads the same single reply (and stays registered in VERBS)", () => {
-    const r = run("comment", "is this clear?", "ack");
+  test("comment --reply threads the same single reply", () => {
+    const r = run("comment", "--reply", "is this clear?", "ack");
     expect(r.code).toBe(0);
-    expect(readFileSync(doc, "utf8")).toContain("<<}{>>@claude: ack<<}");
-    // pins the cmd-for-messages contract: the alias reports itself as `comment`,
+    expect(readFileSync(doc, "utf8")).toBe(
+      "Prose under review.{>>@luis: is this clear?<<}{>>@claude: ack<<}\n",
+    );
+    // pins the cmd-for-messages contract: the verb reports itself as `comment`,
     // not the internal `op` name it dispatches to.
     expect(r.out).toContain("acm comment: replied to");
+  });
+
+  test("comment -r is the short spelling of --reply", () => {
+    const r = run("comment", "-r", "is this clear?", "ack");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "Prose under review.{>>@luis: is this clear?<<}{>>@claude: ack<<}\n",
+    );
+  });
+
+  test("bare comment anchors a NEW comment on the unique prose span (#42)", () => {
+    const r = run("comment", "under review", "which review?");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "Prose {==under review==}{>>@claude: which review?<<}.{>>@luis: is this clear?<<}\n",
+    );
+    expect(r.out).toContain('acm comment: comment anchored on "under review" as @claude');
+  });
+
+  test("comment --group tags the new comment as a NOTE group member (#77)", () => {
+    const r = run("comment", "under review", "which review?", "--group", "pass1");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "Prose {==under review==}{>>@claude: NOTE[g:pass1]: which review?<<}.{>>@luis: is this clear?<<}\n",
+    );
+  });
+
+  test("comment --reply refuses --group and writes nothing", () => {
+    const r = run("comment", "--reply", "is this clear?", "ack", "--group", "pass1");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("--group tags a new comment");
+    expect(readFileSync(doc, "utf8")).toBe(DOC);
+  });
+
+  test("bare comment on a span that is not in the prose fails and writes nothing", () => {
+    const r = run("comment", "is this clear?", "ack");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('"is this clear?" occurs 0 times as a wrappable span');
+    expect(readFileSync(doc, "utf8")).toBe(DOC);
+  });
+
+  test("comment --reply with missing args exits non-zero with its own usage", () => {
+    const r = run("comment", "--reply", "only-a-phrase");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('usage: acm comment --reply "<phrase>" "<text>"');
   });
 
   test("a pasted blank-line reply survives CLI insertion and a cold file reload", () => {
     const body = "first line\n\nsecond line";
 
-    const result = run("comment", "is this clear?", body);
+    const result = run("reply", "is this clear?", body);
 
     expect(result.code).toBe(0);
     const reloaded = readFileSync(doc, "utf8");
@@ -764,6 +811,55 @@ describe("acm reply dispatch", () => {
     const r = run("reply", "only-a-phrase");
     expect(r.code).toBe(1);
     expect(r.err).toContain('usage: acm reply "<phrase>" "<text>"');
+  });
+});
+
+describe("acm spell suggest (#29)", () => {
+  test("writes one grouped SUGGEST card per flagged occurrence, top suggestion as the fix", () => {
+    writeFileSync(doc, "We recieve it. Recieve `recieve` code.\n");
+    const r = run("spell", "suggest");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "We {==recieve==}{>>@claude: SUGGEST[g:spelling]: receive<<} it. " +
+        "{==Recieve==}{>>@claude: SUGGEST[g:spelling]: Receive<<} `recieve` code.\n",
+    );
+    expect(r.out).toContain("acm spell suggest: 2 SUGGEST[g:spelling] cards");
+  });
+
+  test("only the named words get cards", () => {
+    writeFileSync(doc, "We recieve teh parcel.\n");
+    const r = run("spell", "suggest", "teh");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "We recieve {==teh==}{>>@claude: SUGGEST[g:spelling]: ten<<} parcel.\n",
+    );
+  });
+
+  test("a re-run adds nothing: words already inside cards are skipped", () => {
+    writeFileSync(doc, "We recieve it.\n");
+    run("spell", "suggest");
+    const once = readFileSync(doc, "utf8");
+    const r = run("spell", "suggest");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(once);
+    expect(r.out).toContain("skipped 1 inside existing markup: recieve");
+  });
+
+  test("a word with no suggestion is reported, not carded", () => {
+    writeFileSync(doc, "The qzxqzxq word.\n");
+    const r = run("spell", "suggest");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe("The qzxqzxq word.\n");
+    expect(r.out).toContain("no suggestion for: qzxqzxq");
+  });
+
+  test("--group names the group", () => {
+    writeFileSync(doc, "We recieve it.\n");
+    const r = run("spell", "suggest", "--group", "typos");
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "We {==recieve==}{>>@claude: SUGGEST[g:typos]: receive<<} it.\n",
+    );
   });
 });
 

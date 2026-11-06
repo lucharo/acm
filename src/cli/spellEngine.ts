@@ -38,6 +38,8 @@ const skipParser = mdParser.configure([GFM, CriticMarkup]);
 export interface SpellEngine {
   /** Every flagged word in `text`, deduped case-insensitively, in document order. */
   flagged(text: string): FlaggedWord[];
+  /** EVERY flagged occurrence in `text` (not deduped), in document order. */
+  occurrences(text: string): { word: string; from: number; to: number }[];
   /** Up to 6 correction candidates (same cap as the modal). */
   suggest(word: string): string[];
   /** `text` with EVERY flagged occurrence of `lower` replaced by `replacement`,
@@ -119,10 +121,10 @@ export function loadSpellEngine(
     return out;
   };
 
-  const flagged = (text: string): FlaggedWord[] => {
+  const occurrences = (text: string): { word: string; from: number; to: number }[] => {
     const skip = collectSkipRanges(text);
     const re = wordRe();
-    const seen = new Map<string, FlaggedWord>(); // insertion order == document order
+    const out: { word: string; from: number; to: number }[] = [];
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       const word = m[0];
@@ -130,6 +132,14 @@ export function loadSpellEngine(
       const from = m.index;
       if (overlapsSkip(skip, from, from + word.length)) continue;
       if (!isMisspelled(word)) continue;
+      out.push({ word, from, to: from + word.length });
+    }
+    return out;
+  };
+
+  const flagged = (text: string): FlaggedWord[] => {
+    const seen = new Map<string, FlaggedWord>(); // insertion order == document order
+    for (const { word, from } of occurrences(text)) {
       const lower = word.toLowerCase();
       const hit = seen.get(lower);
       if (hit) hit.count++;
@@ -141,18 +151,10 @@ export function loadSpellEngine(
   const suggest = (word: string): string[] => speller.suggest(word).slice(0, 6);
 
   const applyReplaceAll = (text: string, lower: string, replacement: string): string => {
-    const skip = collectSkipRanges(text);
-    const re = wordRe();
-    const edits: { from: number; to: number; insert: string }[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const word = m[0];
-      if (word.length < MIN_LEN || word.toLowerCase() !== lower) continue;
-      const from = m.index;
-      if (overlapsSkip(skip, from, from + word.length)) continue;
-      if (!isMisspelled(word)) continue; // leave a correctly-cased homograph alone
-      edits.push({ from, to: from + word.length, insert: matchCase(word, replacement) });
-    }
+    // Only flagged occurrences: a correctly-cased homograph is left alone.
+    const edits = occurrences(text)
+      .filter((o) => o.word.toLowerCase() === lower)
+      .map((o) => ({ from: o.from, to: o.to, insert: matchCase(o.word, replacement) }));
     // Apply right-to-left so earlier offsets stay valid as we splice.
     let out = text;
     for (let i = edits.length - 1; i >= 0; i--) {
@@ -161,5 +163,5 @@ export function loadSpellEngine(
     return out;
   };
 
-  return { flagged, suggest, applyReplaceAll };
+  return { flagged, occurrences, suggest, applyReplaceAll };
 }

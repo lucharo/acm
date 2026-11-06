@@ -40,6 +40,16 @@ describe("loadSpellEngine — flagged()", () => {
   });
 });
 
+describe("loadSpellEngine — occurrences()", () => {
+  test("lists every flagged occurrence with its offsets, in document order", () => {
+    expect(engine.occurrences("Recieve teh `recieve` and recieve.")).toEqual([
+      { word: "Recieve", from: 0, to: 7 },
+      { word: "teh", from: 8, to: 11 },
+      { word: "recieve", from: 26, to: 33 },
+    ]);
+  });
+});
+
 describe("loadSpellEngine — skip regions (parity with the editor)", () => {
   test("skips inline code, fenced code, URLs, and hidden comments", () => {
     const doc = [
