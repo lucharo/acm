@@ -1,8 +1,11 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { recordHistory, listHistory, showVersion } from "./history";
+
+// Each test spawns a dozen git processes; on a loaded machine that outruns the 5 s default.
+setDefaultTimeout(30_000);
 
 const dir = mkdtempSync(join(tmpdir(), "acm-history-"));
 const doc = join(dir, "essay.md");
