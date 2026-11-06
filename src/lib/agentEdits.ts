@@ -23,6 +23,7 @@ import {
   applyRangedEdits,
 } from "./criticmarkup";
 import type { CommentToken, CommentThread } from "./criticmarkup";
+import { threadEditRequested } from "./commentGroups";
 
 /** Raised when a phrase/span matches zero or more than one target — the caller
  *  must resolve the ambiguity rather than guess. */
@@ -212,6 +213,7 @@ export interface ThreadSummary {
   count: number; // messages in the thread
   applicable: boolean; // has an applyable SUGGEST
   seen: boolean | null; // human read every comment (GUI "seen"); null = no seen state (suggestion-attached)
+  editRequested: boolean; // the human asked for an edit ("please suggest an edit") with no SUGGEST since
   preview: string; // first comment, trimmed
 }
 
@@ -250,6 +252,7 @@ export function threadsSummary(content: string, seenKeys: Set<string> = new Set(
       seen: th.comments.some((c) => suggestionComments.has(c.id))
         ? null
         : th.comments.every((c) => seenKeys.has(commentKey(c))),
+      editRequested: threadEditRequested(th),
       preview: (th.comments[0]?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
     };
   });

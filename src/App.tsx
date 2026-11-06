@@ -30,7 +30,7 @@ import { documentTabTitle } from "./lib/documentTitle";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
-import { commentEdgeVisible, commentRailExpanded } from "./lib/commentRail";
+import { anchorNeedsCentring, commentEdgeVisible, commentRailExpanded, stepReviewCard } from "./lib/commentRail";
 import { isPrintShortcut } from "./lib/printShortcut";
 import { useViewSettings, useSeenState, useDictionary, fetchConfig } from "./hooks/useConfigState";
 import {
@@ -84,6 +84,7 @@ import {
   type SuggestionDiscussion,
 } from "./lib/criticmarkup";
 import { isComment, isSuggestion } from "./lib/types";
+import { EDIT_REQUEST_TEXT, noteGroupResolveEdits } from "./lib/commentGroups";
 import {
   activeVisibleReviewCard,
   mobileReviewScrollOptions,
@@ -300,8 +301,10 @@ function Workspace({
     healIssues,
     diagnostics,
     fixableCount,
-    suggestionGroupOf,
+    groupOf,
     groupMembersOf,
+    groupNotesOf,
+    anchoredCardIds,
   } = useDocDerived(doc);
 
   // "Seen" tracking — content-keyed, non-destructive (state + persistence in
@@ -818,20 +821,27 @@ function Workspace({
   );
 
   // ── Comment threads ───────────────────────────────────────────────────────────
+  // Travel to a card's anchor (#43): an anchor already comfortably in view stays
+  // put, so clicking a visible card does not move the page; otherwise it lands in
+  // the MIDDLE of the view, not at the bottom edge where "nearest" left it with its
+  // card cut off. The magnetic card then floats to the anchor line.
+  const revealReviewAnchor = useCallback((v: EditorView, from: number) => {
+    const coords = v.coordsAtPos(from);
+    const box = v.scrollDOM.getBoundingClientRect();
+    if (!coords || anchorNeedsCentring(coords.top, coords.bottom, box.top, box.bottom)) {
+      v.dispatch({ effects: EditorView.scrollIntoView(from, { y: "center" }) });
+    }
+  }, []);
+
   const focusThread = useCallback(
     (thread: CommentThread) => {
       // A suggestion card may have no comments — fall back to the card's own id so it
       // still activates (and the editor scrolls to its anchor).
       setActiveId(thread.comments[0]?.id ?? thread.id);
-      // "nearest": only scroll if the anchor is OFF-screen, and then by the minimum
-      // needed — so clicking a comment you can already see does NOT travel the page
-      // (the jarring part). Off-screen anchors get a gentle nudge into view, not a
-      // jump-to-top. The magnetic card still floats to the anchor line.
-      editor.viewRef.current?.dispatch({
-        effects: EditorView.scrollIntoView(thread.from, { y: "nearest", yMargin: 24 }),
-      });
+      const v = editor.viewRef.current;
+      if (v) revealReviewAnchor(v, thread.from);
     },
-    [editor.viewRef],
+    [editor.viewRef, revealReviewAnchor],
   );
 
   const focusMobileReviewCard = useCallback(
@@ -863,17 +873,14 @@ function Workspace({
         const isUnseen = (t: CommentThread) => !t.comments.every((c) => next.has(commentKey(c)));
         const target = ordered.slice(idx + 1).find(isUnseen) ?? ordered.find(isUnseen) ?? null;
         setActiveId(target ? target.comments[0].id : null);
-        if (target) {
-          editor.viewRef.current?.dispatch({
-            effects: EditorView.scrollIntoView(
-              target.from,
-              commentRailWideEnough ? { y: "nearest" } : mobileReviewScrollOptions(),
-            ),
-          });
+        const v = editor.viewRef.current;
+        if (target && v) {
+          if (commentRailWideEnough) revealReviewAnchor(v, target.from);
+          else v.dispatch({ effects: EditorView.scrollIntoView(target.from, mobileReviewScrollOptions()) });
         }
       }
     },
-    [seen, threads, editor.viewRef, commentRailWideEnough],
+    [seen, threads, editor.viewRef, commentRailWideEnough, revealReviewAnchor],
   );
 
   // Clicking comment-anchored highlighted text focuses its comment (same as the
@@ -1072,9 +1079,43 @@ function Workspace({
       const edit = resolveAnchorEdit(content, thread.from, thread.to);
       const event = threadResolveDecision(content, thread, settings.author, "gui");
       v.dispatch({ changes: edit, annotations: decisionAnnotations([event]) });
-      setActiveId(null);
+      // Move on to the next card still in the rail (#43), read from the edited
+      // buffer because every offset after the resolved span has shifted.
+      const after = v.state.doc.toString();
+      const afterCards = groupCards(scanTokens(after), after);
+      const seenIds = new Set(
+        afterCards
+          .filter((card) => card.kind === "comment" && card.comments.every((c) => seen.has(commentKey(c))))
+          .map((card) => card.id),
+      );
+      const remaining = visibleReviewCards(afterCards, seenIds, settings.showSeen).sort((a, b) => a.from - b.from);
+      const resolvedEnd = edit.from + edit.insert.length;
+      const next = remaining.find((card) => card.from >= resolvedEnd) ?? remaining[0] ?? null;
+      if (!next) setActiveId(null);
+      else if (commentRailWideEnough) focusThread(next);
+      else focusMobileReviewCard(next);
     },
-    [editor.viewRef, settings.author],
+    [editor.viewRef, settings.author, settings.showSeen, seen, focusThread, focusMobileReviewCard, commentRailWideEnough],
+  );
+
+  // Resolve every note of a review group (#77) as ONE transaction (one undo), each
+  // thread logged like a single Resolve.
+  const resolveNoteGroup = useCallback(
+    (groupId: string) => {
+      const v = editor.viewRef.current;
+      if (!v) return;
+      const content = v.state.doc.toString();
+      const { edits, threads: resolved, skipped } = noteGroupResolveEdits(content, groupId);
+      if (edits.length) {
+        const events = resolved.map((thread) => threadResolveDecision(content, thread, settings.author, "gui"));
+        v.dispatch({ changes: edits, annotations: decisionAnnotations(events) });
+        setActiveId(null);
+      }
+      if (skipped > 0) {
+        pushToast(`${skipped} overlapping note thread${skipped === 1 ? " was" : "s were"} left open.`);
+      }
+    },
+    [editor.viewRef, settings.author, pushToast],
   );
 
   // Delete a SINGLE comment (distinct from Resolve, which clears the whole anchor).
@@ -1184,11 +1225,10 @@ function Workspace({
       const isUnseen = (t: CommentThread) => !t.comments.every((c) => next.has(commentKey(c)));
       const target = ordered.slice(idx + 1).find(isUnseen) ?? ordered.find(isUnseen) ?? null;
       setActiveId(target ? target.comments[0].id : null);
-      if (target) {
-        v.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "nearest" }) });
-      }
+      if (target && commentRailWideEnough) revealReviewAnchor(v, target.from);
+      else if (target) v.dispatch({ effects: EditorView.scrollIntoView(target.from, mobileReviewScrollOptions()) });
     },
-    [editor.viewRef, settings.author, seen],
+    [editor.viewRef, settings.author, seen, revealReviewAnchor, commentRailWideEnough],
   );
 
   // Keep widget handlers fresh (they capture tokens for comment-click lookup).
@@ -1353,13 +1393,33 @@ function Workspace({
   // a macOS Option-key keystroke into an accept/reject while the user is typing.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (editor.viewRef.current?.hasFocus || el?.isContentEditable || el?.closest(".cm-content")) {
         return;
       }
+
+      // Plain ↓/↑ with a card selected step through the rail's cards (#43). Not
+      // inside a dialog, menu or group list, where the arrows scroll or choose.
+      if (
+        (e.key === "ArrowDown" || e.key === "ArrowUp") &&
+        !e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey &&
+        !el?.closest("[role=dialog], [role=menu], [data-group-ui]")
+      ) {
+        const selected = visibleCards.some(
+          (card) => card.id === activeId || card.comments.some((c) => c.id === activeId),
+        );
+        const next = selected ? stepReviewCard(visibleCards, activeId, e.key === "ArrowDown" ? 1 : -1) : null;
+        if (next) {
+          e.preventDefault();
+          if (commentRailWideEnough) focusThread(next);
+          else focusMobileReviewCard(next);
+        }
+        return;
+      }
+
+      if (!e.altKey) return;
 
       const ordered = [...tokens].sort((a, b) => a.from - b.from);
       if (ordered.length === 0) return;
@@ -1398,7 +1458,7 @@ function Workspace({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tokens, activeId, gotoToken, acceptToken, rejectToken]);
+  }, [tokens, activeId, gotoToken, acceptToken, rejectToken, visibleCards, focusThread, focusMobileReviewCard, commentRailWideEnough]);
 
   // Cmd/Ctrl+S saves the DOCUMENT (flush the pending write) — not the browser's
   // "save page as HTML". The file is the source of truth; this is the manual save.
@@ -1583,6 +1643,8 @@ function Workspace({
                     onReply={replyToThread}
                     onReplyAndSeen={replyAndSeen}
                     onSuggestEdit={(t, proposal) => replyAndSeen(t, `SUGGEST: ${proposal}`)}
+                    onAskAgent={(t) => replyAndSeen(t, EDIT_REQUEST_TEXT)}
+                    anchoredCardIds={anchoredCardIds}
                     onApplySuggestion={(c) =>
                       runSuggestionEdit(
                         c,
@@ -1595,8 +1657,10 @@ function Workspace({
                     }
                     onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
                     applicableSuggestionIds={applicableSuggestionIds}
-                    suggestionGroupOf={suggestionGroupOf}
+                    groupOf={groupOf}
                     groupMembersOf={groupMembersOf}
+                    groupNotesOf={groupNotesOf}
+                    onGroupResolveNotes={resolveNoteGroup}
                     onGroupEdit={(groupId, mode) =>
                       runGroupEdit(
                         groupId,

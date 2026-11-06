@@ -514,6 +514,15 @@ test("threads reads the same per-document seen slice as the GUI", () => {
   expect(unseen.out).toContain("1 threads, 1 unseen");
 }, 15_000);
 
+test("threads marks a thread waiting on a requested edit (#76)", () => {
+  writeFileSync(doc, "{==wordy==}{>>@claude: tighten?<<}{>>@You: please suggest an edit<<}\n");
+
+  const result = run("threads");
+
+  expect(result.code).toBe(0);
+  expect(result.out).toContain("[edit requested]");
+}, 15_000);
+
 test("accept persists a complete CLI decision only after the edit lands", async () => {
   const before = "Before {==old words==}{>>@maya: SUGGEST: new words<<} after.\n";
   writeFileSync(doc, before);

@@ -481,7 +481,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       const anchor = t.anchor ? `⟦${t.anchor.slice(0, 40)}⟧ ` : "";
       // seen: true → [seen]; null (suggestion-attached, no seen state) → [suggestion],
       // so an unmarked line always means genuinely unseen and matches the count below.
-      const marks = `${t.applicable ? " [SUGGEST]" : ""}${t.seen === true ? " [seen]" : t.seen === null ? " [suggestion]" : ""}`;
+      const marks = `${t.applicable ? " [SUGGEST]" : ""}${t.seen === true ? " [seen]" : t.seen === null ? " [suggestion]" : ""}${t.editRequested ? " [edit requested]" : ""}`;
       console.log(`#${t.id} (${t.count}) @${t.authors.join(" @")}${marks}  ${anchor}${t.preview}`);
     }
     // seen === null (suggestion-attached, no GUI seen state) stays out of the count,

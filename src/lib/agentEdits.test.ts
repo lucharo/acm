@@ -297,6 +297,13 @@ describe("threadsSummary", () => {
     expect(threadsSummary(DOC).every((t) => t.seen === false)).toBe(true);
   });
 
+  test("flags a thread whose edit request has no SUGGEST answer yet (#76)", () => {
+    const doc =
+      "A {==wordy bit==}{>>@claude: tighten?<<}{>>@You: please suggest an edit<<} and " +
+      "{==done bit==}{>>@claude: tighten?<<}{>>@You: please suggest an edit<<}{>>@claude: SUGGEST: done<<}.";
+    expect(threadsSummary(doc).map((t) => t.editRequested)).toEqual([true, false]);
+  });
+
   test("a comment riding a raw suggestion token has no seen state (null) — GUI parity", () => {
     // The GUI folds this comment into a suggestion card (accept/reject, no Mark-seen),
     // so it must not count as unseen forever in the CLI.

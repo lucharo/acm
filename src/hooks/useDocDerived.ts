@@ -16,9 +16,12 @@ import {
   validateMarkup,
   healDocument,
   commentKey,
+  anchorHighlightFor,
 } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
 import { isComment } from "../lib/types";
+import { noteGroupMembers } from "../lib/commentGroups";
+import type { ReviewGroupInfo } from "../lib/commentGroups";
 import type { SidebarCard } from "../lib/types";
 
 export function useDocDerived(doc: string) {
@@ -80,27 +83,62 @@ export function useDocDerived(doc: string) {
   }, [doc]);
 
 
-  // commentId → its suggestion group (id + member count), for the sidebar's
-  // group-wide Apply/Reject controls. Only real groups (≥2 members) qualify.
-  const suggestionGroupOf = useMemo(() => {
-    const map = new Map<string, { id: string; size: number }>();
+  // Comment cards anchored to a highlighted span: the only threads where a SUGGEST
+  // reply can apply, so the only ones that offer Ask agent (#76).
+  const anchoredCardIds = useMemo(
+    () =>
+      new Set(
+        cards
+          .filter((card) => card.kind === "comment" && card.comments[0])
+          .filter((card) => anchorHighlightFor(doc, card.comments[0], tokens)?.type === "highlight")
+          .map((card) => card.id),
+      ),
+    [cards, doc, tokens],
+  );
+
+  // Review groups: SUGGEST[g:id] edits (#21) and NOTE[g:id] notes (#77) sharing an
+  // id. Only real groups (≥2 members in total) get the group surface.
+  const noteMembersOf = useMemo(() => noteGroupMembers(doc, tokens, threads), [doc, tokens, threads]);
+  const realGroupIds = useMemo(() => {
+    const counts = new Map<string, { edits: number; notes: number }>();
+    const bump = (id: string, key: "edits" | "notes", by: number) => {
+      const c = counts.get(id) ?? { edits: 0, notes: 0 };
+      c[key] += by;
+      counts.set(id, c);
+    };
+    for (const s of suggestCardList) if (s.groupId) bump(s.groupId, "edits", 1);
+    for (const [id, notes] of noteMembersOf) bump(id, "notes", notes.length);
+    return new Map([...counts].filter(([, c]) => c.edits + c.notes > 1));
+  }, [suggestCardList, noteMembersOf]);
+
+  // commentId → its review group, for the card spine and the group controls.
+  const groupOf = useMemo(() => {
+    const map = new Map<string, ReviewGroupInfo>();
+    const info = (id: string) => ({ id, ...realGroupIds.get(id)! });
     for (const s of suggestCardList) {
-      if (s.groupId && s.groupSize > 1) map.set(s.commentId, { id: s.groupId, size: s.groupSize });
+      if (s.groupId && realGroupIds.has(s.groupId)) map.set(s.commentId, info(s.groupId));
+    }
+    for (const [id, notes] of noteMembersOf) {
+      if (!realGroupIds.has(id)) continue;
+      for (const n of notes) map.set(n.commentId, info(id));
     }
     return map;
-  }, [suggestCardList]);
+  }, [suggestCardList, noteMembersOf, realGroupIds]);
 
-  // groupId → its members, flattened to {old span, new wording} pairs in document
-  // order — the data every "see the whole group together" view (popover / inline /
-  // panel) renders before an Apply-all. Built once per doc change from the same
+  // groupId → its edits, flattened to {old span, new wording} pairs in document
+  // order — what the group surface lists before an Apply-all. Built from the same
   // inline-suggestion pass, so the preview can't drift from what Apply-all does.
   const groupMembersOf = useMemo(() => {
     const map = new Map<string, SuggestionGroupMember[]>();
-    const ids = new Set<string>();
-    for (const s of suggestCardList) if (s.groupId && s.groupSize > 1) ids.add(s.groupId);
-    for (const id of ids) map.set(id, suggestionGroupMembers(doc, id, tokens));
+    for (const [id, c] of realGroupIds) if (c.edits > 0) map.set(id, suggestionGroupMembers(doc, id, tokens));
     return map;
-  }, [suggestCardList, doc, tokens]);
+  }, [realGroupIds, doc, tokens]);
+
+  // groupId → its notes, for the group surface's note rows and Resolve all.
+  const groupNotesOf = useMemo(
+    () => new Map([...noteMembersOf].filter(([id]) => realGroupIds.has(id))),
+    [noteMembersOf, realGroupIds],
+  );
 
   return {
     tokens,
@@ -115,8 +153,10 @@ export function useDocDerived(doc: string) {
     healIssues,
     diagnostics,
     fixableCount,
-    suggestionGroupOf,
+    groupOf,
     groupMembersOf,
+    groupNotesOf,
+    anchoredCardIds,
   };
 }
 

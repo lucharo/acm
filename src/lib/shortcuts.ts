@@ -73,6 +73,7 @@ export function shortcutGroups(): ShortcutGroup[] {
       title: "Review changes",
       note: "When the cursor is outside the editor",
       items: [
+        { keys: "↓ / ↑", label: "Next / previous card (with a card selected)" },
         { keys: `${ALT}↓ / J`, label: "Next comment or change" },
         { keys: `${ALT}↑ / K`, label: "Previous comment or change" },
         { keys: `${ALT}Y`, label: "Accept the suggestion" },

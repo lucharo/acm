@@ -70,9 +70,16 @@ replies.
 _Avoid_: bubble, item.
 
 **Suggestion group**:
-A set of SUGGEST cards tagged with a shared group id, reviewed and
-accepted/rejected as one unit.
+A set of SUGGEST cards tagged with a shared group id (`SUGGEST[g:id]:`),
+reviewed and accepted/rejected as one unit. Plain notes can join the same
+group (`NOTE[g:id]:`); the group's notes are resolved as one unit.
 _Avoid_: batch, changeset.
+
+**Edit request**:
+A reply asking an agent to write a SUGGEST card for a thread ("please suggest
+an edit", posted by the card's Ask agent action). It stands until a SUGGEST
+follows it; `acm threads` marks such threads `[edit requested]`.
+_Avoid_: ask, ping.
 
 **Author**:
 The self-declared name a comment or suggestion is signed with (the `@name:`

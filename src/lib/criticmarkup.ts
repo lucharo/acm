@@ -1849,6 +1849,15 @@ export function suggestionReplacement(body: string): string | null {
   return m ? m[2] : null;
 }
 
+/** The reply that asks an agent for a SUGGEST on a thread (#76; the card's Ask
+ *  agent action). Plain words, so an agent reading the raw file understands it. */
+export const EDIT_REQUEST_TEXT = "please suggest an edit";
+
+/** Whether a comment body is an edit request (case and trailing `.`/`!` ignored). */
+export function isEditRequestBody(body: string): boolean {
+  return body.trim().replace(/[.!]+$/, "").toLowerCase() === EDIT_REQUEST_TEXT;
+}
+
 /** The suggestion-group id (`SUGGEST[g:7a]: …` → "7a"), or null for an untagged
  *  suggestion / a non-suggestion body. */
 export function suggestionGroupId(body: string): string | null {
@@ -1966,7 +1975,14 @@ export function suggestionThreadEdit(
   if (discussion === "resolve-thread") {
     return { from: suggestionAnchorStart(content, hl), to: thread.to, insert: newSpan };
   }
-  const remaining = thread.comments.filter((c) => c.from !== comment.from);
+  // Applying a SUGGEST fulfils the edit requests posted before it: drop them with
+  // the SUGGEST, or the thread would read as waiting on an edit that has landed
+  // (#76). A request posted after it asks for something newer and stays.
+  const remaining = thread.comments.filter(
+    (c) =>
+      c.from !== comment.from &&
+      !(mode === "accept" && c.from < comment.from && isEditRequestBody(c.body)),
+  );
   const keptMarkup = remaining.map((c) => c.raw).join("");
   const insert =
     remaining.length === 0

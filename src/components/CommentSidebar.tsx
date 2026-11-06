@@ -16,17 +16,22 @@
 // Threads: comments sharing an anchor render as one card (root + replies).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import { MOD } from "../lib/platform";
 import type { SidebarCard, CommentToken, SuggestionToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
-import { commentStatusOccluded } from "../lib/commentRail";
+import { commentStatusOccluded, innerScrollerTakesWheel, stepReviewCard } from "../lib/commentRail";
+import type { WheelBox } from "../lib/commentRail";
+import { EDIT_REQUEST_TEXT, noteGroupId, noteText, threadEditRequested, withNoteGroup } from "../lib/commentGroups";
+import type { GroupNoteMember, ReviewGroupInfo } from "../lib/commentGroups";
+import { commentSegments } from "../lib/commentLinks";
 import { visibleReviewCards } from "../lib/visibleReviewCards";
 import { authorColor, groupColor } from "./authorColor";
 import CommentComposer from "./CommentComposer";
-import { handleCommentKey } from "./commentKeys";
+import { handleCommentKey, mayDiscardDraft } from "./commentKeys";
 import ReviewTextEditor, { closeReviewEditorAfterSuccessfulSave } from "./ReviewTextEditor";
 
 interface CommentSidebarProps {
@@ -58,6 +63,12 @@ interface CommentSidebarProps {
   onReplyAndSeen: (card: SidebarCard, text: string) => void;
   /** Post a structured replacement proposal on this anchored discussion. */
   onSuggestEdit: (card: SidebarCard, proposal: string) => void;
+  /** One click: append an edit request for the agent at the end of the thread and
+   *  mark it seen (#76). */
+  onAskAgent: (card: SidebarCard) => void;
+  /** Comment cards anchored to a highlighted span; only these offer Ask agent, as a
+   *  SUGGEST reply on a point comment has no span to apply to. */
+  anchoredCardIds?: Set<string>;
   /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
    *  proposed wording. */
   onApplySuggestion: (comment: CommentToken) => void;
@@ -68,12 +79,16 @@ interface CommentSidebarProps {
   /** Ids of SUGGEST: comments with a resolvable anchor → their Apply is real.
    *  A SUGGEST: not in this set shows the proposal but no (dead) Apply button. */
   applicableSuggestionIds: Set<string>;
-  /** commentId → its suggestion group (id + member count), for SUGGEST[g:id]
-   *  members (#21). Only real groups (≥2 members) appear here. */
-  suggestionGroupOf: Map<string, { id: string; size: number }>;
-  /** groupId → its members ({old span, new wording}, in document order) — the data
-   *  the group popover lists so the whole set is reviewable before an Apply-all. */
+  /** commentId → its review group (id + edit and note counts), for SUGGEST[g:id]
+   *  edits (#21) and NOTE[g:id] notes (#77). Only real groups (≥2 members) appear. */
+  groupOf: Map<string, ReviewGroupInfo>;
+  /** groupId → its edits ({old span, new wording}, in document order) — the data
+   *  the group surface lists so the whole set is reviewable before an Apply-all. */
   groupMembersOf: Map<string, SuggestionGroupMember[]>;
+  /** groupId → its notes, in document order. */
+  groupNotesOf: Map<string, GroupNoteMember[]>;
+  /** Resolve every note thread of a group as one atomic edit. */
+  onGroupResolveNotes: (groupId: string) => void;
   /** Accept/reject EVERY member of a group as one atomic edit. */
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
   /** Apply every non-conflicting member and resolve its discussion atomically. */
@@ -159,10 +174,14 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReply,
     onReplyAndSeen,
     onSuggestEdit,
+    onAskAgent,
+    anchoredCardIds,
     onApplySuggestion,
     onApplyAndResolveSuggestion,
-    suggestionGroupOf,
+    groupOf,
     groupMembersOf,
+    groupNotesOf,
+    onGroupResolveNotes,
     onGroupEdit,
     onGroupApplyAndResolve,
     onLocate,
@@ -244,7 +263,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   // expand), keyed by the member comment whose chip was clicked — so opening it on
   // one member card doesn't fan the popover out across every sibling card. One at a
   // time — opening another closes the last.
-  const [openControl, setOpenControl] = useState<string | null>(null);
+  // A large group opens as a side panel instead of the popover (#67).
+  const [openControl, setOpenControl] = useState<{ key: string; mode: GroupSurfaceMode } | null>(null);
   // Click anywhere outside a group surface closes it (popover feel). The toggle +
   // popover carry data-group-ui so a click on them doesn't self-close.
   useEffect(() => {
@@ -415,6 +435,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     const el = containerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // A scrollable region inside a card (a group's list, a long reply) scrolls
+      // itself while it has room; only the rest of the wheel moves the document.
+      if (innerScrollerTakesWheel(domWheelBox(e.target, el), e.deltaY)) return;
       const scroller = view.scrollDOM;
       // deltaMode 1 = lines, 2 = pages; approximate to px so trackpad + wheel match.
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1;
@@ -459,15 +482,52 @@ export default function CommentSidebar(props: CommentSidebarProps) {
       ? layout.get(active.id) ?? null
       : null;
 
+  // The pill's arrows travel the rail like ↑/↓ (#43): from the selected card, or
+  // from the first/last when none is.
+  function stepCard(direction: 1 | -1) {
+    const next = stepReviewCard(ordered, activeId, direction);
+    if (next) onFocusThread(next);
+  }
+
+  // The group controls under a member comment (an edit or a note), keyed by that
+  // comment so only the clicked card's surface opens.
+  function renderGroupSurface(commentId: string) {
+    const g = groupOf.get(commentId);
+    if (!g) return null;
+    const mode = openControl?.key === commentId ? openControl.mode : null;
+    return (
+      <GroupSurface
+        group={g}
+        members={groupMembersOf.get(g.id) ?? []}
+        notes={groupNotesOf.get(g.id) ?? []}
+        mode={mode}
+        onMode={(next) => setOpenControl(next ? { key: commentId, mode: next } : null)}
+        onGroupEdit={onGroupEdit}
+        onGroupApplyAndResolve={onGroupApplyAndResolve}
+        onGroupResolveNotes={onGroupResolveNotes}
+        onLocate={onLocate}
+      />
+    );
+  }
+
+  function closeReply() {
+    setReplyingId(null);
+    setReplyDraft("");
+    setReplyMode("reply");
+  }
+
+  // Cancel and Escape share one path: a draft with text asks before it is thrown away.
+  function cancelReply() {
+    if (mayDiscardDraft(replyDraft, (message) => window.confirm(message))) closeReply();
+  }
+
   function submitReply(card: SidebarCard, markSeen: boolean) {
     const text = replyDraft;
     if (text.trim()) {
       if (replyMode === "suggestion") onSuggestEdit(card, text);
       else (markSeen ? onReplyAndSeen : onReply)(card, text);
     }
-    setReplyingId(null);
-    setReplyDraft("");
-    setReplyMode("reply");
+    closeReply();
   }
 
   return (
@@ -475,30 +535,40 @@ export default function CommentSidebar(props: CommentSidebarProps) {
       {/* Zero-inbox counter: open (unseen) comments remaining (top-right, always shown).
           Click it to jump to the first open comment. */}
       {!composerOpen ? <div ref={statusRef} className="absolute right-3 top-3 z-20 select-none transition-opacity duration-150">
-        {unseenCount > 0 ? (
-          <button
-            type="button"
-            onClick={() => {
-              const first = ordered.find((t) => t.kind === "comment" && !seenIds.has(t.id));
-              if (first) onFocusThread(first);
-            }}
-            className="flex h-6 items-center rounded-full bg-[var(--accent)] px-2.5 text-[11px] font-medium tabular-nums text-[var(--panel)] shadow-sm transition-transform hover:scale-105"
-            title={`${unseenCount} open comment${unseenCount === 1 ? "" : "s"} — jump to the first`}
-          >
-            {unseenCount} open
-          </button>
-        ) : (
-          <span
-            className="pointer-events-none flex h-6 items-center gap-1 rounded-full bg-[var(--crit-ins)] px-2.5 text-[11px] font-medium text-[var(--panel)] shadow-sm"
-            title="No open comments — all caught up"
-          >
-            {/* ✓ glyph so the "done" state reads without relying on green (colourblind-safe). */}
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            all caught up
-          </span>
-        )}
+        <div
+          className={`flex h-6 items-center rounded-full text-[11px] font-medium text-[var(--panel)] shadow-sm ${unseenCount > 0 ? "bg-[var(--accent)]" : "bg-[var(--crit-ins)]"}`}
+        >
+          {ordered.length > 0 ? (
+            <StatusStep direction={-1} label="Previous card (↑)" onStep={() => stepCard(-1)} />
+          ) : null}
+          {unseenCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                const first = ordered.find((t) => t.kind === "comment" && !seenIds.has(t.id));
+                if (first) onFocusThread(first);
+              }}
+              className={`flex h-6 items-center tabular-nums transition-transform hover:scale-105 ${ordered.length > 0 ? "px-1" : "px-2.5"}`}
+              title={`${unseenCount} open comment${unseenCount === 1 ? "" : "s"} — jump to the first`}
+            >
+              {unseenCount} open
+            </button>
+          ) : (
+            <span
+              className={`pointer-events-none flex h-6 items-center gap-1 ${ordered.length > 0 ? "px-1" : "px-2.5"}`}
+              title="No open comments — all caught up"
+            >
+              {/* ✓ glyph so the "done" state reads without relying on green (colourblind-safe). */}
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              all caught up
+            </span>
+          )}
+          {ordered.length > 0 ? (
+            <StatusStep direction={1} label="Next card (↓)" onStep={() => stepCard(1)} />
+          ) : null}
+        </div>
       </div> : null}
       {ordered.length === 0 && !composerOpen ? (
         <div className="px-3 pt-5 text-xs italic text-[var(--faint)]">
@@ -580,7 +650,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                 // The suggestion group this card belongs to (if any) — drives a
                 // colored spine + tag so same-group cards cluster visually.
                 const cardGroupId =
-                  card.comments.map((c) => suggestionGroupOf.get(c.id)?.id).find(Boolean) ?? null;
+                  card.comments.map((c) => groupOf.get(c.id)?.id).find(Boolean) ?? null;
                 return (
                   <div
                     key={card.id}
@@ -700,7 +770,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 </p>
                               </div>
                             ) : (
-                              <p className="mb-0.5 whitespace-pre-wrap text-[13px] leading-relaxed">
+                              <p className="mb-0.5 whitespace-pre-wrap text-[13px] leading-relaxed [overflow-wrap:anywhere]">
                                 {s.type === "substitute" ? (
                                   <>
                                     <span className="text-[var(--crit-del)] line-through">{s.oldText}</span>
@@ -768,7 +838,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                               e.stopPropagation();
                               const replacement = suggestionReplacement(c.body);
                               setEditingId(c.id);
-                              setEditDraft(replacement ?? c.body);
+                              setEditDraft(replacement ?? noteText(c.body));
                             }}
                             title={suggestionReplacement(c.body) === null ? "Edit comment" : "Edit suggestion"}
                             aria-label={suggestionReplacement(c.body) === null ? "Edit comment" : "Edit suggestion"}
@@ -805,7 +875,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 onChange={setEditDraft}
                                 onSave={() => closeReviewEditorAfterSuccessfulSave(
                                   () => repl === null
-                                    ? onEditComment(c, editDraft)
+                                    ? onEditComment(c, withNoteGroup(editDraft.trim() ? noteGroupId(c.body) : null, editDraft))
                                     : onEditSuggestion(c, editDraft),
                                   () => setEditingId(null),
                                 )}
@@ -819,9 +889,12 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                             // of thousands of px past the prose and the doc tail becomes a
                             // huge empty scroll. Focusing a card shows the full text.
                             return (
-                              <p className={`whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)] ${isActive ? "" : "line-clamp-5"}`}>
-                                {c.body}
-                              </p>
+                              <>
+                                <p className={`whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink)] [overflow-wrap:anywhere] ${isActive ? "" : "line-clamp-5"}`}>
+                                  <CommentText body={noteText(c.body)} />
+                                </p>
+                                {renderGroupSurface(c.id)}
+                              </>
                             );
                           }
                           // A structured SUGGEST: comment — show the proposed wording as a
@@ -834,7 +907,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 </svg>
                                 Suggested edit
                               </div>
-                              <p className={`whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed text-[var(--crit-ins)] ${isActive ? "" : "line-clamp-5"}`}>
+                              <p className={`whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed [overflow-wrap:anywhere] text-[var(--crit-ins)] ${isActive ? "" : "line-clamp-5"}`}>
                                 {repl.trim() ? repl : "(delete this span)"}
                               </p>
                               {applicableSuggestionIds.has(c.id) ? (
@@ -876,24 +949,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                   no anchored span to apply to
                                 </p>
                               )}
-                              {(() => {
-                                // Member of a suggestion group (#21): surface the whole-set
-                                // controls — every member edit lands as ONE undoable apply.
-                                const g = suggestionGroupOf.get(c.id);
-                                if (!g) return null;
-                                return (
-                                  <GroupSurface
-                                    groupId={g.id}
-                                    size={g.size}
-                                    members={groupMembersOf.get(g.id) ?? []}
-                                    isOpen={openControl === c.id}
-                                    onToggle={() => setOpenControl(openControl === c.id ? null : c.id)}
-                                    onGroupEdit={onGroupEdit}
-                                    onGroupApplyAndResolve={onGroupApplyAndResolve}
-                                    onLocate={onLocate}
-                                  />
-                                );
-                              })()}
+                              {/* Member of a review group (#21): surface the whole-set
+                                  controls — every member edit lands as ONE undoable apply. */}
+                              {renderGroupSurface(c.id)}
                             </div>
                           );
                         })()}
@@ -907,7 +965,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           rows={1}
                           value={replyDraft}
                           onChange={(e) => setReplyDraft(e.target.value)}
-                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, card.kind === "comment"), () => { setReplyingId(null); setReplyDraft(""); setReplyMode("reply"); })}
+                          onKeyDown={(e) => handleCommentKey(e, () => submitReply(card, false), () => submitReply(card, card.kind === "comment"), cancelReply)}
                           aria-label={replyMode === "suggestion" ? "Suggested replacement" : "Reply"}
                           placeholder={replyMode === "suggestion" ? "Write the replacement text…" : "Reply…  (⇧↵ for a new line)"}
                           className="block max-h-40 w-full resize-none overflow-y-auto rounded-md border border-[var(--line-strong)] bg-[var(--bg)] px-2 py-1.5 text-[13px] leading-relaxed text-[var(--ink)] outline-none [field-sizing:content] focus:border-[var(--accent)]"
@@ -930,6 +988,14 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                               Reply &amp; seen <span className="text-[10px] font-normal text-[var(--faint)]">{MOD}⇧↵</span>
                             </button>
                           ) : null}
+                          <button
+                            type="button"
+                            onClick={cancelReply}
+                            title="Close the reply box without posting"
+                            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+                          >
+                            Cancel <span className="text-[10px] font-normal text-[var(--faint)]">esc</span>
+                          </button>
                         </div>
                       </div>
                     ) : (
@@ -967,6 +1033,25 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                             Suggest edit
                           </button>
                         ) : null}
+                        {card.kind === "comment" && anchoredCardIds?.has(card.id) ? (
+                          threadEditRequested(card) ? (
+                            <span className="text-[12px] italic text-[var(--faint)]" title="Waiting for an agent to post a SUGGEST on this thread">
+                              Edit requested
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAskAgent(card);
+                              }}
+                              title={`Reply “${EDIT_REQUEST_TEXT}” at the end of this thread and mark it seen; agents find it with acm threads`}
+                              className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
+                            >
+                              Ask agent
+                            </button>
+                          )
+                        ) : null}
                       </div>
                     )}
                   </div>
@@ -980,44 +1065,142 @@ export default function CommentSidebar(props: CommentSidebarProps) {
   );
 }
 
+/** A plain comment body with its URLs and `[text](url)` links made clickable
+ *  (#68). Links open in a new tab and never activate the card underneath. */
+function CommentText({ body }: { body: string }) {
+  return (
+    <>
+      {commentSegments(body).map((segment, index) =>
+        segment.kind === "text" ? (
+          segment.text
+        ) : (
+          <a
+            key={index}
+            href={segment.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={segment.href}
+            className="text-[var(--accent)] underline decoration-[var(--line-strong)] underline-offset-2 hover:decoration-current"
+          >
+            {segment.text}
+          </a>
+        ),
+      )}
+    </>
+  );
+}
+
 // ── Suggestion-group "see the whole set" surface ──────────────────────────────
 // A group member's card carries controls to review + apply the WHOLE group: the
 // ⛓ chip opens a popover listing every member (old → new, click to locate) with
 // the atomic Apply-all/Reject-all. (Three layouts were compared live — popover /
 // inline-expand / grouped panel — popover won and the others were removed.)
 
-/** The members of a group as old → new rows, in document order. Click a row to
- *  scroll to + flash the exact span it edits (via onLocate). */
-function GroupMembers({
+/** One of the status pill's step arrows. */
+function StatusStep({ direction, label, onStep }: { direction: 1 | -1; label: string; onStep: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onStep}
+      aria-label={label}
+      title={label}
+      className={`flex h-6 w-6 items-center justify-center opacity-80 hover:opacity-100 ${direction < 0 ? "rounded-l-full pl-1" : "rounded-r-full pr-1"}`}
+    >
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+          d={direction < 0 ? "M3.5 10.5 8 6l4.5 4.5" : "M3.5 5.5 8 10l4.5-4.5"}
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
+/** Adapt a DOM element for {@link innerScrollerTakesWheel}; the chain ends at the
+ *  rail container, which only forwards the wheel. */
+function domWheelBox(node: EventTarget | null, rail: HTMLElement): WheelBox | null {
+  if (!(node instanceof HTMLElement) || node === rail) return null;
+  return {
+    get scrollTop() { return node.scrollTop; },
+    get scrollHeight() { return node.scrollHeight; },
+    get clientHeight() { return node.clientHeight; },
+    get scrollable() {
+      const overflow = getComputedStyle(node).overflowY;
+      return overflow === "auto" || overflow === "scroll";
+    },
+    get parent() { return domWheelBox(node.parentElement, rail); },
+  };
+}
+
+type GroupSurfaceMode = "popover" | "panel";
+
+/** Groups with more members than this open straight into the side panel: the
+ *  popover fits about six rows. */
+export const GROUP_PANEL_THRESHOLD = 6;
+
+/** "14 edits", "3 notes", "2 edits · 3 notes". */
+export function groupCountLabel(group: Pick<ReviewGroupInfo, "edits" | "notes">): string {
+  const part = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  return [group.edits ? part(group.edits, "edit") : null, group.notes ? part(group.notes, "note") : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** The members of a group, in document order: edits as old → new rows, notes as
+ *  their text. Click a row to scroll to + flash the span it is about (onLocate). */
+export function GroupMembers({
   members,
+  notes,
+  large = false,
   onLocate,
 }: {
   members: SuggestionGroupMember[];
+  notes: GroupNoteMember[];
+  large?: boolean;
   onLocate: (from: number, to: number) => void;
 }) {
+  const rows = [
+    ...members.map((m) => ({ key: m.commentId, at: m.from, from: m.anchorFrom, to: m.anchorTo, edit: m, note: null })),
+    ...notes.map((n) => ({ key: n.commentId, at: n.threadFrom, from: n.anchorFrom, to: n.anchorTo, edit: null, note: n })),
+  ].sort((a, b) => a.at - b.at);
   return (
-    <ul className="space-y-0.5">
-      {members.map((m, i) => (
-        <li key={m.commentId}>
+    <ul className={large ? "divide-y divide-[var(--line)]" : "space-y-0.5"}>
+      {rows.map((row, i) => (
+        <li key={row.key}>
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onLocate(m.anchorFrom, m.anchorTo); }}
-            title="Jump to this edit in the document"
-            className="flex w-full gap-1.5 rounded px-1 py-0.5 text-left text-[12px] leading-snug hover:bg-[var(--line)]"
+            onClick={(e) => { e.stopPropagation(); onLocate(row.from, row.to); }}
+            title="Jump to this item in the document"
+            className={`flex w-full gap-1.5 rounded text-left leading-snug hover:bg-[var(--line)] ${large ? "px-2 py-1.5 text-[13px]" : "px-1 py-0.5 text-[12px]"}`}
           >
             <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
-            <span className="min-w-0">
-              {m.anchorText ? (
+            <span className="min-w-0 [overflow-wrap:anywhere]">
+              {row.edit ? (
                 <>
-                  <span className="text-[var(--crit-del)] line-through">{m.anchorText}</span>
-                  <span className="px-1 text-[var(--faint)]">→</span>
+                  {row.edit.anchorText ? (
+                    <>
+                      <span className="text-[var(--crit-del)] line-through">{row.edit.anchorText}</span>
+                      <span className="px-1 text-[var(--faint)]">→</span>
+                    </>
+                  ) : null}
+                  {row.edit.isDelete ? (
+                    <span className="italic text-[var(--crit-del)]">(delete)</span>
+                  ) : (
+                    <span className="text-[var(--crit-ins)]">{row.edit.replacement}</span>
+                  )}
+                </>
+              ) : row.note ? (
+                <>
+                  {row.note.anchorText ? (
+                    <span className="mr-1 rounded bg-[var(--crit-hl-bg)] px-1 text-[var(--crit-hl-ink)]">{row.note.anchorText}</span>
+                  ) : null}
+                  <span className="text-[var(--ink)]">{row.note.text}</span>
                 </>
               ) : null}
-              {m.isDelete ? (
-                <span className="italic text-[var(--crit-del)]">(delete)</span>
-              ) : (
-                <span className="text-[var(--crit-ins)]">{m.replacement}</span>
-              )}
             </span>
           </button>
         </li>
@@ -1026,78 +1209,151 @@ function GroupMembers({
   );
 }
 
-/** Apply-all / Reject-all for the whole group (one undoable edit). */
+/** Apply-all / Reject-all for the group's edits and Resolve-all for its notes,
+ *  each one undoable edit. */
 function GroupActions({
-  groupId,
-  size,
+  group,
+  large = false,
   onGroupEdit,
   onGroupApplyAndResolve,
+  onGroupResolveNotes,
 }: {
-  groupId: string;
-  size: number;
+  group: ReviewGroupInfo;
+  large?: boolean;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
   onGroupApplyAndResolve: (groupId: string) => void;
+  onGroupResolveNotes: (groupId: string) => void;
 }) {
+  const { id, edits, notes } = group;
+  // The panel's buttons match the card-sized reply buttons; the popover's stay compact.
+  const size = large ? "px-2.5 py-1 text-[12px]" : "px-1.5 py-0.5 text-[10px]";
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onGroupEdit(groupId, "accept"); }}
-        title={`Apply all ${size} edits in this group (one undo)`}
-        className="rounded-md bg-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--panel)]"
-      >
-        Apply all {size}
-      </button>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(groupId); }}
-        title={`Apply all ${size} edits and resolve their discussions (one undo)`}
-        className="rounded-md border border-[var(--crit-ins)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-ins)]"
-      >
-        Apply &amp; resolve all
-      </button>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onGroupEdit(groupId, "reject"); }}
-        title={`Reject all ${size} edits in this group (one undo)`}
-        className="rounded-md border border-[var(--line-strong)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--crit-del)]"
-      >
-        Reject all
-      </button>
+    <div className={`flex flex-wrap items-center gap-1.5 ${large ? "mt-3" : "mt-2"}`}>
+      {edits > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "accept"); }}
+            title={`Apply all ${edits} edits in this group (one undo)`}
+            className={`rounded-md bg-[var(--crit-ins)] ${size} font-medium text-[var(--panel)]`}
+          >
+            Apply all {edits}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(id); }}
+            title={`Apply all ${edits} edits and resolve their discussions (one undo)`}
+            className={`rounded-md border border-[var(--crit-ins)] ${size} font-medium text-[var(--crit-ins)]`}
+          >
+            Apply &amp; resolve all
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "reject"); }}
+            title={`Reject all ${edits} edits in this group (one undo)`}
+            className={`rounded-md border border-[var(--line-strong)] ${size} font-medium text-[var(--crit-del)]`}
+          >
+            Reject all
+          </button>
+        </>
+      ) : null}
+      {notes > 0 ? (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onGroupResolveNotes(id); }}
+          title={`Resolve all ${notes} notes in this group (one undo)`}
+          className={`rounded-md border border-[var(--line-strong)] ${size} font-medium text-[var(--ink)] hover:bg-[var(--line)]`}
+        >
+          Resolve all {notes} {notes === 1 ? "note" : "notes"}
+        </button>
+      ) : null}
     </div>
   );
 }
 
-function GroupSurface({
-  groupId,
-  size,
-  members,
-  isOpen,
-  onToggle,
-  onGroupEdit,
-  onGroupApplyAndResolve,
-  onLocate,
-}: {
-  groupId: string;
-  size: number;
+interface GroupSurfaceProps {
+  group: ReviewGroupInfo;
   members: SuggestionGroupMember[];
-  isOpen: boolean;
-  onToggle: () => void;
+  notes: GroupNoteMember[];
+  mode: GroupSurfaceMode | null;
+  onMode: (mode: GroupSurfaceMode | null) => void;
   onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
   onGroupApplyAndResolve: (groupId: string) => void;
+  onGroupResolveNotes: (groupId: string) => void;
   onLocate: (from: number, to: number) => void;
-}) {
+}
+
+/** The side panel for reviewing a whole group (#67/#74): wide, most of the window
+ *  tall, its list scrolling by wheel, trackpad and keyboard (it takes focus, so
+ *  ↑/↓/PageUp/PageDown/Space work at once). Escape closes it. The document stays
+ *  visible to its left, so a row's jump link shows the span in place. */
+export function GroupPanel(props: GroupSurfaceProps) {
+  const { group, members, notes, onMode, onLocate } = props;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    listRef.current?.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div
+      data-group-ui
+      role="dialog"
+      aria-label={`Group ${group.id}`}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onMode(null);
+        }
+      }}
+      className="fixed right-4 top-16 z-50 flex max-h-[calc(100vh-5rem)] w-[min(34rem,calc(100vw-2rem))] flex-col rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] p-3 text-[var(--ink)] shadow-[0_12px_40px_rgba(0,0,0,0.22)]"
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[13px] font-medium" style={{ color: groupColor(group.id) }}>
+          <span aria-hidden="true">⛓</span> {group.id} · {groupCountLabel(group)}
+        </span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onMode(null); }}
+          aria-label="Close"
+          title="Close (esc)"
+          className="rounded p-1 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+        </button>
+      </div>
+      <div
+        ref={listRef}
+        tabIndex={0}
+        aria-label="Group members"
+        className="min-h-0 shrink overflow-y-auto rounded-lg border border-[var(--line)] outline-none"
+      >
+        <GroupMembers members={members} notes={notes} large onLocate={onLocate} />
+      </div>
+      <GroupActions
+        group={group}
+        large
+        onGroupEdit={props.onGroupEdit}
+        onGroupApplyAndResolve={props.onGroupApplyAndResolve}
+        onGroupResolveNotes={props.onGroupResolveNotes}
+      />
+    </div>
+  );
+}
+
+function GroupSurface(props: GroupSurfaceProps) {
+  const { group, members, notes, mode, onMode, onLocate } = props;
   // Group tag, colour-matched to the card's spine so identity is unmistakable.
-  const color = groupColor(groupId);
+  const color = groupColor(group.id);
   const chip = (
     <span style={{ color }}>
-      <span aria-hidden="true">⛓</span> {groupId} · {size} edits
+      <span aria-hidden="true">⛓</span> {group.id} · {groupCountLabel(group)}
     </span>
   );
+  const large = group.edits + group.notes > GROUP_PANEL_THRESHOLD;
 
-  // The chip opens a floating list off the card. Opens UPWARD (the control sits at
+  // Small groups open a popover off the card. It opens UPWARD (the control sits at
   // the card's bottom) so it overlays the visible card body rather than spilling
-  // past the clipped column edge.
+  // past the clipped column edge. Large groups, or ⤢, open the side panel.
   return (
     <div
       data-group-ui
@@ -1105,39 +1361,57 @@ function GroupSurface({
     >
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        onClick={(e) => { e.stopPropagation(); onMode(mode ? null : large ? "panel" : "popover"); }}
         className="flex items-center gap-1 hover:text-[var(--ink)]"
-        aria-expanded={isOpen}
+        aria-expanded={mode !== null}
       >
         {chip} <span aria-hidden="true">▾</span>
       </button>
-      {isOpen ? (
+      {mode === "popover" ? (
         <div
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              onMode(null);
+            }
+          }}
           className="absolute bottom-full left-0 z-50 mb-1 w-72 rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] p-2.5 text-[var(--ink)] shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
         >
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-[11px] font-medium">{chip}</span>
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onToggle(); }}
-              aria-label="Close"
-              className="rounded p-0.5 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
-            >
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
-            </button>
+            <span className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onMode("panel"); }}
+                aria-label="Open in a larger panel"
+                title="Open in a larger panel"
+                className="rounded p-0.5 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+              >
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" /></svg>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onMode(null); }}
+                aria-label="Close"
+                className="rounded p-0.5 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+              >
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+              </button>
+            </span>
           </div>
-          <div className="max-h-60 overflow-y-auto pr-0.5">
-            <GroupMembers members={members} onLocate={onLocate} />
+          <div tabIndex={0} aria-label="Group members" className="max-h-60 overflow-y-auto pr-0.5 outline-none">
+            <GroupMembers members={members} notes={notes} onLocate={onLocate} />
           </div>
           <GroupActions
-            groupId={groupId}
-            size={size}
-            onGroupEdit={onGroupEdit}
-            onGroupApplyAndResolve={onGroupApplyAndResolve}
+            group={group}
+            onGroupEdit={props.onGroupEdit}
+            onGroupApplyAndResolve={props.onGroupApplyAndResolve}
+            onGroupResolveNotes={props.onGroupResolveNotes}
           />
         </div>
       ) : null}
+      {mode === "panel" ? createPortal(<GroupPanel {...props} />, document.body) : null}
     </div>
   );
 }

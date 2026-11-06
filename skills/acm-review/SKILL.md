@@ -76,7 +76,8 @@ paragraphs, lists and tables are proposals until the human accepts them.
   multi-line `{++ ++}` rendered as raw markup in the editor (2026-11-04).
 - Every comment that makes a point about the text carries its fix: the point in one comment, then a
   `SUGGEST:` card beside it, so the human can apply it rather than retype it (2026-11-04: "you could
-  have a comment making your point then your suggestion"). Only suggestions group; comments do not.
+  have a comment making your point then your suggestion"). Group the edits with `SUGGEST[g:id]`;
+  plain notes join a group only as `NOTE[g:id]` (see "Notes can join a group too" below).
 - Keep one space after a list marker. `1.     text` (four or more spaces) is Markdown for a code
   block, and the editor then shows the rest of the list as code (2026-11-04).
 - Changes to existing anchored prose use `SUGGEST:`; use a group when several edits form
@@ -192,6 +193,11 @@ not a lock.
 If you find yourself listing several related edits as text for the human to paste,
 that's the signal to group them into one Apply-all set instead.
 
+**Notes can join a group too.** Many notes of one kind (sources, fact checks) read better
+as one group the human resolves in one go: tag each with `NOTE[g:<id>]: …`, authored with
+`acm comment "<span>" "<text>" --group <id>`. The group card lists the notes beside any
+grouped edits and offers **Resolve all**. Leave a note ungrouped when it needs an answer.
+
 ## Find comments precisely (reuse ACM's own parser)
 
 Don't hand-roll regex. ACM ships a parser you can import:
@@ -300,6 +306,11 @@ Skip any section the human is still actively rewriting.
   thread rides a raw `{++/--/~~}` suggestion (accept/reject, no seen state), and seen keys
   are global **by content** (author+body), not per-doc — an identical comment in another
   doc shares its seen state, so don't over-trust `[seen]` across docs.
+- **Answer edit requests first.** `[edit requested]` in `acm threads` (`editRequested: true`
+  in `--json`) means the human clicked **Ask agent**: they want a SUGGEST on that thread's
+  span. Answer in the thread: `acm reply "<a phrase from its comment>" "SUGGEST: <new wording>"`
+  (a SUGGEST reply inherits the thread's anchor; `acm suggest` refuses a span that is already
+  highlighted). A SUGGEST after the request clears the flag.
 - **Fresh eyes for the final pass.** Before the doc ships, spawn a read-only copy-editor
   subagent with an explicit voice-preservation brief (list the author's deliberate
   choices: dialect/variant, intentional fragments, their own em-dashes) returning
@@ -332,8 +343,9 @@ with no editor up they write the file directly. Either way the editor reflects t
 result within ~1s — and they refuse rather than clobber on conflict.
 
 ```
-acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen]
+acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen], [edit requested]
 acm comment "<span>" "<text>"     # NEW comment anchored on the unique prose <span>: {==span==}{>>@you: text<<}
+acm comment … --group <id>        # tag the note as part of group <id> (NOTE[g:id]: …; Resolve all in the GUI)
 acm reply "<phrase>" "<text>"     # reply to the thread whose comment matches <phrase> (= acm comment --reply/-r)
 acm suggest "<span>" "<new>"      # anchor a SUGGEST: on the unique <span> (may contain complete {++/--/~~} edits — pass the raw text verbatim)
 acm suggest … --group <id>        # tag the suggestion as part of group <id> (a SET applied as one unit)

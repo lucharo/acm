@@ -20,3 +20,9 @@ export function handleCommentKey(
   event.preventDefault();
   (event.shiftKey && mod ? onSubmitDone : onSubmit)();
 }
+
+/** Closing a reply box throws its draft away. An empty draft closes at once; a
+ *  draft with text asks first, so a stray Escape or Cancel never eats a reply. */
+export function mayDiscardDraft(draft: string, ask: (message: string) => boolean): boolean {
+  return draft.trim() === "" || ask("Discard this reply?");
+}
