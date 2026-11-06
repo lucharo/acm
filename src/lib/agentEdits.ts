@@ -21,7 +21,7 @@ import {
   wrappableSpan,
   suggestionGroupEdits,
   applyRangedEdits,
-  replacementLeaks,
+  unsafeSuggestion,
 } from "./criticmarkup";
 import type { CommentToken, CommentThread } from "./criticmarkup";
 import { threadEditRequested } from "./commentGroups";
@@ -201,7 +201,7 @@ export function resolveSuggestion(content: string, phrase: string, mode: "accept
   const edit = suggestionThreadEdit(content, c, mode);
   if (!edit) {
     const repl = suggestionReplacement(c.body);
-    if (mode === "accept" && repl !== null && replacementLeaks(repl)) {
+    if (mode === "accept" && repl !== null && unsafeSuggestion(content, c)) {
       throw new AmbiguityError(
         `"${phrase.slice(0, 48)}": its replacement contains CriticMarkup delimiters, so accepting it would break the markup`,
       );

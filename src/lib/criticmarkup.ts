@@ -547,10 +547,15 @@ function neutralizeCloseMarker(text: string): string {
 /** Position OF the matching `==}` for the `{==` at `openPos` (not past it),
  *  scanning nesting-aware and treating complete constructs as opaque (a `==}`
  *  inside a comment body can't match). -1 when the highlight never closes. */
-function findHighlightClose(text: string, openPos: number): number {
+function findHighlightClose(text: string, openPos: number, literals?: SourceRange[]): number {
   let depth = 1;
   let i = openPos + 3;
   while (i < text.length) {
+    const lit = literals?.find((r) => r.from <= i && i < r.to);
+    if (lit) {
+      i = lit.to; // a delimiter inside code is text
+      continue;
+    }
     if (text.startsWith("==}", i)) {
       depth -= 1;
       if (depth === 0) return i;
@@ -1058,7 +1063,7 @@ function delimiterDiagnostics(text: string): MarkupDiagnostic[] {
   // Markdown literals (code, URLs…) are skipped whole: a `{==` inside backticks
   // must neither leak nor pair with a `==}` in the prose after it.
   // An escape (`\{`) is left in: the editor renders `\{==x==}` as text either way.
-  const literals = markdownLiteralRanges(text).filter((r) => !(r.to - r.from === 2 && text[r.from] === "\\"));
+  const literals = criticAwareLiteralRanges(text).filter((r) => !(r.to - r.from === 2 && text[r.from] === "\\"));
   let lit = 0;
   let i = 0;
   while (i < text.length) {
@@ -1185,6 +1190,38 @@ export function replacementLeaks(replacement: string): boolean {
   return delimiterDiagnostics(replacement).length > 0;
 }
 
+/** Whether accepting SUGGEST `comment` would leave raw delimiters, judged in
+ *  the document where its replacement would land. */
+export function unsafeSuggestion(
+  content: string,
+  comment: CommentToken,
+  tokens?: CritToken[],
+  threads?: CommentThread[],
+): boolean {
+  const repl = suggestionReplacement(comment.body);
+  if (repl === null) return false;
+  if (replacementLeaks(repl)) return true; // leaks on its own, whatever surrounds it
+  const toks = tokens ?? scanTokens(content);
+  const hl = threadAnchorHighlightFor(content, comment, toks, threads);
+  if (!hl) return false;
+  const ths = threads ?? groupThreads(toks.filter((t): t is CommentToken => t.type === "comment"), content);
+  const thread = ths.find((th) => th.comments.some((c) => c.from === comment.from));
+  // Judge the whole paragraph after the splice against the paragraph before it,
+  // so neither the text before the anchor (`    ==}` read as an indented code
+  // block) nor an enclosing anchor balancing a stray `==}` can hide a leak.
+  const start = suggestionAnchorStart(content, hl);
+  const end = Math.max(thread?.to ?? hl.to, hl.to);
+  const paraStart = (() => {
+    const before = content.slice(0, start);
+    const m = [...before.matchAll(/\r?\n[ \t]*\r?\n/g)].at(-1);
+    return m ? m.index + m[0].length : 0;
+  })();
+  const paraEnd = paragraphEnd(content, end);
+  const before = content.slice(paraStart, paraEnd);
+  const after = content.slice(paraStart, start) + repl + content.slice(end, paraEnd);
+  return delimiterDiagnostics(after).length > delimiterDiagnostics(before).length;
+}
+
 // A `SUGGEST:` marker anywhere in a body (the structured form must START with it).
 const SUGGEST_MARKER = /\bSUGGEST(?:\[g:[^\]\s]+\])?:/;
 
@@ -1216,7 +1253,7 @@ function reviewIntegrityDiagnostics(text: string): MarkupDiagnostic[] {
     if (suggestionReplacement(t.body) !== null) {
       if (!applicable.has(t.id)) {
         out.push(
-          replacementLeaks(suggestionReplacement(t.body)!)
+          unsafeSuggestion(text, t, tokens)
             ? {
                 from: t.from,
                 to: t.from + 3,
@@ -1424,8 +1461,8 @@ export function pointCommentInsert(
   // Markup-shaped text inside a code span is an example, not a construct.
   const tokens = scanTokens(content).filter((t) => !positionInRanges(t.from, literals));
   for (let guard = 0; guard < 64; guard++) {
-    const hl = tokens.find((t) => t.type === "highlight" && t.from < pos && pos < t.to);
-    if (hl) return { from: anchorThreadEnd(content, hl, tokens), insert: marker };
+    const anchorEnd = enclosingAnchorEnd(content, pos, literals);
+    if (anchorEnd !== null) return { from: anchorThreadEnd(content, anchorEnd, tokens), insert: marker };
     // A code or HTML block, edges included: anything on its first or closing line
     // would break the fence or the indent, so the comment becomes its own
     // paragraph after the block.
@@ -1451,23 +1488,59 @@ export function pointCommentInsert(
  *  comment yet. The root attaches by the anchor rule (ANCHOR_GAP); each reply
  *  after it by the thread rule (THREAD_GAP), the same one groupThreads uses, so a
  *  whitespace-separated comment that is its own card is not crossed. */
-function anchorThreadEnd(content: string, hl: CritToken, tokens: CritToken[]): number {
-  const comments = tokens.filter((t) => t.type === "comment" && t.from >= hl.to);
-  let end = hl.to;
+function anchorThreadEnd(content: string, closeEnd: number, tokens: CritToken[]): number {
+  const comments = tokens.filter((t) => t.type === "comment" && t.from >= closeEnd);
+  let end = closeEnd;
   for (const c of comments) {
     const gap = content.slice(end, c.from);
-    if (!(end === hl.to ? ANCHOR_GAP : THREAD_GAP).test(gap)) break;
+    if (!(end === closeEnd ? ANCHOR_GAP : THREAD_GAP).test(gap)) break;
     end = c.to;
   }
   return end;
 }
 
+/** End (just past `==}`) of the innermost anchor whose span holds `pos`, or null.
+ *  Found from balanced `{==`/`==}` pairs, so an outer anchor that wraps a whole
+ *  nested thread (and so never tokenises) still counts (#113). */
+function enclosingAnchorEnd(content: string, pos: number, literals: SourceRange[]): number | null {
+  let best: { open: number; end: number } | null = null;
+  for (let o = content.indexOf("{=="); o >= 0 && o < pos; o = content.indexOf("{==", o + 3)) {
+    if (positionInRanges(o, literals)) continue;
+    const close = findHighlightClose(content, o, literals);
+    // A highlight is single-block: a pair across a blank line is no anchor.
+    if (close < 0 || close >= paragraphEnd(content, o) || pos >= close + 3) continue; // inside `==}` counts as inside
+    if (!best || o > best.open) best = { open: o, end: close + 3 };
+  }
+  return best ? best.end : null;
+}
+
 // One-entry cache: the composer, `acm suggest` and the spell pass call the span
 // gate repeatedly on the same document; parse its Markdown literals once.
 let literalCache: { content: string; ranges: SourceRange[] } | null = null;
+/** Markdown literal ranges with every comment blanked out first (same offsets,
+ *  newlines kept), so a backtick inside one comment can't pair with a backtick
+ *  in another and turn the markup between them into a code span (#116). */
+function criticAwareLiteralRanges(text: string, options: { wholeLinks?: boolean } = {}): SourceRange[] {
+  let masked = "";
+  let cursor = 0;
+  // A comment-shaped run that starts inside real code (`{>>` quoted in one code
+  // span, `<<}` in another) is an example, not a comment: it stays unmasked.
+  const raw = markdownLiteralRanges(text);
+  for (const t of scanTokens(text)) {
+    if (t.type !== "comment" || t.from < cursor || positionInRanges(t.from, raw)) continue;
+    // Keep the `{>>` and `<<}` delimiters and blank only the body: no leading
+    // indent (an indented code block), a bare URL still ends at `{>>`, and no
+    // `<` can open an HTML tag with the prose after it.
+    masked +=
+      text.slice(cursor, t.from) + t.raw.slice(0, 3) + t.raw.slice(3, -3).replace(/[^\n]/g, " ") + t.raw.slice(-3);
+    cursor = t.to;
+  }
+  return markdownLiteralRanges(masked + text.slice(cursor), options);
+}
+
 function cachedLiteralRanges(content: string): SourceRange[] {
   if (literalCache?.content !== content) {
-    literalCache = { content, ranges: markdownLiteralRanges(content, { wholeLinks: true }) };
+    literalCache = { content, ranges: criticAwareLiteralRanges(content, { wholeLinks: true }) };
   }
   return literalCache.ranges;
 }
@@ -2034,7 +2107,7 @@ export function suggestionThreadEdit(
   discussion: SuggestionDiscussion = "keep-discussion",
 ): { from: number; to: number; insert: string } | null {
   const repl = suggestionReplacement(comment.body);
-  if (repl === null || (mode === "accept" && replacementLeaks(repl))) return null;
+  if (repl === null || (mode === "accept" && unsafeSuggestion(content, comment))) return null;
   const tokens = scanTokens(content);
   const threads = groupThreads(
     tokens.filter((t): t is CommentToken => t.type === "comment"),
@@ -2131,7 +2204,7 @@ export function suggestCards(
     const repl = suggestionReplacement(t.body);
     // An unsafe replacement can be rejected but never applied, so it is left out
     // unless the caller is rejecting (the group planner).
-    if (repl === null || (!options.includeUnsafe && replacementLeaks(repl))) continue;
+    if (repl === null || (!options.includeUnsafe && unsafeSuggestion(content, t, toks, threads))) continue;
     // Resolve the span even for a reply deeper in the thread (inherits the root's).
     // Pass the prebuilt threads so the reply path stays O(comments), not O(comments²).
     const hl = threadAnchorHighlightFor(content, t, toks, threads);

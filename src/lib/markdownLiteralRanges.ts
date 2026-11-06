@@ -47,6 +47,12 @@ export function markdownLiteralRanges(
         }
         return; // descend: the link text may hold code spans of its own
       }
+      // A reference definition (`[ref]: url`) is a block for annotation: any
+      // text after its URL stops it parsing, so nothing may be placed inside (#114).
+      if (options.wholeLinks && node.name === "LinkReference") {
+        ranges.push({ from: node.from, to: node.to, block: true });
+        return false;
+      }
       if (!LITERAL_NODES.has(node.name)) return;
       let to = node.to;
       const host = node.node.parent?.name;
