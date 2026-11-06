@@ -980,7 +980,7 @@ describe("resolveAnchorEdit — resolving strips the whole anchor, keeps the spa
 });
 
 describe("nested-comment heal + insert clamp (the comment-in-comment bug)", () => {
-  test("clampAnchorOutsideComments pushes an inside-a-comment anchor to after it", () => {
+  test("insertComment pushes an inside-a-comment anchor to after it", () => {
     const text = "word {>>@a: existing<<} tail";
     const inside = text.indexOf("existing");
     const out = insertComment(text, inside, "new", "b");
@@ -1068,7 +1068,10 @@ describe("structured suggestions (SUGGEST: …)", () => {
   test("suggestionReplacement parses the body, ignores plain comments", () => {
     expect(suggestionReplacement("SUGGEST: the new wording")).toBe("the new wording");
     expect(suggestionReplacement("SUGGEST:no space")).toBe("no space");
-    expect(suggestionReplacement("SUGGEST:   extra spaces")).toBe("extra spaces"); // all leading ws eaten, none leaks
+    // Only the envelope's ONE separator space is stripped (ADR 0003); whitespace the
+    // replacement was written with is part of the proposal (#75).
+    expect(suggestionReplacement("SUGGEST:  400+ data")).toBe(" 400+ data");
+    expect(suggestionReplacement("SUGGEST[g:7a]:  lead")).toBe(" lead");
     expect(suggestionReplacement("SUGGEST: ")).toBe(""); // suggest deleting the span
     expect(suggestionReplacement("just a normal comment")).toBeNull();
     expect(suggestionReplacement("please suggest an edit")).toBeNull(); // not a directive
@@ -1095,6 +1098,14 @@ describe("structured suggestions (SUGGEST: …)", () => {
     expect(applySuggestionEdit("{==span==}{>>@a: just a note<<}", plain)).toBeNull();
     const pt = scanTokens("text {>>@a: SUGGEST: x<<}").find((t) => t.type === "comment") as CommentToken;
     expect(applySuggestionEdit("text {>>@a: SUGGEST: x<<}", pt)).toBeNull(); // no highlight anchor
+  });
+  test("applySuggestionEdit keeps the replacement's leading space (#75: no 'used by400+')", () => {
+    const text = "used by{== adopted by 400+ teams (onboarding==}{>>@claude: SUGGEST:  400+ data scientists (onboarding<<} today";
+    const sug = scanTokens(text).find((t) => t.type === "comment") as CommentToken;
+    const edit = applySuggestionEdit(text, sug)!;
+    expect(text.slice(0, edit.from) + edit.insert + text.slice(edit.to)).toBe(
+      "used by 400+ data scientists (onboarding today",
+    );
   });
   test("applySuggestionEdit tolerates THREAD_GAP between highlight and comment (a stray space)", () => {
     // The emitter writes them zero-gap, but a stray space must NOT silently dead-click:

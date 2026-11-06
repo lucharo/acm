@@ -52,7 +52,12 @@ after `SUGGEST:`:
 
 ACM shows this as a real "Suggested edit" card with the proposed wording and an
 **Apply** button that swaps the highlighted span for your wording — no nesting, no
-corruption. To suggest **deleting** a span, leave it empty: `SUGGEST:`. (For
+corruption. To suggest **deleting** a span, leave it empty: `SUGGEST:`. To delete a whole
+list item, put its marker in the anchor (`{==- the item==}`), or an empty `- ` bullet is
+left behind. Apply swaps the span for your wording byte for byte, spaces included: start
+and end the span and the replacement on the same kind of boundary (`acm suggest` warns
+when they start or end with whitespace). Anchor a code span whole, backticks included
+(`` {==`bunx x`==} ``); markup inside backticks renders as literal text. (For
 references/footnotes, which live in free prose, just write the markdown link inline.)
 
 Decision: **free prose → inline `{~~~>~~}`. Commented/anchored text → `SUGGEST:`.**
@@ -93,18 +98,19 @@ paraphrase into a confident technical term.
 **Three rules learned the hard way:**
 
 1. **One comment = one suggestion.** A `SUGGEST:` comment's body is ONLY the
-   replacement text — never prefix it with prose (`Moving this… SUGGEST: …`). Mixed
-   comments render as a broken/blank card. If you must explain, use a SEPARATE
+   replacement text — never prefix it with prose (`Moving this… SUGGEST: …`). A mixed
+   comment shows as a plain note with no Apply, and ACM flags it as a markup issue. If you must explain, use a SEPARATE
    comment, and know that an adjacent one becomes a reply in the card's thread, which
    applying the card deletes with it. A note that must outlive the card (a review point,
    not an explanation of the edit) goes on its own anchor with prose between it and the
    card's `<<}`, even a single `.` (2026-10-19: an "end on one ask" note threaded under a
    grouped card vanished when Luis applied the group).
 2. **Anchor directly so it's visible.** Prefer `acm suggest "<span>" "<new>"` — it
-   anchors the SUGGEST right on the span, which is what surfaces it in the editor's
-   **Suggestions** tab. A SUGGEST *appended at the end of a long thread* still applies
-   and renders inline, but the Suggestions tab currently hides it — so don't bury a
-   suggestion mid-thread when a direct anchor will do.
+   anchors the SUGGEST right on the span. A SUGGEST *appended at the end of a long
+   thread* still applies to the span the thread is about, but a direct anchor reads
+   better than one buried mid-thread. A SUGGEST with no span to apply to (no
+   `{==span==}` before its thread, or a comment inside the span) is flagged; `acm heal`
+   lifts a comment out of an anchor so the SUGGEST applies again.
 3. **Be non-destructive.** A "tighten this" suggestion must not nuke a point the human
    values. De-duplicate by KEEPING the unique idea, not deleting it; if a span says two
    things and one repeats, suggest a version that preserves the fresh half. When unsure,

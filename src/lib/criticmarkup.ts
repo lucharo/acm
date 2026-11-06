@@ -12,6 +12,7 @@
 import type { CritToken, CommentToken, CommentThread, SidebarCard } from "./types";
 import type { SuggestionToken } from "./types";
 import { markdownLiteralRanges, positionInRanges } from "./markdownLiteralRanges";
+import type { SourceRange } from "./markdownLiteralRanges";
 
 // Re-export the public token types so agents/scripts can get everything from this
 // one module (the documented entry point in skills/acm-review/SKILL.md), not types.
@@ -529,25 +530,6 @@ function neutralizeCloseMarker(text: string): string {
   return text.replaceAll("<<}", "<<​}");
 }
 
-/**
- * Insert a formatted comment into `content` at character offset `anchorOffset`,
- * returning the new full content. Used by the server's POST /api/comment.
- * Inserts a single leading space if the preceding char is non-space, so the
- * marker doesn't fuse onto the anchored word.
- */
-/**
- * Clamp an insert offset so it never lands INSIDE an existing comment's body —
- * which would create malformed nested `{>>…{>>…<<}…<<}` that can't parse and
- * renders raw (the comment-in-comment bug). If `at` is strictly inside a comment,
- * push it to just after that comment. Shared by the UI and server insert paths.
- */
-export function clampAnchorOutsideComments(content: string, at: number): number {
-  const enclosing = scanTokens(content).find(
-    (t) => t.type === "comment" && at > t.from && at < t.to,
-  );
-  return enclosing ? enclosing.to : at;
-}
-
 // ── Structural heals: repair converter-era leaks IN PLACE ──────────────────────
 // Two mechanical repairs for markup that renders raw (both produced by the old
 // docx converter; the fixed converter no longer emits them, but existing docs
@@ -685,6 +667,218 @@ function healOneCommentInWrapper(content: string): string | null {
   return null;
 }
 
+/** An anchor `{==…==}` whose span contains complete comments — an editor reply
+ *  typed inside the anchor (#72) or an anchor wrapped around another thread (#65).
+ *  Its own thread can't resolve the span, so a SUGGEST on it is dead. */
+interface CommentInAnchor {
+  open: number; // the outer `{==`
+  close: number; // position OF its matching `==}`
+  threadEnd: number; // end of the comment run that follows the close
+  prose: string; // the span's words, comments and inner anchor delimiters removed
+  lifted: string[]; // the comments found inside the span, in order (raw)
+  trailing: string; // the separator dropped before a comment that ended the span
+  // False when a lifted comment is itself a SUGGEST: moving it onto the outer
+  // thread would retarget it to the whole span, so a human must move it.
+  healable: boolean;
+}
+
+/** The comments directly inside `inner` (nested ones stay inside their host),
+ *  skipping comment-shaped examples inside Markdown literals. `offset` maps
+ *  `inner` back to document positions. */
+function topLevelComments(inner: string, offset: number, literals: SourceRange[]): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  for (let i = inner.indexOf("{>>"); i >= 0; i = inner.indexOf("{>>", i)) {
+    if (positionInRanges(offset + i, literals)) {
+      i += 3;
+      continue;
+    }
+    const s = scanComment(inner, i);
+    if (!s) {
+      i += 3;
+      continue;
+    }
+    out.push({ from: i, to: s.end });
+    i = s.end;
+  }
+  return out;
+}
+
+/** The comment-in-anchor defect opened at `open`, or null. The legitimate stacked
+ *  thread (`{=={==span==}{>>c0<<}==}{>>c1<<}`: inner anchors + comments, no prose
+ *  after them) is NOT a defect. */
+function commentInAnchorAt(content: string, open: number): CommentInAnchor | null {
+  if (!content.startsWith("{==", open) || matchHighlightAt(content, open)) return null;
+  const close = findHighlightClose(content, open);
+  if (close < 0 || close >= paragraphEnd(content, open)) return null;
+  const literals = cachedLiteralRanges(content);
+  const base = open + 3;
+  const inner = content.slice(base, close);
+  const comments = topLevelComments(inner, base, literals);
+  if (comments.length === 0) return null;
+
+  let stripped = "";
+  let cursor = 0;
+  for (const c of comments) {
+    stripped += inner.slice(cursor, c.from);
+    cursor = c.to;
+  }
+  stripped += inner.slice(cursor);
+  const stacked = /^((?:\{==)+)([\s\S]*?)((?:==\})+)$/.exec(stripped.trim());
+  if (
+    stacked &&
+    stacked[1].length === stacked[3].length &&
+    !/\{==|==\}/.test(stacked[2])
+  ) {
+    return null;
+  }
+  // A residue holding other markup (an interleave) is beyond a mechanical heal.
+  if (/\{>>|<<\}/.test(stripped.replace(/`[^`]*`/g, ""))) return null;
+
+  // A comment inside the span that is anchored on its own inner highlight
+  // (`{==a long span with {==word==}{>>?<<} in it==}{>>…<<}`), or a reply
+  // threaded under one, is a nested anchor, which displays fine — it only breaks
+  // when the outer thread carries a SUGGEST that needs the span (#65). A bare
+  // comment inside the span (a reply typed into the anchor, #72) always breaks
+  // the thread's anchor.
+  const bare = comments.some((c, k) => {
+    const lead = inner.slice(k === 0 ? 0 : comments[k - 1].to, c.from);
+    if (k > 0 && THREAD_GAP.test(lead)) return false; // a reply: inherits its root
+    return !/==\}\s*$/.test(lead);
+  });
+
+  // Rebuild the words, byte for byte outside the comments and the inner anchor
+  // delimiters (literals untouched). The one space a point comment was inserted
+  // with (`@david {>>…<<}==}`) is dropped; when the comment ended the span, that
+  // space is kept as `trailing` so the heal can put it back outside if needed.
+  let prose = "";
+  let trailing = "";
+  cursor = 0;
+  const pieces: { from: number; to: number }[] = [];
+  for (const c of comments) {
+    let end = c.from;
+    const atEnd = /^(?:==\})*$/.test(inner.slice(c.to).replace(/\{>>[\s\S]*?<<\}/g, ""));
+    const next = inner[c.to] ?? "";
+    if (end > cursor && /\s/.test(inner[end - 1]) && (atEnd || /\s/.test(next))) {
+      if (atEnd) trailing = inner[end - 1];
+      end -= 1;
+    }
+    pieces.push({ from: cursor, to: end });
+    cursor = c.to;
+  }
+  pieces.push({ from: cursor, to: inner.length });
+  for (const piece of pieces) {
+    for (let i = piece.from; i < piece.to; ) {
+      // A complete tracked change is opaque: its body is content, delimiters and all.
+      if (inner[i] === "{" && !inner.startsWith("{==", i)) {
+        const m = matchConstructAt(inner, i);
+        if (m && m.to <= piece.to) {
+          prose += inner.slice(i, m.to);
+          i = m.to;
+          continue;
+        }
+      }
+      if (
+        (inner.startsWith("{==", i) || inner.startsWith("==}", i)) &&
+        i + 3 <= piece.to &&
+        !positionInRanges(base + i, literals)
+      ) {
+        i += 3;
+        continue;
+      }
+      prose += inner[i];
+      i += 1;
+    }
+  }
+
+  // The anchor's own thread: the root by the anchor rule, replies by the thread
+  // rule (as groupThreads), so a separate card after it is never crossed.
+  let threadEnd = close + 3;
+  const thread: string[] = [];
+  for (;;) {
+    const gap = /^[ \t]*/.exec(content.slice(threadEnd))![0];
+    const at = threadEnd + gap.length;
+    if (!content.startsWith("{>>", at)) break;
+    if (!(thread.length === 0 ? ANCHOR_GAP : THREAD_GAP).test(gap)) break;
+    const s = scanComment(content, at);
+    if (!s || s.nested) break;
+    thread.push(s.outerBody);
+    threadEnd = s.end;
+  }
+  const outerSuggests = thread.some(
+    (body) => suggestionReplacement(parseCommentInner(body).body) !== null,
+  );
+  if (!bare && !outerSuggests) return null;
+  const lifted = comments.map((c) => inner.slice(c.from, c.to));
+  const healable = !lifted.some((raw) => {
+    const s = scanComment(raw, 0);
+    return s !== null && suggestionReplacement(parseCommentInner(s.outerBody).body) !== null;
+  });
+  return { open, close, threadEnd, prose, trailing, lifted, healable };
+}
+
+/** Every comment-in-anchor defect, outermost first, in document order. */
+function commentInAnchorRuns(content: string): CommentInAnchor[] {
+  const out: CommentInAnchor[] = [];
+  const literals = cachedLiteralRanges(content);
+  for (let i = content.indexOf("{=="); i >= 0; i = content.indexOf("{==", i + 3)) {
+    if (positionInRanges(i, literals)) continue; // an example in code, not an anchor
+    const a = commentInAnchorAt(content, i);
+    if (!a) continue;
+    out.push(a);
+    i = a.close; // inner opens belong to this defect
+  }
+  return out;
+}
+
+/** ONE comment-in-anchor repair: the span keeps its words, the anchor's own thread
+ *  stays on it, and the comments found inside the span move to the END of that
+ *  thread — so every word and comment survives and a SUGGEST on it applies again. */
+function healOneCommentInAnchor(content: string): string | null {
+  const a = commentInAnchorRuns(content).find((run) => run.healable);
+  if (!a) return null;
+  const anchor = a.prose.trim() ? `{==${a.prose}==}` : a.prose;
+  const after = content.slice(a.threadEnd);
+  // The dropped separator may have belonged to the span (`{==word {>>…<<}==}tail`):
+  // put it back after the thread unless whitespace already follows there.
+  // Only the same horizontal whitespace already following makes it redundant; a
+  // newline does not (two trailing spaces are a Markdown hard break).
+  const space = a.trailing && after !== "" && !/^[ \t]/.test(after) ? a.trailing : "";
+  return (
+    content.slice(0, a.open) +
+    anchor +
+    content.slice(a.close + 3, a.threadEnd) +
+    a.lifted.join("") +
+    space +
+    after
+  );
+}
+
+/** ONE comment that lost its body with its colon leaked into the prose —
+ *  `{>>@claude<<}:  The rock` (a mangled empty `SUGGEST:`, #47). Nothing of the
+ *  author's prose is in it, so it goes, with the stray colon and one space. */
+function healOneMangledComment(content: string): string | null {
+  const literals = cachedLiteralRanges(content);
+  for (const m of content.matchAll(/\{>>@[^\s:{}<>]+<<\}: ?/g)) {
+    if (positionInRanges(m.index, literals)) continue; // an example in code
+    return content.slice(0, m.index) + content.slice(m.index + m[0].length);
+  }
+  return null;
+}
+
+/** ONE unterminated comment that carries no words — only an author and/or an
+ *  empty `SUGGEST:` before the end of its line (#47). It is removed to the end of
+ *  the line; an unterminated comment with real words stays for a human. */
+function healOneEmptyDanglingComment(content: string): string | null {
+  const re = /\{>>[ \t]*(?:@[^\s:{}<>]+:)?[ \t]*(?:SUGGEST(?:\[g:[^\]\s]+\])?:)?[ \t]*(?=\r?\n|$)/g;
+  const literals = cachedLiteralRanges(content);
+  for (let m = re.exec(content); m; m = re.exec(content)) {
+    if (positionInRanges(m.index, literals)) continue; // an example in code
+    if (scanComment(content, m.index)) continue; // it closes later — not dangling
+    return content.slice(0, m.index) + content.slice(m.index + m[0].length);
+  }
+  return null;
+}
+
 /**
  * Every mechanical repair, applied to a fixpoint: nested comments flattened,
  * trapped comments moved out of tracked changes, multi-block anchors re-anchored
@@ -697,7 +891,10 @@ export function healDocument(content: string): string {
     const next =
       healOneMultilineComment(out) ??
       healOneCommentInWrapper(out) ??
-      healOneMultiBlockAnchor(out);
+      healOneMultiBlockAnchor(out) ??
+      healOneCommentInAnchor(out) ??
+      healOneMangledComment(out) ??
+      healOneEmptyDanglingComment(out);
     if (next === null) break;
     out = next;
   }
@@ -793,9 +990,28 @@ export function hardWrap(text: string, width = 88): string {
 export interface MarkupDiagnostic {
   from: number;
   to: number; // end of the offending delimiter
-  kind: "dangling-open" | "stray-close" | "nested-comment" | "unparsed";
+  kind: MarkupDiagnosticKind;
   message: string;
 }
+
+/** Delimiter defects render raw and block export; review-integrity defects are
+ *  balanced markup whose meaning is broken (a SUGGEST with nothing to apply to). */
+export type MarkupDiagnosticKind =
+  | "dangling-open"
+  | "stray-close"
+  | "nested-comment"
+  | "unparsed"
+  | "comment-in-anchor"
+  | "orphan-suggestion"
+  | "mixed-suggestion"
+  | "mangled-comment";
+
+const LEAKING_KINDS = new Set<MarkupDiagnosticKind>([
+  "dangling-open",
+  "stray-close",
+  "nested-comment",
+  "unparsed",
+]);
 
 export type AcceptedMarkdownResult =
   | { ok: true; markdown: string }
@@ -925,7 +1141,65 @@ export function validateMarkup(text: string): MarkupDiagnostic[] {
   }
 
   flushHlStack(); // anything still open at EOF leaks
+  out.push(...reviewIntegrityDiagnostics(text));
   out.sort((a, b) => a.from - b.from);
+  return out;
+}
+
+// A `SUGGEST:` marker anywhere in a body (the structured form must START with it).
+const SUGGEST_MARKER = /\bSUGGEST(?:\[g:[^\]\s]+\])?:/;
+
+/**
+ * Balanced markup whose review meaning is broken (#65, #28, #72, #47): an anchor
+ * whose span contains a comment (its thread can't anchor), a SUGGEST card with no
+ * resolvable span (Apply is disabled), a comment mixing prose with `SUGGEST:`
+ * (shows as a plain note), and a comment that lost its body (`{>>@claude<<}:`).
+ * Reported beside the delimiter defects so the pill, `acm heal` and agents see
+ * them; they never block export (nothing renders raw).
+ */
+function reviewIntegrityDiagnostics(text: string): MarkupDiagnostic[] {
+  const out: MarkupDiagnostic[] = [];
+  for (const a of commentInAnchorRuns(text)) {
+    out.push({
+      from: a.open,
+      to: a.open + 3,
+      kind: "comment-in-anchor",
+      message: a.healable
+        ? "a comment sits inside this highlight's span — its thread can't anchor; auto-fixable"
+        : "a comment sits inside this highlight's span — its thread can't anchor; move it out by hand",
+    });
+  }
+  const literals = cachedLiteralRanges(text);
+  const tokens = scanTokens(text);
+  const applicable = applicableSuggestionIds(text, tokens);
+  for (const t of tokens) {
+    if (t.type !== "comment" || positionInRanges(t.from, literals)) continue;
+    if (suggestionReplacement(t.body) !== null) {
+      if (!applicable.has(t.id)) {
+        out.push({
+          from: t.from,
+          to: t.from + 3,
+          kind: "orphan-suggestion",
+          message: "SUGGEST card has no anchored span, so it can't be applied — put {==the span==} right before it",
+        });
+      }
+    } else if (SUGGEST_MARKER.test(t.body)) {
+      out.push({
+        from: t.from,
+        to: t.from + 3,
+        kind: "mixed-suggestion",
+        message:
+          "this comment mixes prose with SUGGEST: — it shows as a plain note; put the suggestion in a comment of its own",
+      });
+    } else if (t.author === null && /^@[^\s:]+$/.test(t.body) && text[t.to] === ":") {
+      out.push({
+        from: t.from,
+        to: t.from + 3,
+        kind: "mangled-comment",
+        message: "comment lost its body and leaked a colon into the prose — auto-fixable",
+      });
+    }
+  }
   return out;
 }
 
@@ -937,26 +1211,69 @@ export function validateMarkup(text: string): MarkupDiagnostic[] {
 export function acceptedMarkdown(text: string): AcceptedMarkdownResult {
   const literalRanges = markdownLiteralRanges(text);
   const diagnostics = validateMarkup(text).filter(
-    (diagnostic) => !positionInRanges(diagnostic.from, literalRanges),
+    (diagnostic) =>
+      LEAKING_KINDS.has(diagnostic.kind) && !positionInRanges(diagnostic.from, literalRanges),
   );
   if (diagnostics.length > 0) return { ok: false, diagnostics };
 
-  const acceptRange = (source: string): string => {
+  const acceptRange = (source: string, top = false): string => {
     const protectedRanges = markdownLiteralRanges(source);
     const tokens = [...scanTokens(source)]
       .filter((token) => !positionInRanges(token.from, protectedRanges))
       .sort(
         (a, b) => a.from - b.from || b.to - a.to,
       );
+    // Top-level prose between tokens may still carry the wrapper delimiters of a
+    // stacked thread (`{=={==span==}{>>a<<}==}{>>b<<}`), which never tokenise.
+    // Drop only delimiters that pair up as such wrappers, outside literals; a
+    // lone `==}` (inside a tracked change, or closing an escaped `\{==`) is text.
+    const wrappers = new Set<number>();
+    if (top) {
+      const opens: number[] = [];
+      let t = 0;
+      for (let i = 0; i < source.length; ) {
+        while (t < tokens.length && tokens[t].to <= i) t += 1;
+        if (t < tokens.length && tokens[t].from <= i && i < tokens[t].to) {
+          i = tokens[t].to;
+          continue;
+        }
+        if (!positionInRanges(i, protectedRanges)) {
+          if (source.startsWith("{==", i)) {
+            opens.push(i);
+            i += 3;
+            continue;
+          }
+          if (source.startsWith("==}", i) && opens.length > 0) {
+            wrappers.add(opens.pop()!);
+            wrappers.add(i);
+            i += 3;
+            continue;
+          }
+        }
+        i += 1;
+      }
+    }
     let cursor = 0;
     let accepted = "";
+    const prose = (from: number, to: number): string => {
+      let piece = "";
+      for (let i = from; i < to; ) {
+        if (wrappers.has(i)) {
+          i += 3;
+          continue;
+        }
+        piece += source[i];
+        i += 1;
+      }
+      return piece;
+    };
 
     for (const token of tokens) {
       // scanTokens deliberately emits tracked changes contained by a highlight.
       // Once the outer token has been handled recursively, skip those duplicate
       // absolute ranges at this level.
       if (token.from < cursor) continue;
-      accepted += source.slice(cursor, token.from);
+      accepted += prose(cursor, token.from);
       switch (token.type) {
         case "insert":
           accepted += acceptRange(token.inner);
@@ -974,10 +1291,10 @@ export function acceptedMarkdown(text: string): AcceptedMarkdownResult {
       cursor = token.to;
     }
 
-    return accepted + source.slice(cursor);
+    return accepted + prose(cursor, source.length);
   };
 
-  return { ok: true, markdown: acceptRange(text) };
+  return { ok: true, markdown: acceptRange(text, true) };
 }
 
 /**
@@ -996,6 +1313,13 @@ export function wrappableSpan(content: string, from: number, to: number): boolea
   const span = content.slice(from, to);
   if (!span.trim()) return false;
   if (BLANK_LINE.test(span)) return false; // crosses a paragraph break → would leak
+  // Markup inside a code span (or any Markdown literal) renders as literal text
+  // (#71): the span must contain a literal whole, and never touch a multi-line one.
+  for (const r of cachedLiteralRanges(content)) {
+    if (r.to <= from || r.from >= to) continue;
+    const start = r.widenFrom ?? r.from;
+    if (r.block || start < from || r.to > to || content.slice(r.from, r.to).includes("\n")) return false;
+  }
   let residue = "";
   let cursor = from;
   for (const t of scanTokens(content)) {
@@ -1012,18 +1336,105 @@ export function wrappableSpan(content: string, from: number, to: number): boolea
   );
 }
 
+/** Insert a formatted point comment into `content` at character offset
+ *  `anchorOffset`, returning the new full content. Used by the server's
+ *  POST /api/comment; placement follows {@link pointCommentInsert}. */
 export function insertComment(
   content: string,
   anchorOffset: number,
   text: string,
   author: string,
 ): string {
-  const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(anchorOffset, content.length)));
-  const marker = formatComment(author, text);
-  const prevChar = at > 0 ? content[at - 1] : "";
-  const needsSpace = at > 0 && prevChar !== "" && !/\s/.test(prevChar);
-  const insertion = needsSpace ? ` ${marker}` : marker;
-  return content.slice(0, at) + insertion + content.slice(at);
+  const { from, insert } = pointCommentInsert(content, anchorOffset, formatComment(author, text));
+  return content.slice(0, from) + insert + content.slice(from);
+}
+
+/**
+ * Where a POINT comment `marker` typed at `at` lands, and the exact text to insert.
+ * Shared by the editor's composer fallback and POST /api/comment. It never lands
+ * inside markup or a code span:
+ *   • inside an anchor (`{==span==}` and its thread) → after the thread's last
+ *     `<<}`, with no space, so it joins that thread as a reply (#72) instead of
+ *     sitting inside the span and breaking the thread's anchor;
+ *   • inside a comment or tracked change → just past it;
+ *   • inside a Markdown literal (an inline code span, a URL…) → just past it (#71);
+ * and a separating space is added when the preceding char isn't whitespace.
+ */
+export function pointCommentInsert(
+  content: string,
+  at: number,
+  marker: string,
+): { from: number; insert: string } {
+  let pos = Math.max(0, Math.min(at, content.length));
+  const literals = cachedLiteralRanges(content);
+  // Markup-shaped text inside a code span is an example, not a construct.
+  const tokens = scanTokens(content).filter((t) => !positionInRanges(t.from, literals));
+  for (let guard = 0; guard < 64; guard++) {
+    const hl = tokens.find((t) => t.type === "highlight" && t.from < pos && pos < t.to);
+    if (hl) return { from: anchorThreadEnd(content, hl, tokens), insert: marker };
+    // A code or HTML block, edges included: anything on its first or closing line
+    // would break the fence or the indent, so the comment becomes its own
+    // paragraph after the block.
+    const block = literals.find(
+      (r) => (r.block || content.slice(r.from, r.to).includes("\n")) && r.from <= pos && pos <= r.to,
+    );
+    if (block) {
+      const end = block.to;
+      const trail = end === content.length || content.startsWith("\n\n", end) ? "" : content[end] === "\n" ? "\n" : "\n\n";
+      return { from: end, insert: `\n\n${marker}${trail}` };
+    }
+    const enclosing =
+      tokens.find((t) => t.type !== "highlight" && t.from < pos && pos < t.to) ??
+      literals.find((r) => r.from < pos && pos < r.to);
+    if (!enclosing) break;
+    pos = enclosing.to;
+  }
+  const prev = pos > 0 ? content[pos - 1] : "";
+  return { from: pos, insert: pos > 0 && !/\s/.test(prev) ? ` ${marker}` : marker };
+}
+
+/** End of the thread anchored on highlight `hl`, or `hl.to` when it carries no
+ *  comment yet. The root attaches by the anchor rule (ANCHOR_GAP); each reply
+ *  after it by the thread rule (THREAD_GAP), the same one groupThreads uses, so a
+ *  whitespace-separated comment that is its own card is not crossed. */
+function anchorThreadEnd(content: string, hl: CritToken, tokens: CritToken[]): number {
+  const comments = tokens.filter((t) => t.type === "comment" && t.from >= hl.to);
+  let end = hl.to;
+  for (const c of comments) {
+    const gap = content.slice(end, c.from);
+    if (!(end === hl.to ? ANCHOR_GAP : THREAD_GAP).test(gap)) break;
+    end = c.to;
+  }
+  return end;
+}
+
+// One-entry cache: the composer, `acm suggest` and the spell pass call the span
+// gate repeatedly on the same document; parse its Markdown literals once.
+let literalCache: { content: string; ranges: SourceRange[] } | null = null;
+function cachedLiteralRanges(content: string): SourceRange[] {
+  if (literalCache?.content !== content) {
+    literalCache = { content, ranges: markdownLiteralRanges(content, { wholeLinks: true }) };
+  }
+  return literalCache.ranges;
+}
+
+/**
+ * Widen a selection so it never cuts a single-line Markdown literal — most often
+ * an inline code span: selecting `bunx` inside `` `bunx --bun …` `` widens to the
+ * whole code span, backticks included, so the anchor wraps it instead of putting
+ * CriticMarkup inside the backticks, where it renders as literal text (#71).
+ * Multi-line literals (fenced code) are left alone; wrappableSpan refuses them.
+ */
+export function widenToLiterals(content: string, from: number, to: number): { from: number; to: number } {
+  let a = from;
+  let b = to;
+  for (const r of cachedLiteralRanges(content)) {
+    if (r.to <= a || r.from >= b) continue;
+    if (r.block || content.slice(r.from, r.to).includes("\n")) continue;
+    a = Math.min(a, r.widenFrom ?? r.from);
+    b = Math.max(b, r.to);
+  }
+  return { from: a, to: b };
 }
 
 /**
@@ -1171,8 +1582,10 @@ export function resolveAnchorEdit(
   runFrom: number,
   runTo: number,
 ): { from: number; to: number; insert: string } {
-  // The anchor highlight is the (innermost) highlight whose close abuts the run.
-  const hl = scanTokens(content).find((t) => t.type === "highlight" && t.to === runFrom);
+  // The anchor is found by the same gap-tolerant rule apply uses (a stray space
+  // between `==}` and the run must not leave an orphaned highlight behind); the
+  // gap is swallowed with the markup.
+  const hl = anchorHighlightFor(content, { from: runFrom });
   if (!hl || hl.type !== "highlight") {
     return { from: runFrom, to: runTo, insert: "" }; // point comment — just drop it
   }
@@ -1423,7 +1836,10 @@ export function groupCards(tokens: CritToken[], text: string): SidebarCard[] {
 // `SUGGEST: new wording` — optionally tagged with a group id, `SUGGEST[g:7a]: …`,
 // so a SET of suggestions can be accepted/rejected as one unit (#21). The tag
 // lives inside the comment body, so the substrate stays plain CriticMarkup.
-const SUGGESTION_PREFIX = /^\s*SUGGEST(?:\[g:([^\]\s]+)\])?:\s*([\s\S]*)$/;
+// Only the envelope's ONE separator space after the colon is stripped (ADR 0003):
+// whitespace the replacement was written with is part of the proposal, so a span
+// that starts with a space keeps it on Apply (#75: "used by400+").
+const SUGGESTION_PREFIX = /^\s*SUGGEST(?:\[g:([^\]\s]+)\])?: ?([\s\S]*)$/;
 
 /** If `body` is a structured suggestion, the proposed replacement text (may be ""
  *  → suggest deleting the span); otherwise null. A group tag is NOT part of the

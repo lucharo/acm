@@ -25,6 +25,7 @@ import {
   threadsSummary,
   findSuggestionComment,
   findThread,
+  suggestionWhitespaceWarning,
 } from "../lib/agentEdits";
 import {
   applicableSuggestionIds,
@@ -556,6 +557,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
           throw new Error('usage: acm suggest "<span>" "<new wording>" [--group <id>] [--doc] [--author]');
         after = addSuggestion(before, span, author, replacement, f.group);
         note = `SUGGEST${f.group ? `[g:${f.group}]` : ""} anchored on "${span.slice(0, 40)}" as @${author}`;
+        const whitespace = suggestionWhitespaceWarning(span, replacement);
+        if (whitespace) note += `\n  ⚠ ${whitespace}`;
         break;
       }
       case "accept":

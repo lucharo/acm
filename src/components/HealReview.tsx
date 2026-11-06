@@ -54,7 +54,7 @@ export default function HealReview(props: HealReviewProps) {
           <line x1="12" y1="9" x2="12" y2="13" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
-        <span className="font-semibold text-[var(--ink)]">Review comments that can’t display</span>
+        <span className="font-semibold text-[var(--ink)]">Review comments that can’t display or apply</span>
         <button
           type="button"
           onClick={onClose}
@@ -70,13 +70,14 @@ export default function HealReview(props: HealReviewProps) {
           {structuralCount > 0 ? (
             <>
               <span className="font-medium text-[var(--ink)]">{structuralCount}</span> structural leak{structuralCount === 1 ? "" : "s"}{" "}
-              (a highlight crossing a paragraph break, or a comment trapped inside a tracked change) can be repaired in one step — anchors move to
-              their final paragraph, trapped comments move out. Undoable.
+              (a highlight crossing a paragraph break, a comment trapped inside a tracked change or an anchor’s span, or a comment that lost its
+              body) can be repaired in one step — anchors move to their final paragraph, trapped comments move out to the end of their thread.
+              Undoable.
             </>
           ) : manualCount > 0 ? (
             <>
               No auto-fixable issues left. <span className="font-medium text-[var(--warn)]">{manualCount}</span> need a manual fix (broken or{" "}
-              interleaved markup).{" "}
+              interleaved markup, or a SUGGEST card with no span to apply to).{" "}
               <button type="button" onClick={onJumpManual} className="font-medium text-[var(--accent)] underline">
                 Jump to the first
               </button>

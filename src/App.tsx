@@ -1652,7 +1652,7 @@ function Workspace({
           type="button"
           onClick={() => setReviewOpen(true)}
           className="fixed bottom-3 right-3 z-40 flex items-center gap-2 rounded-full border border-[var(--warn)] bg-[var(--warn-bg)] py-1.5 pl-3 pr-3.5 text-[12px] shadow-lg transition-transform hover:scale-[1.03]"
-          title="Some markup can't display (a leaking highlight, a stray close, or a comment inside another). Click to review and fix."
+          title="Some markup can't display or apply (a leaking highlight, a stray close, a comment inside another, or a SUGGEST card with no span). Click to review and fix."
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -1660,7 +1660,7 @@ function Workspace({
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
           <span className="font-medium text-[var(--ink)]">
-            {diagnostics.length} markup issue{diagnostics.length === 1 ? "" : "s"} render raw
+            {diagnostics.length} markup issue{diagnostics.length === 1 ? "" : "s"}
             <span className="font-normal text-[var(--muted)]">
               {" — "}
               {fixableCount} auto-fixable

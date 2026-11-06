@@ -11,6 +11,7 @@ import {
   groupCards,
   commentKey,
   formatComment,
+  canonicalizeCommentMarker,
   suggestionThreadEdit,
   resolveAnchorEdit,
   suggestionReplacement,
@@ -81,18 +82,28 @@ function uniqueProseIndex(content: string, span: string): number {
 }
 
 /** Append `marker` (raw CriticMarkup the agent composed) at the end of the thread
- *  matched by `phrase`, so it threads + inherits the anchor. Idempotent: if the
- *  exact marker is already in the document, returns it unchanged. */
+ *  matched by `phrase`, so it threads + inherits the anchor. Idempotent: if that
+ *  thread already carries the exact marker, returns the document unchanged. (Only
+ *  that thread: a short marker such as an empty deletion `SUGGEST:` legitimately
+ *  repeats on other threads, #47.) */
 export function appendToThread(content: string, phrase: string, marker: string): { content: string; skipped: boolean } {
-  if (content.includes(marker)) return { content, skipped: true };
   const th = findThread(content, phrase);
+  if (th.comments.some((c) => c.raw === marker)) return { content, skipped: true };
   const pos = Math.max(...th.comments.map((c) => c.to)); // thread end
   return { content: content.slice(0, pos) + marker + content.slice(pos), skipped: false };
 }
 
-/** Reply to the thread matched by `phrase` with a plain comment by `author`. */
+/** Reply to the thread matched by `phrase` with a plain comment by `author`. A
+ *  `text` that is itself one whole comment marker (`{>>@claude: SUGGEST: <<}`, the
+ *  form the skill documents for batches) is written as that comment, canonicalised,
+ *  rather than escaped into the body of a new one (#47). */
 export function addComment(content: string, phrase: string, author: string, text: string): string {
-  return appendToThread(content, phrase, formatComment(author, text)).content;
+  const raw = text.trim();
+  const marker =
+    raw.startsWith("{>>") && raw.endsWith("<<}") && raw.indexOf("<<}") === raw.length - 3
+      ? canonicalizeCommentMarker(raw)
+      : formatComment(author, text);
+  return appendToThread(content, phrase, marker).content;
 }
 
 /** Anchor a new SUGGEST: to the unique prose `span` — wraps it as
@@ -242,4 +253,17 @@ export function threadsSummary(content: string, seenKeys: Set<string> = new Set(
       preview: (th.comments[0]?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
     };
   });
+}
+
+/** A warning for `acm suggest` when the span or the replacement starts or ends with
+ *  whitespace, or null. Apply swaps the span for the replacement byte for byte, so
+ *  a boundary space on one side and not the other glues or splits words (#75). */
+export function suggestionWhitespaceWarning(span: string, replacement: string): string | null {
+  const parts: string[] = [];
+  if (/^\s/.test(span)) parts.push("the span starts with whitespace");
+  if (/\s$/.test(span)) parts.push("the span ends with whitespace");
+  if (/^\s/.test(replacement)) parts.push("the replacement starts with whitespace");
+  if (/\s$/.test(replacement)) parts.push("the replacement ends with whitespace");
+  if (parts.length === 0) return null;
+  return `${parts.join(" and ")} — Apply replaces the span's whitespace with the replacement's, exactly as written; check the words on either side still read right`;
 }

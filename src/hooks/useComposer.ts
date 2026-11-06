@@ -5,7 +5,8 @@ import type { EditorView } from "@codemirror/view";
 import {
   scanTokens,
   formatComment,
-  clampAnchorOutsideComments,
+  pointCommentInsert,
+  widenToLiterals,
   wrappableSpan,
   commentKey,
   selectionAnnotationEdit,
@@ -37,12 +38,15 @@ export function useComposer(
     const sel = v.state.selection.main;
     if (sel.empty) return;
     commentAnchor.current = sel.to;
-    const range = { from: sel.from, to: sel.to };
+    const content = v.state.doc.toString();
+    // A selection inside a code span anchors the WHOLE code span (#71); the blue
+    // mark shows the widened range so the user sees what will be anchored.
+    const range = widenToLiterals(content, sel.from, sel.to);
     commentRange.current = range;
     setComposerAnchor(range);
     // Tell the composer up front whether this selection anchors as a span or will
     // fall back to a point comment (selection cuts markup / crosses a paragraph).
-    setComposerAnchored(wrappableSpan(v.state.doc.toString(), sel.from, sel.to));
+    setComposerAnchored(wrappableSpan(content, range.from, range.to));
     setComposerKind(kind);
     setDraft("");
     setComposing(true);
@@ -79,7 +83,8 @@ export function useComposer(
       // wrapping `{==span==}`; otherwise a point comment at the selection end (clamped
       // outside any comment so we can never nest).
       const sel = v.state.selection.main;
-      const range = !sel.empty ? { from: sel.from, to: sel.to } : commentRange.current;
+      const picked = !sel.empty ? { from: sel.from, to: sel.to } : commentRange.current;
+      const range = picked ? widenToLiterals(content, picked.from, picked.to) : null;
 
       let commentStart: number;
       if (range && wrappableSpan(content, range.from, range.to)) {
@@ -100,16 +105,15 @@ export function useComposer(
         commentStart = range.from + marker.indexOf("{>>");
       } else {
         if (composerKind === "suggestion") return;
+        // Point comment: never inside markup or a code span; inside an existing
+        // anchor it joins the end of that anchor's thread (#72).
         const raw = range ? range.to : commentAnchor.current!;
-        const at = clampAnchorOutsideComments(content, Math.max(0, Math.min(raw, content.length)));
-        const prev = at > 0 ? content.slice(at - 1, at) : "";
-        const lead = at > 0 && !/\s/.test(prev) ? " " : "";
-        const marker = lead + formatComment(author, text);
+        const { from: at, insert } = pointCommentInsert(content, raw, formatComment(author, text));
         v.dispatch({
-          changes: { from: at, insert: marker },
-          selection: { anchor: at + marker.length },
+          changes: { from: at, insert },
+          selection: { anchor: at + insert.length },
         });
-        commentStart = at + lead.length;
+        commentStart = at + insert.indexOf("{>>");
       }
       if (markSeen && composerKind === "comment") {
         const after = v.state.doc.toString();
