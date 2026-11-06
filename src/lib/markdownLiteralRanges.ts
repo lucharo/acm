@@ -23,6 +23,7 @@ export const LITERAL_NODES: ReadonlySet<string> = new Set([
   "Autolink",
   "Escape",
 ]);
+const CRITIC_DELIMITER = /\{(?:\+\+|--|~~|==|>>)|(?:\+\+|--|~~|==|<<)\}/;
 const BLOCK_NODES = new Set(["FencedCode", "CodeBlock", "HTMLBlock"]);
 const RAW_CODE_ELEMENT = /<(code|pre|script|style|textarea)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 
@@ -47,7 +48,18 @@ export function markdownLiteralRanges(
         return; // descend: the link text may hold code spans of its own
       }
       if (!LITERAL_NODES.has(node.name)) return;
-      ranges.push({ from: node.from, to: node.to, block: BLOCK_NODES.has(node.name) || undefined });
+      let to = node.to;
+      const host = node.node.parent?.name;
+      if (node.name === "URL" && host !== "Link" && host !== "Image" && host !== "LinkReference") {
+        // Only a bare GFM URL (no link brackets) is cut: it runs on through `)==}{>>…` when CriticMarkup follows it
+        // with no space; a URL never holds a CriticMarkup delimiter, so it ends there.
+        const cut = source.slice(node.from, to).search(CRITIC_DELIMITER);
+        if (cut >= 0) to = node.from + cut;
+        // …and a trailing `)` closing the markup around it is not part of the URL.
+        if (cut >= 0 && source[to - 1] === ")" && !source.slice(node.from, to - 1).includes("(")) to -= 1;
+        if (to <= node.from) return false;
+      }
+      ranges.push({ from: node.from, to, block: BLOCK_NODES.has(node.name) || undefined });
       return false;
     },
   });

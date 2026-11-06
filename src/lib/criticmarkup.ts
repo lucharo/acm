@@ -218,7 +218,8 @@ function matchHighlightAt(text: string, from: number): ConstructMatch | null {
     }
     if (ch === "\n") {
       let j = i + 1;
-      while (j < text.length && (text[j] === " " || text[j] === "\t")) j += 1;
+      // `\r` too, so a CRLF blank line counts like an LF one (#96).
+      while (j < text.length && (text[j] === " " || text[j] === "\t" || text[j] === "\r")) j += 1;
       if (j < text.length && text[j] === "\n") return null; // crossed a blank line
       i = j;
       continue;
@@ -587,6 +588,7 @@ const BLOCK_LINE_PREFIX = /^(?:\s*>\s?)*(?:\s*(?:[-*+]|\d{1,3}[.)])\s+)?(?:#{1,6
  * truly dangling markers remain untouched for the validator to report. */
 function healOneMultilineComment(content: string): string | null {
   for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    if (inLiteral(content, i)) continue; // an example in code stays byte-identical (#97)
     const scanned = scanComment(content, i);
     if (!scanned || scanned.nested || matchConstructAt(content, i)) continue;
 
@@ -614,13 +616,14 @@ function healOneMultilineComment(content: string): string | null {
 /** ONE multi-block-anchor repair, or null when none is needed. */
 function healOneMultiBlockAnchor(content: string): string | null {
   for (let i = content.indexOf("{=="); i >= 0; i = content.indexOf("{==", i + 3)) {
+    if (inLiteral(content, i)) continue; // an example in code stays byte-identical (#97)
     const close = findHighlightClose(content, i);
     if (close < 0) continue; // truly dangling — not mechanically healable
     const inner = content.slice(i + 3, close);
     if (!BLANK_LINE.test(inner)) continue; // single-block — fine (non-global regex, stateless)
     // Start of the close's block: just past the LAST blank line before the close…
     let blockStart = i + 3;
-    const re = /\n[ \t]*\n/g;
+    const re = /\r?\n[ \t]*\r?\n/g; // BLANK_LINE, CRLF included (#96)
     for (let m = re.exec(inner); m; m = re.exec(inner)) blockStart = i + 3 + m.index + m[0].length;
     // …skipping the markdown line prefix so `> `/`- `/`#` keep their meaning.
     const prefix = BLOCK_LINE_PREFIX.exec(content.slice(blockStart, close))?.[0] ?? "";
@@ -637,6 +640,7 @@ function healOneCommentInWrapper(content: string): string | null {
   for (const open of ["{++", "{--"]) {
     const close = open === "{++" ? "++}" : "--}";
     for (let i = content.indexOf(open); i >= 0; i = content.indexOf(open, i + 3)) {
+      if (inLiteral(content, i)) continue; // an example in code stays byte-identical (#97)
       if (matchConstructAt(content, i)) continue; // parses — nothing to heal
       const closeAt = content.indexOf(close, i + 3);
       if (closeAt < 0 || closeAt >= paragraphEnd(content, i)) continue;
@@ -1003,6 +1007,7 @@ export type MarkupDiagnosticKind =
   | "unparsed"
   | "comment-in-anchor"
   | "orphan-suggestion"
+  | "unsafe-suggestion"
   | "mixed-suggestion"
   | "mangled-comment";
 
@@ -1027,6 +1032,15 @@ function paragraphEnd(text: string, from: number): number {
 }
 
 export function validateMarkup(text: string): MarkupDiagnostic[] {
+  const out = delimiterDiagnostics(text);
+  out.push(...reviewIntegrityDiagnostics(text));
+  out.sort((a, b) => a.from - b.from);
+  // Markup-shaped text inside code is an example: nothing there renders raw.
+  return out.filter((d) => !inLiteral(text, d.from));
+}
+
+/** The delimiter pass alone: every construct delimiter that renders raw. */
+function delimiterDiagnostics(text: string): MarkupDiagnostic[] {
   const out: MarkupDiagnostic[] = [];
   const hlStack: number[] = [];
   const flushHlStack = () => {
@@ -1041,14 +1055,27 @@ export function validateMarkup(text: string): MarkupDiagnostic[] {
     }
   };
 
+  // Markdown literals (code, URLs…) are skipped whole: a `{==` inside backticks
+  // must neither leak nor pair with a `==}` in the prose after it.
+  // An escape (`\{`) is left in: the editor renders `\{==x==}` as text either way.
+  const literals = markdownLiteralRanges(text).filter((r) => !(r.to - r.from === 2 && text[r.from] === "\\"));
+  let lit = 0;
   let i = 0;
   while (i < text.length) {
+    while (lit < literals.length && literals[lit].to <= i) lit += 1;
+    if (lit < literals.length && literals[lit].from <= i) {
+      // A code block is a paragraph boundary of its own: no highlight survives it.
+      if (literals[lit].block || text.slice(literals[lit].from, literals[lit].to).includes("\n")) flushHlStack();
+      i = literals[lit].to;
+      continue;
+    }
     const ch = text[i];
 
     if (ch === "\n") {
       // Paragraph break: no construct survives it — any open highlight leaks.
       let j = i + 1;
-      while (j < text.length && (text[j] === " " || text[j] === "\t")) j += 1;
+      // `\r` too, so a CRLF blank line counts like an LF one (#96).
+      while (j < text.length && (text[j] === " " || text[j] === "\t" || text[j] === "\r")) j += 1;
       if (j < text.length && text[j] === "\n") flushHlStack();
       i += 1;
       continue;
@@ -1141,9 +1168,21 @@ export function validateMarkup(text: string): MarkupDiagnostic[] {
   }
 
   flushHlStack(); // anything still open at EOF leaks
-  out.push(...reviewIntegrityDiagnostics(text));
-  out.sort((a, b) => a.from - b.from);
   return out;
+}
+
+/** Whether `{==span==}` scans back as exactly one highlight over exactly `span`
+ *  (no blank line inside, no edge char joining a delimiter). */
+function wrapsCleanly(span: string): boolean {
+  const wrapped = `{==${span}==}`;
+  return scanTokens(wrapped).some((t) => t.type === "highlight" && t.from === 0 && t.to === wrapped.length);
+}
+
+/** Whether a SUGGEST replacement would leave raw delimiters once applied as prose
+ *  (`a ==} b`): such a card is not applicable, since Apply would break the
+ *  markup (#94). */
+export function replacementLeaks(replacement: string): boolean {
+  return delimiterDiagnostics(replacement).length > 0;
 }
 
 // A `SUGGEST:` marker anywhere in a body (the structured form must START with it).
@@ -1176,12 +1215,21 @@ function reviewIntegrityDiagnostics(text: string): MarkupDiagnostic[] {
     if (t.type !== "comment" || positionInRanges(t.from, literals)) continue;
     if (suggestionReplacement(t.body) !== null) {
       if (!applicable.has(t.id)) {
-        out.push({
-          from: t.from,
-          to: t.from + 3,
-          kind: "orphan-suggestion",
-          message: "SUGGEST card has no anchored span, so it can't be applied — put {==the span==} right before it",
-        });
+        out.push(
+          replacementLeaks(suggestionReplacement(t.body)!)
+            ? {
+                from: t.from,
+                to: t.from + 3,
+                kind: "unsafe-suggestion",
+                message: "SUGGEST replacement contains CriticMarkup delimiters, so applying it would break the markup — rewrite it",
+              }
+            : {
+                from: t.from,
+                to: t.from + 3,
+                kind: "orphan-suggestion",
+                message: "SUGGEST card has no anchored span, so it can't be applied — put {==the span==} right before it",
+              },
+        );
       }
     } else if (SUGGEST_MARKER.test(t.body)) {
       out.push({
@@ -1331,9 +1379,15 @@ export function wrappableSpan(content: string, from: number, to: number): boolea
   }
   residue += content.slice(cursor, to);
   // Delimiters in the prose between/around complete constructs would mis-bound the wrap.
-  return (
-    !/\{(\+\+|--|~~|==|>>)/.test(residue) && !residue.includes("==}") && !residue.includes("<<}")
-  );
+  if (/\{(\+\+|--|~~|==|>>)/.test(residue) || residue.includes("==}") || residue.includes("<<}")) {
+    return false;
+  }
+  // The span's own edge chars can join the wrap's delimiters into another one
+  // (`set {` + `==}` reads as a second `{==`, #93): the wrapped span must scan
+  // back as exactly one highlight over exactly these bytes.
+  const wrapped = content.slice(0, from) + "{==" + span + "==}" + content.slice(to);
+  const end = to + 6;
+  return scanTokens(wrapped).some((t) => t.type === "highlight" && t.from === from && t.to === end);
 }
 
 /** Insert a formatted point comment into `content` at character offset
@@ -1416,6 +1470,12 @@ function cachedLiteralRanges(content: string): SourceRange[] {
     literalCache = { content, ranges: markdownLiteralRanges(content, { wholeLinks: true }) };
   }
   return literalCache.ranges;
+}
+
+/** Whether offset `i` sits in a Markdown literal (code, a URL…): CriticMarkup-
+ *  shaped text there is an example, never markup to diagnose or heal. */
+function inLiteral(content: string, i: number): boolean {
+  return positionInRanges(i, cachedLiteralRanges(content));
 }
 
 /**
@@ -1641,6 +1701,7 @@ function scanComment(content: string, i: number): CommentScan | null {
 /** Document offset of the first malformed (nested) comment, for "jump to it". */
 export function firstNestedCommentStart(content: string): number | null {
   for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    if (inLiteral(content, i)) continue; // an example in code stays byte-identical (#97)
     const s = scanComment(content, i);
     if (s?.nested) return i;
     if (s) i = s.end - 3; // skip past a clean comment
@@ -1658,6 +1719,7 @@ export function hasNestedComments(content: string): boolean {
 export function nestedCommentIssues(content: string): { from: number; preview: string }[] {
   const out: { from: number; preview: string }[] = [];
   for (let i = content.indexOf("{>>"); i >= 0; i = content.indexOf("{>>", i + 3)) {
+    if (inLiteral(content, i)) continue; // an example in code stays byte-identical (#97)
     const s = scanComment(content, i);
     if (s?.nested) {
       const { author, body } = parseCommentInner(s.outerBody);
@@ -1675,6 +1737,7 @@ export function healNestedComments(content: string): string {
   for (let guard = 0; guard < 5000; guard++) {
     let changed = false;
     for (let i = out.indexOf("{>>"); i >= 0; i = out.indexOf("{>>", i + 3)) {
+      if (inLiteral(out, i)) continue; // an example in code stays byte-identical (#97)
       const s = scanComment(out, i);
       if (!s) {
         continue;
@@ -1704,7 +1767,7 @@ export function healNestedComments(content: string): string {
  * issue on the next pass.
  */
 export function healOneNestedComment(content: string, from: number): string | null {
-  if (!content.startsWith("{>>", from)) return null;
+  if (!content.startsWith("{>>", from) || inLiteral(content, from)) return null;
   const s = scanComment(content, from);
   if (!s || !s.nested) return null;
   const healed = `{>>${s.outerBody}<<}` + s.inner.map((c) => " " + c).join("");
@@ -1908,7 +1971,18 @@ const ANCHOR_GAP = /^(?:\s|\{==|==\})*$/;
  *  anchor run (a stacked same-anchor thread reads `{=={==span==}…==}…`). */
 function suggestionAnchorStart(content: string, hl: CritToken): number {
   let start = hl.from;
-  while (start >= 3 && content.slice(start - 3, start) === "{==") start -= 3;
+  let end = hl.to;
+  while (start >= 3 && content.slice(start - 3, start) === "{==") {
+    // A stacked open of the SAME anchor closes after nothing but this anchor's
+    // comments; an enclosing highlight that merely starts at the same word
+    // closes after more prose, and its `{==` is not ours to strip (#95).
+    const close = findHighlightClose(content, start - 3);
+    if (close < 0) break;
+    const between = content.slice(end, close).replace(/\{>>[\s\S]*?<<\}/g, "");
+    if (!/^(?:\s|==\})*$/.test(between)) break;
+    start -= 3;
+    end = close + 3;
+  }
   return start;
 }
 
@@ -1960,7 +2034,7 @@ export function suggestionThreadEdit(
   discussion: SuggestionDiscussion = "keep-discussion",
 ): { from: number; to: number; insert: string } | null {
   const repl = suggestionReplacement(comment.body);
-  if (repl === null) return null;
+  if (repl === null || (mode === "accept" && replacementLeaks(repl))) return null;
   const tokens = scanTokens(content);
   const threads = groupThreads(
     tokens.filter((t): t is CommentToken => t.type === "comment"),
@@ -1978,10 +2052,15 @@ export function suggestionThreadEdit(
   // Applying a SUGGEST fulfils the edit requests posted before it: drop them with
   // the SUGGEST, or the thread would read as waiting on an edit that has landed
   // (#76). A request posted after it asks for something newer and stays.
+  // Accepting a deletion leaves no span for a competing SUGGEST to target: left as
+  // a point comment it would re-anchor on a neighbouring highlight and a later
+  // accept would delete that prose (#91). The alternatives go with the span.
+  const deleting = mode === "accept" && newSpan.length === 0;
   const remaining = thread.comments.filter(
     (c) =>
       c.from !== comment.from &&
-      !(mode === "accept" && c.from < comment.from && isEditRequestBody(c.body)),
+      !(mode === "accept" && c.from < comment.from && isEditRequestBody(c.body)) &&
+      !(deleting && suggestionReplacement(c.body) !== null),
   );
   const keptMarkup = remaining.map((c) => c.raw).join("");
   const insert =
@@ -1989,7 +2068,9 @@ export function suggestionThreadEdit(
       ? newSpan // sole comment → collapse wrapper to plain prose (today's behaviour)
       : newSpan.length === 0
         ? keptMarkup // delete + discussion → keep comments as point comments, no {====}
-        : `{==${newSpan}==}${keptMarkup}`; // edit span, keep the thread anchored
+        : wrapsCleanly(newSpan)
+          ? `{==${newSpan}==}${keptMarkup}` // edit span, keep the thread anchored
+          : newSpan + keptMarkup; // can't be one highlight (a blank line, an edge `{`): point comments (#94)
   return { from: suggestionAnchorStart(content, hl), to: thread.to, insert };
 }
 
@@ -2035,15 +2116,22 @@ export interface SuggestCard {
  * view stays presentational: it places decorations on real lezer nodes and only
  * consults this list to classify which highlight/comment is a suggestion.
  */
-export function suggestCards(content: string, tokens?: CritToken[]): SuggestCard[] {
+export function suggestCards(
+  content: string,
+  tokens?: CritToken[],
+  options: { includeUnsafe?: boolean } = {},
+): SuggestCard[] {
   const toks = tokens ?? scanTokens(content);
-  const comments = toks.filter((t): t is CommentToken => t.type === "comment");
+  // A SUGGEST example inside code is text, never a card.
+  const comments = toks.filter((t): t is CommentToken => t.type === "comment" && !inLiteral(content, t.from));
   const threads = groupThreads(comments, content);
   const out: SuggestCard[] = [];
   const perAnchor = new Map<number, number>(); // hlFrom → suggestions seen so far
   for (const t of comments) {
     const repl = suggestionReplacement(t.body);
-    if (repl === null) continue;
+    // An unsafe replacement can be rejected but never applied, so it is left out
+    // unless the caller is rejecting (the group planner).
+    if (repl === null || (!options.includeUnsafe && replacementLeaks(repl))) continue;
     // Resolve the span even for a reply deeper in the thread (inherits the root's).
     // Pass the prebuilt threads so the reply path stays O(comments), not O(comments²).
     const hl = threadAnchorHighlightFor(content, t, toks, threads);
@@ -2083,20 +2171,28 @@ export function suggestCards(content: string, tokens?: CritToken[]): SuggestCard
 // and the CLI applies them back-to-front in one write.
 
 /**
- * The accept/reject edits for every member of group `groupId`. Members whose
- * anchor can't resolve are counted in `skipped`. Ordinary Apply keeps the first
- * of overlapping edits; Apply & resolve preserves every conflicting thread,
- * because resolving one would otherwise silently erase its competing proposal.
+ * The accept/reject edits for every member of group `groupId`. A group applies
+ * all or nothing: when any tagged member can't apply (its anchor is gone, or its
+ * replacement would break the markup), no edit is returned and every member
+ * counts in `skipped`, with `unanchored` naming how many blocked it (#104).
+ * Ordinary Apply keeps the first of overlapping edits; Apply & resolve preserves
+ * every conflicting thread, because resolving one would otherwise silently erase
+ * its competing proposal.
  */
 export function suggestionGroupEdits(
   content: string,
   groupId: string,
   mode: "accept" | "reject",
   discussion: SuggestionDiscussion = "keep-discussion",
-): { edits: { from: number; to: number; insert: string }[]; skipped: number } {
+): { edits: { from: number; to: number; insert: string }[]; skipped: number; unanchored: number } {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
-  const members = suggestCards(content, tokens).filter((s) => s.groupId === groupId);
+  const members = suggestCards(content, tokens, { includeUnsafe: mode === "reject" }).filter(
+    (s) => s.groupId === groupId,
+  );
+  const tagged = comments.filter((c) => suggestionGroupId(c.body) === groupId && !inLiteral(content, c.from)).length;
+  const unanchored = tagged - members.length;
+  if (unanchored > 0) return { edits: [], skipped: tagged, unanchored };
   const edits: { from: number; to: number; insert: string }[] = [];
   let skipped = 0;
   for (const m of members) {
@@ -2119,7 +2215,7 @@ export function suggestionGroupEdits(
       }
     }
     skipped += conflicting.size;
-    return { edits: edits.filter((_, index) => !conflicting.has(index)), skipped };
+    return { edits: edits.filter((_, index) => !conflicting.has(index)), skipped, unanchored: 0 };
   }
   const clean: typeof edits = [];
   for (const e of edits) {
@@ -2127,7 +2223,7 @@ export function suggestionGroupEdits(
     if (prev && e.from < prev.to) skipped += 1;
     else clean.push(e);
   }
-  return { edits: clean, skipped };
+  return { edits: clean, skipped, unanchored: 0 };
 }
 
 /** Apply non-overlapping ranged edits to a string (back-to-front, so earlier

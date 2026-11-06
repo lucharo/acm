@@ -76,6 +76,7 @@ describe("Apply & resolve", () => {
         },
       ],
       skipped: 0,
+      unanchored: 0,
     });
     expect(applyRangedEdits(content, result.edits)).toBe("A first. B second.");
   });
@@ -86,7 +87,7 @@ describe("Apply & resolve", () => {
 
     const result = suggestionGroupEdits(content, "g1", "accept", "resolve-thread");
 
-    expect(result).toEqual({ edits: [], skipped: 2 });
+    expect(result).toEqual({ edits: [], skipped: 2, unanchored: 0 });
     expect(applyRangedEdits(content, result.edits)).toBe(content);
   });
 

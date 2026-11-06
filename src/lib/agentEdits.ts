@@ -21,6 +21,7 @@ import {
   wrappableSpan,
   suggestionGroupEdits,
   applyRangedEdits,
+  replacementLeaks,
 } from "./criticmarkup";
 import type { CommentToken, CommentThread } from "./criticmarkup";
 import { threadEditRequested } from "./commentGroups";
@@ -182,7 +183,12 @@ export function resolveSuggestionGroup(
   groupId: string,
   mode: "accept" | "reject",
 ): { content: string; applied: number; skipped: number } {
-  const { edits, skipped } = suggestionGroupEdits(content, groupId, mode);
+  const { edits, skipped, unanchored } = suggestionGroupEdits(content, groupId, mode);
+  if (unanchored > 0) {
+    throw new AmbiguityError(
+      `group "${groupId}": ${unanchored} member${unanchored === 1 ? " has" : "s have"} no anchored span (or an unsafe replacement), so nothing was applied — a group applies all or nothing`,
+    );
+  }
   if (edits.length === 0) {
     throw new AmbiguityError(`group "${groupId}" has no applyable suggestions`);
   }
@@ -193,7 +199,15 @@ export function resolveSuggestionGroup(
 export function resolveSuggestion(content: string, phrase: string, mode: "accept" | "reject"): string {
   const c = findSuggestionComment(content, phrase);
   const edit = suggestionThreadEdit(content, c, mode);
-  if (!edit) throw new AmbiguityError(`"${phrase.slice(0, 48)}" is not an anchored suggestion`);
+  if (!edit) {
+    const repl = suggestionReplacement(c.body);
+    if (mode === "accept" && repl !== null && replacementLeaks(repl)) {
+      throw new AmbiguityError(
+        `"${phrase.slice(0, 48)}": its replacement contains CriticMarkup delimiters, so accepting it would break the markup`,
+      );
+    }
+    throw new AmbiguityError(`"${phrase.slice(0, 48)}" is not an anchored suggestion`);
+  }
   return applyEdit(content, edit);
 }
 
