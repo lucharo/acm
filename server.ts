@@ -25,6 +25,7 @@ import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
+import { readDocText, startsWithBomChar, writeDocText } from "./src/server/docText";
 import { saveAsset, assetRootFor, resolveAsset } from "./src/server/asset";
 import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
 import {
@@ -194,13 +195,26 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // genuine same-line overlap is a conflict (nothing written). Caller holds withLock.
   type CommitResult =
     | { ok: true; content: string; version: number; decisionEvents: DecisionEvent[] }
-    | { ok: false; reason: "overlap" | "containment"; content: string; version: number };
+    | { ok: false; reason: "overlap" | "containment" | "cursor"; content: string; version: number };
 
   interface WriteIdentity {
     author: string;
     source: ProvenanceSource;
     operation: string;
     decisionEvents?: readonly DecisionEvent[];
+    /** Refuse a write that lands on the human's live caret (agent writes). */
+    guardCursor?: boolean;
+  }
+
+  /** Does the change from `theirs` to `next` touch the human's live caret? Both
+   *  are the current document, the coordinates presence is reported in: the
+   *  agent's edit is compared as it would land, whatever base it was made on. */
+  function touchesCaret(theirs: string, next: string): boolean {
+    if (next === theirs || !humanSel || Date.now() - humanSel.at >= PRESENCE_TTL_MS) return false;
+    const span = changedSpan(theirs, next);
+    const lo = Math.min(humanSel.from, humanSel.to);
+    const hi = Math.max(humanSel.from, humanSel.to);
+    return span.from <= hi && lo <= span.to;
   }
 
   async function commitWrite(
@@ -213,7 +227,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
       documentUpdateLockPath(docPath),
       `document ${docPath}`,
       async () => {
-        const theirs = await Bun.file(docPath).text(); // disk is the authoritative "theirs"
+        const theirs = await readDocText(docPath); // disk is the authoritative "theirs"
         let toWrite: string;
         if (theirs === base || mine === theirs) {
           toWrite = mine; // nobody moved under us (or we'd write exactly what's there)
@@ -225,6 +239,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
           }
           toWrite = m.result;
         }
+        if (identity.guardCursor && touchesCaret(theirs, toWrite)) {
+          return { ok: false, reason: "cursor", content: theirs, version };
+        }
         const decisionEvents = rebaseDecisionEventsForCommit(
           identity.decisionEvents ?? [],
           { base, mine, theirs, committed: toWrite },
@@ -232,7 +249,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         if (toWrite === theirs) {
           return { ok: true, content: theirs, version, decisionEvents }; // no-op
         }
-        await Bun.write(docPath, toWrite);
+        await writeDocText(docPath, toWrite); // keeps a BOM the file had (#92)
         const attribution: ProvenanceAttribution = {
           author: identity.author.trim() || "Unknown",
           source: identity.source,
@@ -270,6 +287,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
     }
   }
   const badJson = () => new Response("Bad request: invalid JSON", { status: 400 });
+  // A wrongly typed field is refused before anything is read or written (#90): a
+  // client bug must never turn into `42` or `[object Object]` on disk.
+  const badField = (message: string) => new Response(`Bad request: ${message}`, { status: 400 });
   const decisionEventsFrom = (body: Record<string, unknown>): DecisionEvent[] | null => {
     if (body.decisionEvents === undefined) return [];
     if (!Array.isArray(body.decisionEvents) || !body.decisionEvents.every(isDecisionEvent)) return null;
@@ -362,12 +382,12 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // GET /api/doc → current snapshot. `path` lets the client key per-document
       // config (the spellIgnore lists) — existing consumers destructure past it.
       if (pathname === "/api/doc" && req.method === "GET") {
-        const content = await Bun.file(docPath).text();
+        const content = await readDocText(docPath);
         return Response.json({ content, version, path: docPath, serverEpoch });
       }
 
       if (pathname === "/api/provenance" && req.method === "GET") {
-        const content = await Bun.file(docPath).text();
+        const content = await readDocText(docPath);
         const parsedFrom = Number(url.searchParams.get("from") ?? 0);
         const parsedTo = Number(url.searchParams.get("to") ?? content.length);
         if (!Number.isInteger(parsedFrom) || !Number.isInteger(parsedTo)) {
@@ -391,13 +411,17 @@ export function startServer(opts: StartServerOptions): AcmServer {
         if (body.serverEpoch !== serverEpoch) {
           return Response.json({ conflict: "server-epoch" }, { status: 409 });
         }
-        const { content, baseVersion } = body as { content: string; baseVersion: number };
+        const { content, baseVersion } = body;
+        if (typeof content !== "string") return badField("content must be a string");
+        // Memory never holds a BOM (GET strips it, disk keeps the file's own: #92).
+        if (startsWithBomChar(content)) return badField("content must not start with a BOM");
+        if (!Number.isInteger(baseVersion)) return badField("baseVersion must be an integer");
         return withLock(async () => {
-          const base = contentByVersion.get(baseVersion);
+          const base = contentByVersion.get(baseVersion as number);
           if (base === undefined) {
             // Too far behind to reconstruct a merge base (rare given 500ms saves).
             // Refuse rather than guess; the editor adopts disk and the user re-applies.
-            const disk = await Bun.file(docPath).text();
+            const disk = await readDocText(docPath);
             return Response.json({ content: disk, version, conflict: "stale" }, { status: 409 });
           }
           const r = await commitWrite(content, base, undefined, {
@@ -525,7 +549,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const body = await jsonBody(req);
         if (!body) return badJson();
         if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
-        const { anchor, text, author } = body as { anchor: unknown; text: unknown; author: string };
+        const { anchor, text, author } = body as { anchor: unknown; text: unknown; author: unknown };
+        if (author !== undefined && typeof author !== "string") return badField("author must be a string");
+        const commentAuthor = authorFrom(body, "You"); // one resolved author for the marker and provenance
         if (typeof text !== "string" || !text) {
           return new Response("Bad request: text must be a non-empty string", { status: 400 });
         }
@@ -536,11 +562,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
           );
         }
         return withLock(async () => {
-          const before = await Bun.file(docPath).text();
+          const before = await readDocText(docPath);
           let next: string;
           if (typeof anchor === "string") {
             try {
-              next = addAnchoredComment(before, anchor, author, text);
+              next = addAnchoredComment(before, anchor, commentAuthor, text);
             } catch (err) {
               return Response.json(
                 { error: { code: "anchor-not-unique", message: (err as Error).message } },
@@ -551,10 +577,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
             if ((anchor as number) > before.length) {
               return new Response("Bad request: anchor offset is past the end of the document", { status: 400 });
             }
-            next = insertComment(before, anchor as number, text, author);
+            next = insertComment(before, anchor as number, text, commentAuthor);
           }
           const r = await commitWrite(next, before, undefined, {
-            author: author?.trim() || "You",
+            author: commentAuthor,
             source: "human",
             operation: "comment",
           });
@@ -575,17 +601,16 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const decisionEvents = decisionEventsFrom(body);
         if (!decisionEvents) return new Response("Bad request: invalid decision events", { status: 400 });
         if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
-        const { base, content } = body as { base: string; content: string };
+        const { base, content } = body;
+        if (typeof base !== "string" || typeof content !== "string") {
+          return badField("base and content must be strings");
+        }
+        if (startsWithBomChar(base) || startsWithBomChar(content)) {
+          return badField("base and content must not start with a BOM");
+        }
         return withLock(async () => {
-          const span = changedSpan(base, content);
-          if (humanSel && Date.now() - humanSel.at < PRESENCE_TTL_MS) {
-            const lo = Math.min(humanSel.from, humanSel.to);
-            const hi = Math.max(humanSel.from, humanSel.to);
-            if (span.from <= hi && lo <= span.to) {
-              return Response.json({ conflict: "cursor" }, { status: 409 });
-            }
-          }
           const r = await commitWrite(content, base, changedFragments(base, content), {
+            guardCursor: true, // checked under the file lock, on the write's own snapshot (#98, #115)
             author: authorFrom(body, "Agent"),
             source: "agent",
             operation: typeof body.operation === "string" && body.operation.trim()
@@ -631,8 +656,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
       if (pathname === "/api/presence" && req.method === "PUT") {
         const body = await jsonBody(req);
         if (!body) return badJson();
-        const { from, to } = body as { from: number; to: number };
-        humanSel = { from, to, at: Date.now() };
+        const { from, to } = body;
+        if (!Number.isInteger(from) || !Number.isInteger(to)) return badField("from and to must be integers");
+        humanSel = { from: from as number, to: to as number, at: Date.now() };
         return Response.json({ ok: true });
       }
 
@@ -735,7 +761,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
       void withLock(async () => {
         const file = Bun.file(docPath);
         if (!(await file.exists())) return; // mid-rename — wait for the next event
-        const content = await file.text();
+        const content = await readDocText(docPath);
         const hash = Bun.hash(content);
         if (hash === lastKnownHash) return; // our own write — drop the echo
         const before = contentByVersion.get(version) ?? content;
@@ -786,10 +812,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
   };
 }
 
-/** Read a file's text, or "" if it doesn't exist yet (a brand-new doc). */
+/** Read a file's text without a leading BOM (#92), or "" if it doesn't exist yet
+ *  (a brand-new doc). Sync: it seeds version 0 before the server starts. */
 function safeReadText(path: string): string {
   try {
-    return readFileSync(path, "utf8");
+    return readFileSync(path, "utf8").replace(/^\uFEFF/, "");
   } catch {
     return "";
   }

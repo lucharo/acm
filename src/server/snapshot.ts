@@ -18,13 +18,12 @@ const MAX_SNAPSHOTS = 50;
 export async function snapshot(docPath: string, trigger: string, ts = new Date()): Promise<string | null> {
   const file = Bun.file(docPath);
   if (!(await file.exists())) return null;
-  const content = await file.text();
   const dir = join(dirname(docPath), ".acm", "snapshots", basename(docPath));
   mkdirSync(dir, { recursive: true });
   selfIgnoreAcmDir(join(dirname(docPath), ".acm")); // invisible to enclosing repos
   const stamp = ts.toISOString().replace(/[:.]/g, "-");
   const out = join(dir, `${stamp}-${trigger}.md`);
-  await Bun.write(out, content);
+  await Bun.write(out, file); // the raw bytes (a BOM included, #92): a byte-exact backup
   prune(dir);
   return out;
 }

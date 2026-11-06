@@ -9,6 +9,7 @@
 import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
 import { liveInstances, probeInstanceState, isConnectionRefused } from "../server/instances";
+import { readDocText, writeDocText } from "../server/docText";
 import { listHistory, showVersion, recordHistory } from "../server/history";
 import { readConfig, updateConfig } from "../server/config";
 import {
@@ -251,14 +252,14 @@ export async function writeDirectWithAudit(
     documentUpdateLockPath(documentPath),
     `document ${documentPath}`,
     async () => {
-      const current = await Bun.file(documentPath).text();
+      const current = await readDocText(documentPath);
       const merged = merge3(proposed, before, current);
       if (!merged.clean) return { status: "conflict", content: current };
       const committedDecisionEvents = rebaseDecisionEventsForCommit(
         decisionEvents,
         { base: before, mine: proposed, theirs: current, committed: merged.result },
       );
-      await Bun.write(documentPath, merged.result);
+      await writeDocText(documentPath, merged.result);
       const recordCommittedProvenance = async () => {
         try {
           await recordProvenanceWrite(documentPath, current, merged.result, {
@@ -352,10 +353,10 @@ export async function writeDirectWithAudit(
 
         let restored = false;
         try {
-          const committed = await Bun.file(documentPath).text();
+          const committed = await readDocText(documentPath);
           const inverse = merge3(current, merged.result, committed);
           if (inverse.clean) {
-            await Bun.write(documentPath, inverse.result);
+            await writeDocText(documentPath, inverse.result);
             restored = true;
           }
         } catch {
@@ -444,10 +445,10 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       console.error(`acm restore: ${ref} not found in the history (see \`acm history\`)`);
       process.exit(1);
     }
-    const beforeRestore = await Bun.file(docPath).text();
+    const beforeRestore = await readDocText(docPath);
     const snap = await snapshot(docPath, "restore"); // keep the pre-restore state
     await recordHistory(docPath, "pre-restore"); // and record it in the history, so restore is reversible
-    await Bun.write(docPath, content);
+    await writeDocText(docPath, content);
     try {
       await recordProvenanceWrite(docPath, beforeRestore, content, {
         author: author.trim() || "Agent",
@@ -465,7 +466,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
 
   // ── Read-only verb ──────────────────────────────────────────────────────────
   if (cmd === "threads") {
-    const content = await Bun.file(docPath).text();
+    const content = await readDocText(docPath);
     // The human's persisted seen-set: the same ~/.config/acm/settings.json the GUI
     // hydrates from (GET /api/settings is a plain read of this file), so agents see
     // what the human has already read — no live server needed. Read-only here; only
@@ -492,7 +493,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   }
 
   // ── Mutating verbs: snapshot → transform → write → verify ─────────────────────
-  const before = await Bun.file(docPath).text();
+  const before = await readDocText(docPath);
   let after: string;
   let note: string;
   let decisionEvents: DecisionEvent[] = [];
@@ -922,7 +923,7 @@ async function runSpell(f: Flags, author: string): Promise<void> {
   const { variant, dictionary, spellIgnore } = await spellConfig();
   const ignored = spellIgnore[docPath] ?? [];
   const engine = loadSpellEngine(variant, dictionary, ignored);
-  const before = await Bun.file(docPath).text();
+  const before = await readDocText(docPath);
 
   if (sub === "list") {
     printFlagged(engine, before, f.json);

@@ -27,6 +27,10 @@ function lockPath(): string {
 }
 
 describe("cross-process file update lock", () => {
+  // Recovery and exclusion tests give the lock a 2 s budget: they check that the
+  // lock is reclaimed and never overlaps, not how fast, and a loaded Mac (load 60+)
+  // timed out the old 100 ms budget. Only the "live lock is not reclaimed" test
+  // keeps a short budget, because timing out is what it asserts.
   test("overlapping callers enter the critical section one at a time", async () => {
     const path = lockPath();
     const order: string[] = [];
@@ -66,7 +70,7 @@ describe("cross-process file update lock", () => {
       JSON.stringify({ version: 1, token: "dead", pid: 999_999, createdAt: 0 }),
     );
     const options = {
-      timeoutMs: 500,
+      timeoutMs: 2_000,
       pollMs: 2,
       staleMs: 0,
       isProcessAlive: (pid: number) => pid === process.pid,
@@ -102,7 +106,7 @@ describe("cross-process file update lock", () => {
       path,
       "test file",
       async () => "recovered",
-      { timeoutMs: 100, pollMs: 2, staleMs: 1 },
+      { timeoutMs: 2_000, pollMs: 2, staleMs: 1 },
     );
 
     expect(result).toBe("recovered");
@@ -183,7 +187,7 @@ describe("cross-process file update lock", () => {
       path,
       "test file",
       async () => "recovered",
-      { timeoutMs: 100, pollMs: 2, staleMs: 1 },
+      { timeoutMs: 2_000, pollMs: 2, staleMs: 1 },
     );
 
     expect(recovered).toBe("recovered");
@@ -207,7 +211,7 @@ describe("cross-process file update lock", () => {
           return "recovered";
         },
         {
-          timeoutMs: 100,
+          timeoutMs: 2_000,
           pollMs: 2,
           staleMs: 30_000,
           isProcessAlive: (pid) => pid === process.pid,
@@ -248,7 +252,7 @@ describe("cross-process file update lock", () => {
       "test file",
       async () => "recovered",
       {
-        timeoutMs: 100,
+        timeoutMs: 2_000,
         pollMs: 2,
         staleMs: 1,
         isProcessAlive: (pid) => pid === process.pid,

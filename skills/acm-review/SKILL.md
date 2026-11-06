@@ -137,7 +137,8 @@ The rule above is only about the REVERSE nesting (an inline suggestion inside a 
 ## Replying to a comment (threading)
 
 ACM threads comments by **adjacency**: a comment is a reply to the one before it when
-**only whitespace or highlight delimiters (`{==` / `==}`) separate them**. So to reply,
+**nothing separates them, or only highlight delimiters (`{==` / `==}`)**. A bare space or
+newline between `<<}` and `{>>` starts a new thread. So to reply,
 drop your comment **immediately after the target comment's closing `<<}`** — no nesting,
 no special syntax:
 
