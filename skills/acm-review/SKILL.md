@@ -164,7 +164,7 @@ and `@luis`'s question stays attached to the edited span when it's accepted.
 When one logical change lands in **more than one place**, group it — don't scatter
 the pieces as loose cards the human has to find and approve one by one. Tag each
 member with the same group id — `SUGGEST[g:<id>]: …`, authored with
-`acm suggest … --group <id>` (pick any short id, e.g. `mv1`). ACM then treats the set
+`acm suggest … --group <id>` (pick any short id with no spaces or `]`, e.g. `mv1`). ACM then treats the set
 as a unit: members carry a ⛓ chip, the human can **review the whole set in one place**,
 and applies or rejects ALL of them atomically (`acm accept --group <id>`, or the card's
 "Apply all"). Members can still be accepted individually; the group is the convenience,
@@ -355,12 +355,12 @@ acm reject "<phrase>"             # reject by proposed wording or deletion-card 
 acm accept --group <id>           # accept EVERY suggestion in the group, one atomic write
 acm reject --group <id>           # reject the whole group (keep every original span)
 acm resolve "<phrase>"            # strip the thread matching <phrase>
-acm reply --batch <edits.json>    # batch reply-append; [{id,match,insert}] where insert is VERBATIM markup (e.g. "{>>@you: …<<}"); idempotent (re-runs skip)
+acm reply --batch <edits.json>    # batch reply-append; [{id,match,insert}] where insert is VERBATIM markup (e.g. "{>>@you: …<<}"); idempotent (re-runs skip); exits 1 if any item failed (the good ones are still written)
 acm wrap [width]                  # hard-wrap prose (default 88 cols); markup-safe — constructs never split
 acm import <Google-Docs-URL|file.docx> [out.md]  # one-shot import with comments/tracked changes; validates the result
 acm heal                          # repair markup that renders raw (multi-block anchors, trapped/nested comments); snapshot-first
 acm history [n]                   # the doc's version history (auto-recorded by the editor; git shadow repo in .acm/)
-acm restore <sha>                 # restore the doc to a history version (snapshots + records the current state first)
+acm restore <sha>                 # restore the doc to a history version (snapshots + records the current state first; goes through the open editor like every verb)
 ```
 
 Typical loop: `acm threads --json` to see open threads → `acm reply` / `acm suggest`

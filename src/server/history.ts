@@ -111,21 +111,28 @@ export async function listHistory(docPath: string, n = 20): Promise<string[]> {
   return log.ok && log.out ? log.out.split("\n") : [];
 }
 
-/** The doc's content at `ref` (e.g. a short SHA from listHistory), or null. */
+/** The doc's content at `ref` (e.g. a short SHA from listHistory), or null. The
+ *  ref is resolved to a commit id first and only that id reaches the other git
+ *  calls, so an option-shaped ref (`--output=doc.md`) is never read as a git
+ *  option (#89). */
 export async function showVersion(docPath: string, ref: string): Promise<string | null> {
   if (!existsSync(gitDirFor(docPath))) return null;
+  if (ref.startsWith("-")) return null;
   const name = basename(docPath);
+  const commit = await git(docPath, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
+  if (!commit.ok || !/^[0-9a-f]{40,64}$/.test(commit.out)) return null;
+  const sha = commit.out;
   const touched = await git(docPath, [
     "diff-tree",
     "--root",
     "--no-commit-id",
     "--name-only",
     "-r",
-    ref,
+    sha,
     "--",
     name,
   ]);
   if (!touched.ok || !touched.out.split("\n").includes(name)) return null;
-  const show = await git(docPath, ["show", `${ref}:${name}`]);
+  const show = await git(docPath, ["show", `${sha}:${name}`]);
   return show.ok ? show.raw : null;
 }

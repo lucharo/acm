@@ -15,6 +15,7 @@ import {
   suggestionThreadEdit,
   resolveAnchorEdit,
   suggestionReplacement,
+  suggestionGroupId,
   applicableSuggestionIds,
   anchorHighlightFor,
   threadAnchorHighlightFor,
@@ -108,6 +109,14 @@ export function addComment(content: string, phrase: string, author: string, text
   return appendToThread(content, phrase, marker).content;
 }
 
+/** Refuse a group id the SUGGEST grammar can't read back (#105): the id must
+ *  round-trip through the parser, or the card isn't a suggestion at all. */
+function assertSuggestionGroupId(group: string): void {
+  if (suggestionGroupId(`SUGGEST[g:${group}]: x`) !== group) {
+    throw new Error(`invalid group id "${group}" (no spaces or "]")`);
+  }
+}
+
 /** Anchor a new SUGGEST: to the unique prose `span` — wraps it as
  *  `{==span==}{>>@author: SUGGEST: replacement<<}`. With `group`, the suggestion
  *  is tagged `SUGGEST[g:<group>]:` so the whole set can be accepted as one unit. */
@@ -118,6 +127,7 @@ export function addSuggestion(
   replacement: string,
   group?: string,
 ): string {
+  if (group) assertSuggestionGroupId(group);
   const at = uniqueProseIndex(content, span);
   const prefix = group ? `SUGGEST[g:${group}]: ` : "SUGGEST: ";
   const marker = `{==${span}==}` + formatComment(author, prefix + replacement);
@@ -158,6 +168,7 @@ export function addSuggestionsAt(
   author: string,
   group: string,
 ): { content: string; skipped: SuggestionAt[] } {
+  assertSuggestionGroupId(group);
   const skipped: SuggestionAt[] = [];
   const wrappable = spans.filter((s) => {
     const ok = wrappableSpan(content, s.from, s.to);

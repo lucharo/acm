@@ -6,6 +6,7 @@
 // edits and the HTTP API stay available for one-offs; these verbs are for the common
 // review ops so agents don't hand-roll a script per batch.
 
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { snapshot } from "../server/snapshot";
 import { liveInstances, probeInstanceState, isConnectionRefused } from "../server/instances";
@@ -74,17 +75,35 @@ interface Flags {
   reply: boolean;
   positional: string[];
 }
+const VALUE_FLAGS = ["doc", "author", "group", "batch"] as const;
+/** Flags take `--flag value` or `--flag=value` (#102). Any other `--word` is a
+ *  usage error, never a stray positional: a mistyped `--doc` must not silently
+ *  write to ACM_DOC instead. After a bare `--`, every word is positional, so
+ *  text that looks like an option (`acm suggest -- "--verbose" …`) still works. */
 function parseFlags(argv: string[]): Flags {
   const f: Flags = { json: false, reply: false, positional: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--doc") f.doc = argv[++i];
-    else if (a === "--author") f.author = argv[++i];
-    else if (a === "--group") f.group = argv[++i];
-    else if (a === "--batch") f.batch = argv[++i];
-    else if (a === "--json") f.json = true;
+    if (a === "--") {
+      f.positional.push(...argv.slice(i + 1));
+      break;
+    }
+    const eq = /^--([a-z]+)=([\s\S]*)$/.exec(a);
+    const name = eq ? eq[1] : a.startsWith("--") ? a.slice(2) : null;
+    if (name !== null && (VALUE_FLAGS as readonly string[]).includes(name)) {
+      const value = eq ? eq[2] : argv[++i];
+      // A missing value must not fall back to ACM_DOC / the default author.
+      if (value === undefined || value === "" || (!eq && (value.startsWith("--") || value === "-r"))) {
+        console.error(`acm: --${name} needs a value (--${name} <value> or --${name}=<value>)`);
+        process.exit(1);
+      }
+      f[name as (typeof VALUE_FLAGS)[number]] = value;
+    } else if (a === "--json") f.json = true;
     else if (a === "--reply" || a === "-r") f.reply = true;
-    else f.positional.push(a);
+    else if (/^--[a-z]/i.test(a)) {
+      console.error(`acm: unknown option "${a.split("=")[0]}" (options: --doc --author --group --batch --json --reply; put \`--\` before text that starts with --)`);
+      process.exit(1);
+    } else f.positional.push(a);
   }
   return f;
 }
@@ -126,15 +145,32 @@ async function docPathFrom(f: Flags): Promise<string> {
  *  timed out (rather than refused) still counts: the editor may be alive but slow
  *  (loaded machine), so the write must still route through it (or fail), never
  *  fall back to a direct write that could clobber unsaved human edits. */
-async function liveServerFor(docPath: string): Promise<{ port: number } | null> {
-  const owners = (await liveInstances()).filter((e) => e.doc === docPath);
-  let unreachable: number | null = null;
+async function liveServerFor(docPath: string): Promise<{ port: number; doc: string } | null> {
+  // Compare canonical paths (#99): a symlinked directory or a relative path that
+  // resolves through a link names the same file, and must still find its editor.
+  // `doc` is the editor's own spelling, which its routes check `documentPath` against.
+  const want = canonicalPath(docPath);
+  // An editor registered under the exact spelling asked for comes first, so two
+  // editors on one file through different links never route to the wrong one.
+  const owners = (await liveInstances())
+    .filter((e) => canonicalPath(e.doc) === want)
+    .sort((a, b) => Number(b.doc === docPath) - Number(a.doc === docPath));
+  let unreachable: { port: number; doc: string } | null = null;
   for (const e of owners) {
     const state = await probeInstanceState(e);
-    if (state === "live") return { port: e.port };
-    if (state === "unreachable" && unreachable === null) unreachable = e.port;
+    if (state === "live") return { port: e.port, doc: e.doc };
+    if (state === "unreachable" && unreachable === null) unreachable = { port: e.port, doc: e.doc };
   }
-  return unreachable === null ? null : { port: unreachable };
+  return unreachable;
+}
+
+/** The file's real path (symlinks resolved), or the resolved path when it doesn't exist. */
+function canonicalPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
 }
 
 async function persistDecisionEventsViaServer(
@@ -218,6 +254,7 @@ export type DirectWriteResult =
 export interface DirectWriteIdentity {
   author: string;
   operation?: string;
+  source?: "agent" | "restore";
 }
 
 export function directAuditFailureGuidance(result: DirectAuditFailure): string[] {
@@ -264,7 +301,7 @@ export async function writeDirectWithAudit(
         try {
           await recordProvenanceWrite(documentPath, current, merged.result, {
             author: identity.author.trim() || "Agent",
-            source: "agent",
+            source: identity.source ?? "agent",
             timestamp: new Date().toISOString(),
             operation: identity.operation ?? "agent edit",
           }, committedDecisionEvents);
@@ -445,22 +482,12 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       console.error(`acm restore: ${ref} not found in the history (see \`acm history\`)`);
       process.exit(1);
     }
-    const beforeRestore = await readDocText(docPath);
-    const snap = await snapshot(docPath, "restore"); // keep the pre-restore state
-    await recordHistory(docPath, "pre-restore"); // and record it in the history, so restore is reversible
-    await writeDocText(docPath, content);
-    try {
-      await recordProvenanceWrite(docPath, beforeRestore, content, {
-        author: author.trim() || "Agent",
-        source: "restore",
-        timestamp: new Date().toISOString(),
-        operation: `restore ${ref}`,
-      });
-    } catch {
-      // The restored Markdown remains authoritative if auxiliary provenance fails.
-    }
-    console.log(`acm restore: doc restored to ${ref}`);
-    if (snap) console.log(`  pre-restore backup → ${snap}`);
+    // Through commitWrite like every verb (#100): snapshot first, then the live
+    // editor's merge and cursor guard when one owns the doc, else the locked direct
+    // write. Recorded in the history first, so the restore itself is reversible.
+    const before = await readDocText(docPath);
+    await recordHistory(docPath, "pre-restore");
+    await commitWrite(docPath, before, content, "restore", `doc restored to ${ref}`, [], author, "restore");
     return;
   }
 
@@ -497,6 +524,8 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   let after: string;
   let note: string;
   let decisionEvents: DecisionEvent[] = [];
+  // A batch writes its good items, then exits non-zero if any item failed (#103).
+  let batchFailed = false;
   // Bare `reply` (no --batch) is a single-thread reply — the same operation as
   // `comment --reply`; dispatch both spellings to one implementation (`cmd` keeps
   // the invoked name for messages).
@@ -517,17 +546,21 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         const applied: string[] = [];
         const skipped: string[] = [];
         const errors: string[] = [];
-        for (const e of edits) {
+        for (const [index, e] of edits.entries()) {
+          const id = typeof e?.id === "string" && e.id ? e.id : `#${index + 1}`;
           try {
+            if (typeof e?.match !== "string" || typeof e?.insert !== "string")
+              throw new Error('needs string "match" and "insert"');
             const marker = canonicalizeCommentMarker(e.insert);
             const r = appendToThread(content, e.match, marker); // re-scans each time → offsets fresh
             content = r.content;
-            (r.skipped ? skipped : applied).push(e.id);
+            (r.skipped ? skipped : applied).push(id);
           } catch (err) {
-            errors.push(`${e.id}: ${(err as Error).message}`);
+            errors.push(`${id}: ${(err as Error).message}`);
           }
         }
         after = content;
+        batchFailed = errors.length > 0;
         note = `applied ${applied.length}/${edits.length}, skipped ${skipped.length} (idempotent), errors ${errors.length}`;
         if (errors.length) note += "\n  ✗ " + errors.join("\n  ✗ ");
         if (applied.length) note += `\n  applied: ${applied.join(", ")}`;
@@ -615,7 +648,13 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
         // so token ids / seen-state survive; structure lines stay verbatim.
         const width = f.positional[0] ? Number(f.positional[0]) : 88;
         if (!Number.isFinite(width) || width < 20) throw new Error("usage: acm wrap [width≥20] [--doc]");
-        after = hardWrap(before, width);
+        // hardWrap works on LF lines; keep a CRLF document CRLF (#106). Only the line
+        // breaks OUTSIDE markup are converted, so a comment body keeps its exact bytes
+        // (and its token id / seen key) whatever endings it holds.
+        // The convention is read from the prose only: a comment's own endings don't count.
+        const crlf = proseOnly(before).includes("\r\n");
+        const wrapped = hardWrap(crlf ? outsideMarkup(before, (t) => t.replaceAll("\r\n", "\n")) : before, width);
+        after = crlf ? outsideMarkup(wrapped, (t) => t.replaceAll("\n", "\r\n")) : wrapped;
         note = `hard-wrapped prose to ${width} columns`;
         break;
       }
@@ -628,6 +667,32 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
   }
 
   await commitWrite(docPath, before, after, cmd, note, decisionEvents, author);
+  if (batchFailed) process.exit(1);
+}
+
+/** `text` with every CriticMarkup construct removed: the prose between them. */
+function proseOnly(text: string): string {
+  let out = "";
+  let at = 0;
+  for (const t of scanTokens(text)) {
+    if (t.from < at) continue;
+    out += text.slice(at, t.from);
+    at = t.to;
+  }
+  return out + text.slice(at);
+}
+
+/** `text` with `fn` applied to every stretch outside CriticMarkup constructs;
+ *  the constructs themselves are copied byte for byte. */
+function outsideMarkup(text: string, fn: (prose: string) => string): string {
+  let out = "";
+  let at = 0;
+  for (const t of scanTokens(text)) {
+    if (t.from < at) continue; // inside a construct already copied
+    out += fn(text.slice(at, t.from)) + t.raw;
+    at = t.to;
+  }
+  return out + fn(text.slice(at));
 }
 
 /** Snapshot → write (through a live editor's 3-way merge if one's open, else direct)
@@ -642,6 +707,7 @@ async function commitWrite(
   note: string,
   decisionEvents: DecisionEvent[] = [],
   author = "Agent",
+  source: "agent" | "restore" = "agent",
 ): Promise<void> {
   if (after === before) {
     console.log(`acm ${cmd}: no change. ${note}`);
@@ -662,7 +728,7 @@ async function commitWrite(
       after,
       decisionEvents,
       undefined,
-      { author, operation: cmd },
+      { author, operation: cmd, source },
     );
     if (result.status === "written") {
       final = result.content;
@@ -683,10 +749,23 @@ async function commitWrite(
     if (snap) console.error(`  pre-edit backup → ${snap}`);
     process.exit(1);
   };
+  // The editor may still apply a write whose response never arrived, so the outcome
+  // is UNKNOWN (#101): a blind retry of `suggest`/`accept` would fail on its own result.
+  const reportUnknownOutcome = (reason: string): never => {
+    console.error(
+      `acm ${cmd}: the ACM editor on :${live?.port} did not respond to the write ` +
+        `(${reason}) — NOT falling back to a direct write, which could clobber unsaved ` +
+        `edits in it. Outcome unknown: the editor may still have applied it. Check with ` +
+        `\`acm threads\` (or re-read the doc) before retrying. If that editor is actually ` +
+        `gone, remove its :${live?.port} entry from ~/.config/acm/instances.json.`,
+    );
+    if (snap) console.error(`  (pre-edit backup → ${snap})`);
+    process.exit(1);
+  };
   if (live) {
     if (
       decisionEvents.length > 0 &&
-      !(await persistDecisionEventsViaServer(live.port, docPath, []))
+      !(await persistDecisionEventsViaServer(live.port, live.doc, []))
     ) {
       console.error(
         `acm ${cmd}: the ACM editor on :${live.port} does not support durable decision history. ` +
@@ -705,9 +784,10 @@ async function commitWrite(
         body: JSON.stringify({
           base: before,
           content: after,
-          documentPath: docPath,
+          documentPath: live.doc,
           author,
           operation: cmd,
+          source,
           decisionEvents,
         }),
         // Env override exists for the test suite (a black-holed-port test shouldn't
@@ -728,17 +808,24 @@ async function commitWrite(
       // Timed out / indeterminate — the editor may be ALIVE but slow or blocked, and
       // may hold unsaved human edits. Never direct-write over a possibly-live editor:
       // fail loudly instead (the same never-fake-success stance as the skew case below).
-      console.error(
-        `acm ${cmd}: the ACM editor on :${live.port} did not respond to the write ` +
-          `(${(failure as Error)?.message ?? "no response"}) — NOT falling back to a direct ` +
-          `write, which could clobber unsaved edits in it. Nothing written. Retry in a moment; ` +
-          `if that editor is actually gone, remove its :${live.port} entry from ` +
-          `~/.config/acm/instances.json.`,
-      );
-      if (snap) console.error(`  (pre-edit backup → ${snap})`);
-      process.exit(1);
+      reportUnknownOutcome((failure as Error)?.message ?? "no response");
     } else {
-      const body = (await res.json().catch(() => null)) as
+      // Read the body as text first: a transport failure or timeout while reading it
+      // is the same unknown outcome (the write may have committed, #101), while a body
+      // that isn't JSON is the older-build case handled below.
+      let raw = "";
+      try {
+        raw = await res.text();
+      } catch (err) {
+        return reportUnknownOutcome((err as Error)?.message ?? "response interrupted");
+      }
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // not an agent-write response: handled by the version-skew branch below
+      }
+      const body = parsed as
         | {
             version?: number;
             content?: string;
@@ -769,14 +856,14 @@ async function commitWrite(
           body.audit.code === "decision-persistence" &&
           typeof body.content === "string"
         ) {
-          if (await persistDecisionEventsViaServer(live.port, docPath, decisionEvents)) {
+          if (await persistDecisionEventsViaServer(live.port, live.doc, decisionEvents)) {
             final = body.content;
             viaEditorPort = live.port;
             auditRecovered = true;
           } else {
             const restored = await rollBackUnauditedLiveWrite(
               live.port,
-              docPath,
+              live.doc,
               before,
               after,
               body.content,
@@ -811,10 +898,10 @@ async function commitWrite(
         !auditRecovered &&
         !decisionEventsAcknowledged(decisionEvents, body.audit)
       ) {
-        if (!(await persistDecisionEventsViaServer(live.port, docPath, decisionEvents))) {
+        if (!(await persistDecisionEventsViaServer(live.port, live.doc, decisionEvents))) {
           const restored =
             typeof body.content === "string" &&
-            (await rollBackUnauditedLiveWrite(live.port, docPath, before, after, body.content));
+            (await rollBackUnauditedLiveWrite(live.port, live.doc, before, after, body.content));
           console.error(
             `acm ${cmd}: the editor changed the document but did not persist decision history.`,
           );

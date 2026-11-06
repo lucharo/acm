@@ -612,7 +612,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
           const r = await commitWrite(content, base, changedFragments(base, content), {
             guardCursor: true, // checked under the file lock, on the write's own snapshot (#98, #115)
             author: authorFrom(body, "Agent"),
-            source: "agent",
+            source: body.source === "restore" ? "restore" : "agent", // `acm restore` (#100)
             operation: typeof body.operation === "string" && body.operation.trim()
               ? body.operation.trim()
               : "agent edit",

@@ -41,7 +41,7 @@ describe("audit: wrapping a span", () => {
     expect(out === null || suggestCards(out).length === 1).toBe(true);
   });
 
-  test.failing("#105 a group id the SUGGEST grammar can't parse is refused, not written as a dead card", () => {
+  test("#105 a group id the SUGGEST grammar can't parse is refused, not written as a dead card", () => {
     let out: string | null = null;
     try {
       out = addSuggestion("Alpha beta gamma.\n", "beta", "claude", "BETA", "mv 1");

@@ -178,7 +178,7 @@ describe("audit: CLI routing to a live instance", () => {
     if (!restoreRef) throw new Error("audit fixture: no history entry for the restore test");
   });
 
-  test.failing("#99 a symlinked spelling of a live document still routes through its server", async () => {
+  test("#99 a symlinked spelling of a live document still routes through its server", async () => {
     const real = mkdtempSync(join(tmpdir(), "acm-audit-real-"));
     const alias = join(mkdtempSync(join(tmpdir(), "acm-audit-alias-")), "link");
     symlinkSync(real, alias);
@@ -191,7 +191,7 @@ describe("audit: CLI routing to a live instance", () => {
     expect(r.out).toContain("human's cursor"); // refused by the guard, not by a timeout
   }, CLI_TIMEOUT);
 
-  test.failing("#100 acm restore on a live document goes through the server (refused under the human's cursor)", async () => {
+  test("#100 acm restore on a live document goes through the server (refused under the human's cursor)", async () => {
     const b = await boot(restoreSeed, restoreDoc);
     const ref = restoreRef;
     const edited = "Second version typed by the human.\n";
@@ -204,7 +204,7 @@ describe("audit: CLI routing to a live instance", () => {
 });
 
 describe("audit: CLI verbs", () => {
-  test.failing("#89 acm restore never passes a ref to git as an option (no truncation)", async () => {
+  test("#89 acm restore never passes a ref to git as an option (no truncation)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acm-audit-restore-"));
     const doc = join(dir, "r.md");
     writeFileSync(doc, "Hello world, keep me.\nLine two.\n");
@@ -213,7 +213,7 @@ describe("audit: CLI verbs", () => {
     expect(readFileSync(doc, "utf8")).toBe("Hello world, keep me.\nLine two.\n");
   }, CLI_TIMEOUT);
 
-  test.failing("#102 `--doc=<file>` is honoured or refused, never ignored for another document", async () => {
+  test("#102 `--doc=<file>` is honoured or refused, never ignored for another document", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acm-audit-flags-"));
     const seed = "Intro {==one==}{>>@luis: hmm<<} tail.\n";
     writeFileSync(join(dir, "named.md"), seed);
@@ -223,7 +223,7 @@ describe("audit: CLI verbs", () => {
     expect(r.code !== 0 || readFileSync(join(dir, "named.md"), "utf8") !== seed).toBe(true);
   }, CLI_TIMEOUT);
 
-  test.failing("#103 `acm reply --batch` exits non-zero when an item fails", async () => {
+  test("#103 `acm reply --batch` exits non-zero when an item fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acm-audit-batch-"));
     const doc = join(dir, "b.md");
     writeFileSync(doc, "Intro {==one==}{>>@luis: hmm<<} tail.\n");
@@ -234,7 +234,7 @@ describe("audit: CLI verbs", () => {
     expect((await cli(["reply", "--batch", join(dir, "e.json"), "--doc", doc])).code).not.toBe(0);
   }, CLI_TIMEOUT);
 
-  test.failing("#106 acm wrap keeps a CRLF document's line endings CRLF", async () => {
+  test("#106 acm wrap keeps a CRLF document's line endings CRLF", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acm-audit-wrap-"));
     const doc = join(dir, "w.md");
     writeFileSync(doc, "Intro line.\r\n\r\nThe quick brown fox jumps over the lazy dog again and again and again forever.\r\n");
