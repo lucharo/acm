@@ -123,7 +123,7 @@ describe("audit: PUT /api/doc input validation", () => {
 });
 
 describe("audit: save protocol", () => {
-  test.failing("#88 after a same-line conflict with an agent write, the human's edit still reaches disk", async () => {
+  test("#88 after a same-line conflict with an agent write, the human's edit still reaches disk", async () => {
     const seed = "alpha line\nbeta line\n";
     const b = await boot(seed);
     expect(await agentWrite(b, seed, "alpha line{>>@claude: note<<}\nbeta line\n")).toBe(200);

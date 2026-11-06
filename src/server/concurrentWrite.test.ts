@@ -367,22 +367,20 @@ describe("#38 — CLI never fakes success against a non-agent-write server (vers
   );
 });
 
-describe("#38 — a true same-line overlap is an honest conflict, human never loses", () => {
-  test("stale save onto the line the agent changed → 409, then human wins on re-save", async () => {
+describe("#38/#88 — a same-line clash keeps both writers, the human's save never stalls", () => {
+  test("a stale save onto the line the agent changed writes both the card and the human's words", async () => {
     const { url, docPath } = await boot(SEED);
     const aw = await agentWrite(url, SEED, CARD); // card on line 2
     expect(aw.status).toBe(200);
 
     // Human had edited the SAME line 2 from the original base (stale baseVersion 0).
     const humanLine2 = "Para one.\n\nPara two is RIGHT HERE now.\n";
-    const conflict = await put(url, humanLine2, 0);
-    expect(conflict.status).toBe(409);
-    expect(conflict.body.conflict).toBe("overlap");
-    expect(await disk(docPath)).toContain("SUGGEST: present"); // agent's card NOT clobbered by the stale save
+    const saved = await put(url, humanLine2, 0);
 
-    // The human adopts the server version and saves deliberately → their text wins.
-    const win = await put(url, humanLine2, conflict.body.version);
-    expect(win.status).toBe(200);
-    expect(await disk(docPath)).toBe(humanLine2); // human content never lost
+    expect(saved.status).toBe(200);
+    const onDisk = await disk(docPath);
+    expect(saved.body.content).toBe(onDisk);
+    expect(onDisk).toContain("SUGGEST: present"); // agent's card NOT clobbered by the stale save
+    expect(onDisk).toContain("RIGHT HERE now"); // human content never lost
   });
 });

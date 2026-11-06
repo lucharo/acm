@@ -10,12 +10,15 @@
 // never garble the inside of a line by interleaving two edits — the failure mode
 // that silently corrupts prose. The price is that two edits to the SAME line read
 // as a conflict even if textually disjoint; that is SAFE (a false conflict loses
-// nothing) and acceptable.
+// nothing) for an agent write, which retries. The human editor's save cannot
+// retry its way out of one, so it uses `mergeKeepingBoth` (#88).
 //
 // Used identically on both ends (it's pure, isomorphic TS): the server merges every
 // write through it (server.ts), and the editor uses it to rebase its in-flight
 // buffer onto a server-merged result without dropping the keystrokes typed during
 // the save round-trip (useDocSync.ts).
+
+import { scanTokens } from "./criticmarkup";
 
 /** Split preserving exact bytes: `s.split("\n")` ↔ `parts.join("\n")` round-trips
  *  perfectly, including a trailing newline (→ a final "" element) or its absence. */
@@ -183,10 +186,19 @@ export function merge3(mine: string, base: string, theirs: string): MergeResult 
   if (base === theirs) return { clean: true, result: mine }; // only `mine` moved
   if (base === mine) return { clean: true, result: theirs }; // only `theirs` moved
 
-  const a = lines(mine);
-  const o = lines(base);
-  const b = lines(theirs);
+  const m = mergeTokens(lines(mine), lines(base), lines(theirs), () => null);
+  return { clean: m.clean, result: m.tokens.join("\n") };
+}
 
+/** diff3 over any token arrays. Each unstable region (both sides changed it,
+ * differently) goes to `onConflict`: its tokens resolve it, `null` leaves it a
+ * conflict (mine's tokens stand in, and the result is not clean). */
+function mergeTokens(
+  a: string[],
+  o: string[],
+  b: string[],
+  onConflict: (mine: string[], base: string[], theirs: string[]) => string[] | null,
+): { clean: boolean; tokens: string[] } {
   let clean = true;
   const merged: string[] = [];
   for (const r of regions(a, o, b)) {
@@ -205,11 +217,117 @@ export function merge3(mine: string, base: string, theirs: string): MergeResult 
     } else if (sameLines(bSlice, oSlice)) {
       merged.push(...aSlice); // b == base here → only a really changed
     } else {
-      clean = false;
-      merged.push(...aSlice); // tentative only; result is ignored when !clean
+      const resolved = onConflict(aSlice, oSlice, bSlice);
+      if (resolved === null) {
+        clean = false;
+        merged.push(...aSlice); // tentative only; result is ignored when !clean
+      } else {
+        merged.push(...resolved);
+      }
     }
   }
-  return { clean, result: merged.join("\n") };
+  return { clean, tokens: merged };
+}
+
+/** Words and whitespace runs, with each CriticMarkup construct ONE token, so
+ * an inline merge never splits a word or moves prose into (or out of) a
+ * comment or change. */
+function inlineTokens(text: string): string[] {
+  const words = (part: string) => part.split(/(\s+)/).filter((token) => token !== "");
+  const tokens: string[] = [];
+  let at = 0;
+  for (const construct of scanTokens(text)) {
+    if (construct.from < at) continue; // nested inside the previous construct
+    tokens.push(...words(text.slice(at, construct.from)));
+    tokens.push(text.slice(construct.from, construct.to));
+    at = construct.to;
+  }
+  tokens.push(...words(text.slice(at)));
+  return tokens;
+}
+
+// The word-level merge of a clashing region is quadratic in its length; past
+// this many characters per side it is skipped and both versions are kept.
+const MAX_INLINE_MERGE_CHARS = 4000;
+
+/**
+ * The human editor's save (#88): a 3-way merge that always produces a document
+ * keeping BOTH sides, so a same-line clash with an agent write can never stall
+ * the editor's saves. Lines merge as in merge3. A clashing line region is then
+ * merged word by word (review markup kept whole): edits to different words both apply, and two
+ * insertions at the same point keep the agent's text first (a comment attaches
+ * to the text before it, the human's words follow). Only when both rewrote the
+ * same words are both versions of the lines kept, the human's first, for
+ * the human to tidy. Nothing either side wrote is dropped.
+ */
+export function mergeKeepingBoth(mine: string, base: string, theirs: string): string {
+  const m = mergeTokens(units(mine), units(base), units(theirs), (aUnits, oUnits, bUnits) => {
+    // A save re-sent after its first merge already landed: theirs holds mine.
+    if (containsRun(bUnits, aUnits)) return bUnits;
+    // Whole lines inserted at one place: keep them as lines, the agent's first.
+    if (oUnits.length === 0) return [...bUnits, ...aUnits];
+    // Theirs kept these base lines and only added lines before or after them
+    // (an earlier keep-both): mine's edit applies to those lines.
+    if (bUnits.length > oUnits.length) {
+      if (containsRunAt(bUnits, oUnits, 0)) return [...aUnits, ...bUnits.slice(oUnits.length)];
+      if (containsRunAt(bUnits, oUnits, bUnits.length - oUnits.length)) {
+        return [...bUnits.slice(0, bUnits.length - oUnits.length), ...aUnits];
+      }
+    }
+    const a = aUnits.join("\n");
+    const o = oUnits.join("\n");
+    const b = bUnits.join("\n");
+    if (Math.max(a.length, o.length, b.length) <= MAX_INLINE_MERGE_CHARS) {
+      const inline = mergeTokens(inlineTokens(a), inlineTokens(o), inlineTokens(b), (ai, oi, bi) => {
+        if (oi.length !== 0) return null;
+        return containsRun(bi, ai) ? bi : [...bi, ...ai];
+      });
+      if (inline.clean) return [inline.tokens.join("")];
+    }
+    return [...aUnits, ...bUnits];
+  });
+  return m.tokens.join("\n");
+}
+
+/** Lines, except that a CriticMarkup construct spanning lines stays in ONE
+ * unit (with every line it shares with another such construct), so no merge
+ * region can split markup between two kept versions. */
+function units(text: string): string[] {
+  const lineList = lines(text);
+  const lineOf = (pos: number) => {
+    let count = 0;
+    for (let i = text.indexOf("\n"); i !== -1 && i < pos; i = text.indexOf("\n", i + 1)) count++;
+    return count;
+  };
+  const joins: Array<[number, number]> = [];
+  for (const construct of scanTokens(text)) {
+    if (!text.slice(construct.from, construct.to).includes("\n")) continue;
+    const span: [number, number] = [lineOf(construct.from), lineOf(construct.to)];
+    const last = joins.at(-1);
+    if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+    else joins.push(span);
+  }
+  const out: string[] = [];
+  let line = 0;
+  for (const [start, end] of joins) {
+    out.push(...lineList.slice(line, start));
+    out.push(lineList.slice(start, end + 1).join("\n"));
+    line = end + 1;
+  }
+  out.push(...lineList.slice(line));
+  return out;
+}
+
+function containsRunAt(haystack: string[], needle: string[], at: number): boolean {
+  return at >= 0 && at + needle.length <= haystack.length && needle.every((unit, k) => haystack[at + k] === unit);
+}
+
+function containsRun(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0) return false;
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    if (containsRunAt(haystack, needle, i)) return true;
+  }
+  return false;
 }
 
 /**

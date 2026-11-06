@@ -21,7 +21,7 @@ import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
 import { addAnchoredComment } from "./src/lib/agentEdits";
-import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
+import { merge3, mergeKeepingBoth, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
@@ -204,6 +204,11 @@ export function startServer(opts: StartServerOptions): AcmServer {
     decisionEvents?: readonly DecisionEvent[];
     /** Refuse a write that lands on the human's live caret (agent writes). */
     guardCursor?: boolean;
+    /** The human editor's save keeps both sides of a same-line clash instead of
+     * refusing it (#88): a refused editor save is re-sent on the same base
+     * forever, so nothing typed afterwards would ever reach disk. Agent writes
+     * still get "overlap" and retry. */
+    keepBothOnOverlap?: boolean;
   }
 
   /** Does the change from `theirs` to `next` touch the human's live caret? Both
@@ -233,11 +238,17 @@ export function startServer(opts: StartServerOptions): AcmServer {
           toWrite = mine; // nobody moved under us (or we'd write exactly what's there)
         } else {
           const m = merge3(mine, base, theirs);
-          if (!m.clean) return { ok: false, reason: "overlap", content: theirs, version };
-          if (guards && !guards.every((g) => m.result.includes(g))) {
+          let merged = m.result;
+          if (!m.clean) {
+            if (!identity.keepBothOnOverlap) {
+              return { ok: false, reason: "overlap", content: theirs, version };
+            }
+            merged = mergeKeepingBoth(mine, base, theirs);
+          }
+          if (guards && !guards.every((g) => merged.includes(g))) {
             return { ok: false, reason: "containment", content: theirs, version };
           }
-          toWrite = m.result;
+          toWrite = merged;
         }
         if (identity.guardCursor && touchesCaret(theirs, toWrite)) {
           return { ok: false, reason: "cursor", content: theirs, version };
@@ -429,6 +440,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
             source: "human",
             operation: "edit",
             decisionEvents,
+            keepBothOnOverlap: true,
           });
           if (!r.ok) return Response.json({ content: r.content, version: r.version, conflict: r.reason }, { status: 409 });
           try {

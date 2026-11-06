@@ -12,7 +12,7 @@
 // fast-path-clobbering. We only advance on branches where the buffer is, or is made,
 // a true descendant of the new version.
 
-import { merge3 } from "../lib/merge";
+import { mergeKeepingBoth } from "../lib/merge";
 
 export type SaveDecision =
   /** Response wasn't our protocol (non-JSON / missing version). Keep pending, don't advance. */
@@ -43,7 +43,8 @@ export function reconcileSave(args: {
   if (typeof args.version !== "number") return { kind: "failed" };
   const version = args.version;
 
-  // A true conflict from the server (overlap / cursor / stale / containment). The server
+  // A true conflict from the server (stale base, server epoch; a same-line clash
+  // no longer 409s a human save, the server keeps both sides, #88). The server
   // wrote nothing; our buffer still descends from the version we sent against, so DON'T
   // advance — let the next save re-merge against disk rather than fast-path over it.
   if (status === 409) return { kind: "conflict" };
@@ -62,8 +63,7 @@ export function reconcileSave(args: {
     return { kind: "reflush", version };
   }
   // The server merged in a concurrent (agent) write. Rebase the newer keystrokes onto it
-  // with the same primitive the server uses. Disjoint → both survive; same-line → conflict,
-  // and we must NOT advance (the buffer lacks the merged-in content).
-  const m = merge3(buffer, sent, serverContent!);
-  return m.clean ? { kind: "rebased", version, pending: m.result } : { kind: "conflict" };
+  // with the same keep-both merge the server uses for a human save (#88): the result
+  // descends from the server's version, so advancing is safe and nothing is re-sent.
+  return { kind: "rebased", version, pending: mergeKeepingBoth(buffer, sent, serverContent!) };
 }

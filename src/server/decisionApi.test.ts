@@ -526,9 +526,11 @@ describe("decision HTTP protocol", () => {
     const first = await putDoc(url, { content: "server\n", baseVersion: 0 });
     expect(first.status).toBe(200);
 
+    // A base the server no longer holds is refused as stale (a same-line clash
+    // with a known base now merges, #88).
     const conflict = await putDoc(url, {
       content: "client\n",
-      baseVersion: 0,
+      baseVersion: 99,
       documentPath: docPath,
       decisionEvents: [event],
     });

@@ -14,8 +14,13 @@ the agent is told to retry rather than silently merged into the human's hands.
 - Nothing may write the doc bytes directly while an instance owns it — new
   write paths must go through the server's merge, or they reintroduce the
   clobber bug.
-- A write can be refused (conflict / cursor guard); agent tooling must treat
-  "not applied, retry" as a normal outcome, not an error.
+- An agent write can be refused (conflict / cursor guard); agent tooling must
+  treat "not applied, retry" as a normal outcome, not an error.
+- The human editor's save is never refused for a same-line clash (#88): a
+  refused save would be re-sent on the same base forever and nothing typed
+  afterwards would reach disk. The server keeps both sides instead, merging
+  inside the line where the edits don't touch and otherwise keeping both
+  versions of the lines, the human's first (`mergeKeepingBoth`).
 - If the server answers but doesn't speak the merge protocol (an older build),
   callers fail loudly rather than falling back to a direct write — a live
   editor may hold unsaved human edits.

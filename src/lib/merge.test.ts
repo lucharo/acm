@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { merge3, changedSpan, changedFragments, textChangeHunks } from "./merge";
+import { merge3, mergeKeepingBoth, changedSpan, changedFragments, textChangeHunks } from "./merge";
 
 // Byte-preservation is the whole point. This helper asserts a clean merge AND that
 // the round-trip is lossless: both sides' changes are present in the result.
@@ -232,5 +232,85 @@ describe("textChangeHunks — bounded provenance diff", () => {
         afterTo: after.lastIndexOf("B") + 1,
       },
     ]);
+  });
+});
+
+describe("mergeKeepingBoth — a human save never stalls on a same-line clash (#88)", () => {
+  test("an agent card and the human's words at the same point both survive, card first", () => {
+    expect(
+      mergeKeepingBoth(
+        "alpha line HUMAN\nbeta line\n",
+        "alpha line\nbeta line\n",
+        "alpha line{>>@claude: note<<}\nbeta line\n",
+      ),
+    ).toBe("alpha line{>>@claude: note<<} HUMAN\nbeta line\n");
+  });
+
+  test("edits at different points of one line merge inside the line", () => {
+    expect(
+      mergeKeepingBoth(
+        "The quick brown fox jumps.",
+        "The quick fox jumps.",
+        "The quick fox jumps.{>>@c: tense?<<}",
+      ),
+    ).toBe("The quick brown fox jumps.{>>@c: tense?<<}");
+  });
+
+  test("review markup is one unit: the human's letters never land inside an agent's comment", () => {
+    expect(mergeKeepingBoth("aXbc", "abc", "a{>>@c: b<<}bc")).toBe("aXbc\na{>>@c: b<<}bc");
+    // Edits to neighbouring words are a clash too (conservative, as in merge3).
+    expect(mergeKeepingBoth("Run it now", "Run it", "Run {==it==}{>>@c: what?<<}")).toBe(
+      "Run it now\nRun {==it==}{>>@c: what?<<}",
+    );
+  });
+
+  test("two different rewrites of the same words keep both lines, the human's first", () => {
+    expect(mergeKeepingBoth("a X c\nend", "a b c\nend", "a Y c\nend")).toBe("a X c\na Y c\nend");
+  });
+
+  test("a multi-line review construct is never split between the two versions", () => {
+    expect(mergeKeepingBoth("{++human\nbody++}", "{++old\nbody++}", "{++agent\nbody++}")).toBe(
+      "{++human\nbody++}\n{++agent\nbody++}",
+    );
+  });
+
+  test("unchanged documents with multi-line markup come back byte for byte", () => {
+    for (const doc of ["", "\n", "x\n{++a\nb++}\ny\n", "{++a\nb++}{>>@c: note\nmore<<}\n\nz", "a {==b\nc==}{>>@d: e<<} f\n"]) {
+      expect(mergeKeepingBoth(doc, doc, doc)).toBe(doc);
+    }
+  });
+
+  test("two lines inserted at the same place stay two lines, the agent's first", () => {
+    expect(mergeKeepingBoth("a\nhuman\nb", "a\nb", "a\nagent\nb")).toBe("a\nagent\nhuman\nb");
+  });
+
+  test("re-sending the same save does not duplicate what was kept", () => {
+    const first = mergeKeepingBoth("human", "old", "agent");
+    expect(first).toBe("human\nagent");
+    expect(mergeKeepingBoth("human", "old", first)).toBe(first);
+  });
+
+  test("two multi-line constructs on one line stay whole when the second is rewritten twice", () => {
+    const base = "{++a\nb++}{--c\nd--}";
+    const merged = mergeKeepingBoth("{++a\nb++}{--human\nd--}", base, "{++a\nb++}{--agent\nd--}");
+    expect(merged).toBe("{++a\nb++}{--human\nd--}\n{++a\nb++}{--agent\nd--}");
+  });
+
+  test("re-sending a save whose inserted line was already kept adds nothing", () => {
+    const first = mergeKeepingBoth("a\nhuman\nb", "a\nb", "a\nagent\nb");
+    expect(mergeKeepingBoth("a\nhuman\nb", "a\nb", first)).toBe(first);
+    const inline = mergeKeepingBoth("one two!", "one two", "one two{>>@c: x<<}");
+    expect(mergeKeepingBoth("one two!", "one two", inline)).toBe(inline);
+  });
+
+  test("typing at the end of a line the agent's version was appended to edits that line", () => {
+    expect(mergeKeepingBoth("a X c!", "a X c", "a X c\na Y c")).toBe("a X c!\na Y c");
+  });
+
+  test("disjoint line edits merge exactly as merge3 does", () => {
+    const mine = "one!\ntwo\nthree";
+    const base = "one\ntwo\nthree";
+    const theirs = "one\ntwo\nthree?";
+    expect(mergeKeepingBoth(mine, base, theirs)).toBe(merge3(mine, base, theirs).result);
   });
 });

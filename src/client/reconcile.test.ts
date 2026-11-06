@@ -44,15 +44,27 @@ describe("reconcileSave — server merged in a concurrent agent write", () => {
 });
 
 describe("reconcileSave — the HIGH the 3rd-pass review found: never advance on conflict", () => {
-  test("kept typing on the SAME line as the merged-in card → conflict, NO version", () => {
+  test("kept typing on the SAME line as the merged-in card → rebased with both kept (#88)", () => {
     const sent = "the quick fox\n";
     const buffer = "the QUICK SWIFT fox\n"; // user rewrote the same line
     const serverContent = "the quick {==fox==}{>>@a: SUGGEST: hare<<}\n"; // agent card on that line
     const d = reconcileSave({ status: 200, version: 9, serverContent, sent, buffer });
-    expect(d.kind).toBe("conflict");
-    // No `version` field → the caller keeps currentVersion at baseVersion → next save
-    // re-merges server-side instead of fast-path-overwriting the card.
-    expect("version" in d).toBe(false);
+    expect(d).toEqual({
+      kind: "rebased",
+      version: 9,
+      pending: "the QUICK SWIFT fox\nthe quick {==fox==}{>>@a: SUGGEST: hare<<}\n",
+    });
+  });
+
+  test("typing during a save the server merged keeps both, without re-sending the old line (#88)", () => {
+    const d = reconcileSave({
+      status: 200,
+      version: 3,
+      serverContent: "a X c\na Y c",
+      sent: "a X c",
+      buffer: "a X! c",
+    });
+    expect(d).toEqual({ kind: "rebased", version: 3, pending: "a X! c\na Y c" });
   });
 
   test("server 409 (overlap/cursor/stale) → conflict, NO version (Codex stale-clobber fix)", () => {
