@@ -109,8 +109,7 @@ _Avoid_: content, body text.
 
 **Page view**:
 The document rendered as A4 sheets: the sheet styling, the page-break markers,
-and the page tally are one concept. (The UI still splits them into two settings —
-`page` and `pageBreaks`; merging them is tracked in #40.)
+and the page tally are one concept and one setting (`page`, on by default).
 _Avoid_: page breaks (as a separate setting), sheet mode.
 
 **Page**:

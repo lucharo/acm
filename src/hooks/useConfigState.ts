@@ -6,7 +6,7 @@
 // the server isn't overwritten before it's been read.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FONT_STACKS, loadSettings } from "../lib/viewSettings";
+import { FONT_STACKS, loadSettings, withoutRetiredSettings } from "../lib/viewSettings";
 import type { ViewSettings } from "../lib/viewSettings";
 import {
   legacySeenQuarantinePatch,
@@ -42,7 +42,7 @@ export function reconcileViewSettings(
   localDirty: boolean,
 ): ViewSettings {
   if (localDirty) return local;
-  return server ? { ...local, ...server } : local;
+  return server ? { ...local, ...withoutRetiredSettings(server) } : local;
 }
 
 const SETTINGS_DIRTY_KEY = "acm-settings-dirty";

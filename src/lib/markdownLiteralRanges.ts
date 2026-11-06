@@ -12,7 +12,8 @@ export interface SourceRange {
 }
 
 const markdownParser = baseMarkdownParser.configure(GFM);
-const LITERAL_NODES = new Set([
+/** Lezer node names whose bytes are literal (code, HTML, URLs, escapes). */
+export const LITERAL_NODES: ReadonlySet<string> = new Set([
   "FencedCode",
   "CodeBlock",
   "InlineCode",

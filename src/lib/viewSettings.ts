@@ -11,10 +11,9 @@ export type PrintStyle = "simple" | "tufte";
 export interface ViewSettings {
   theme: Theme;
   font: Font;
-  page: boolean; // A4-style page view (document as a sheet on a desk)
+  page: boolean; // Page view: A4 sheets on a desk, page-break markers and the page tally
   lineNumbers: boolean;
   bionic: boolean; // bionic-reading: bold the lead of each word (rendered only)
-  pageBreaks: boolean; // A4 page-break markers + page tally (a sense of print length)
   progressBar: boolean; // thin reading-progress bar under the header (fills as you scroll)
   richPreview: boolean; // rendered Markdown/review view; false exposes canonical source
   printStyle: PrintStyle; // browser print/PDF presentation; never changes document bytes
@@ -39,7 +38,6 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   page: true,
   lineNumbers: false,
   bionic: false,
-  pageBreaks: false,
   progressBar: true, // on by default — a quiet, familiar reading affordance
   richPreview: true,
   printStyle: "simple",
@@ -51,9 +49,21 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   spellVariant: "uk", // British English by default
   author: "You",
 };
+/** Keys a stored settings object may still carry from an older build. The
+ * server file merges patches, so it never forgets them; reads drop them.
+ * `pageBreaks` became part of `page` (#40): the stored sheet choice wins. */
+const RETIRED_KEYS = ["pageBreaks"];
+
+export function withoutRetiredSettings<T extends object>(stored: T): T {
+  const clean = { ...stored } as Record<string, unknown>;
+  for (const key of RETIRED_KEYS) delete clean[key];
+  return clean as T;
+}
+
 export function loadSettings(): ViewSettings {
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("acm-settings") ?? "{}") };
+    const stored = JSON.parse(localStorage.getItem("acm-settings") ?? "{}");
+    return { ...DEFAULT_SETTINGS, ...withoutRetiredSettings(stored) };
   } catch {
     return DEFAULT_SETTINGS;
   }

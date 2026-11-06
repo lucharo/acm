@@ -61,6 +61,13 @@ export type SaveState =
   | "audit-error"
   | "audit-recovery";
 
+/** A refresh or close starts a save of the pending buffer on the way out, but
+ * the browser may cancel that request (and offline there is none), so unsaved
+ * edits ask the browser's Leave-site prompt until a write confirms them (#31). */
+export function unloadWouldLoseEdits(pendingContent: string | null): boolean {
+  return pendingContent !== null;
+}
+
 /** Selection offsets are meaningful to the server only while the live editor
  * buffer is byte-for-byte aligned with the persisted document. */
 export function canQuerySelectionProvenance(
@@ -1053,12 +1060,19 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     const onHide = () => {
       if (document.visibilityState === "hidden") flushNow();
     };
+    const onUnload = (event: BeforeUnloadEvent) => {
+      flushNow();
+      if (unloadWouldLoseEdits(pendingContent.current)) {
+        event.preventDefault(); // the browser's "Leave site?" prompt
+        event.returnValue = "";
+      }
+    };
     window.addEventListener("blur", flushNow);
-    window.addEventListener("beforeunload", flushNow);
+    window.addEventListener("beforeunload", onUnload);
     document.addEventListener("visibilitychange", onHide);
     return () => {
       window.removeEventListener("blur", flushNow);
-      window.removeEventListener("beforeunload", flushNow);
+      window.removeEventListener("beforeunload", onUnload);
       document.removeEventListener("visibilitychange", onHide);
     };
   }, [flushNow]);

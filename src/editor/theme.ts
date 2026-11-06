@@ -106,8 +106,13 @@ export const acmTheme: Extension = EditorView.theme(
       color: "inherit",
       cursor: "text",
     },
+    // Block widgets carry their vertical spacing as PADDING, never margin:
+    // CodeMirror measures a block's height with getBoundingClientRect, which
+    // leaves margins out, so a margin desyncs the height map and the line-number
+    // gutter drifts by it under every block (#70).
     ".cm-math-widget .katex-display": {
-      margin: "0.55em 0",
+      margin: "0",
+      padding: "0.55em 0",
       overflowX: "auto",
       overflowY: "hidden",
     },
@@ -300,7 +305,7 @@ export const acmTheme: Extension = EditorView.theme(
       boxSizing: "border-box",
       width: "100%",
       maxWidth: "100%",
-      margin: "0.35em 0",
+      padding: "0.35em 0", // padding, not margin (#70)
       color: "var(--ink)",
       fontFamily: "var(--editor-font)",
       fontSize: "0.94em",
@@ -310,7 +315,7 @@ export const acmTheme: Extension = EditorView.theme(
       boxSizing: "border-box",
       width: "100%",
       maxWidth: "100%",
-      margin: "0.55em 0",
+      padding: "0.55em 0", // padding, not margin (#70)
       color: "var(--ink)",
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: "0.88em",
@@ -374,10 +379,14 @@ export const acmTheme: Extension = EditorView.theme(
       borderRadius: "3px",
       padding: "0.02em 0.06em",
     },
+    // The widget's outer element holds the spacing as padding (#70); the
+    // bordered card is the inner section.
+    ".cm-crit-block": {
+      padding: "0.55em 0",
+    },
     ".cm-crit-block-ins": {
       boxSizing: "border-box",
       width: "100%",
-      margin: "0.55em 0",
       padding: "0.5em 0.7em 0.65em",
       border: "1px solid color-mix(in srgb, var(--crit-ins) 35%, var(--line))",
       borderLeft: "3px solid var(--crit-ins)",
@@ -689,20 +698,18 @@ export const acmTheme: Extension = EditorView.theme(
   { dark: false },
 );
 
-// Optional "page" view (toggled in settings): the document reads like an A4 sheet
-// — a panel-coloured page with a border + shadow, centred on a darker "desk".
-// Toggled via a Compartment in useCodeMirror so it layers cleanly over acmTheme
-// (no CSS-specificity fight). documentPadding tracks the page padding, so the
-// comment sidebar's anchoring adapts automatically.
+// Page view (toggled in settings): the document reads like an A4 sheet — a
+// panel-coloured page with a border + shadow, centred on a darker "desk".
+// Toggled via a Compartment in useCodeMirror that sits AFTER acmTheme, and the
+// earlier theme wins any property both declare. So the sheet's width, margin
+// and padding are acmTheme's .cm-content values; this theme adds only what the
+// base leaves unset (#39). Size the sheet in acmTheme.
 export const pageTheme: Extension = EditorView.theme({
   ".cm-scroller": {
     backgroundColor: "var(--desk)",
     padding: "2.5rem 0 5rem",
   },
   ".cm-content": {
-    maxWidth: "740px",
-    margin: "0 auto var(--acm-scroll-reach, 0px)", // same reach var as the base theme
-    padding: "4rem 4.5rem 6rem",
     backgroundColor: "var(--panel)",
     border: "1px solid var(--line)",
     borderRadius: "2px",

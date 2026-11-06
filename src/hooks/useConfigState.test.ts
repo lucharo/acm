@@ -65,6 +65,15 @@ describe("settings persistence", () => {
     expect(reconcileViewSettings(local, server, false).applyAndResolve).toBe(false);
   });
 
+  test("a retired key in the server settings file does not re-enter view settings", () => {
+    const server = { page: false, pageBreaks: true } as Partial<typeof DEFAULT_SETTINGS>;
+
+    expect(reconcileViewSettings(DEFAULT_SETTINGS, server, false)).toEqual({
+      ...DEFAULT_SETTINGS,
+      page: false,
+    });
+  });
+
   test("an older save cannot clear a newer unsaved local choice", async () => {
     let dirty: string | undefined;
     const pending: Array<(saved: boolean) => void> = [];

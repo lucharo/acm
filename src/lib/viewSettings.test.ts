@@ -100,3 +100,20 @@ describe("PDF settings", () => {
     expect(loadSettings().printAlternateSides).toBe(false);
   });
 });
+
+describe("page view setting (#40)", () => {
+  test("a fresh install opens in page view, page breaks included", () => {
+    installStorage(null);
+
+    expect(DEFAULT_SETTINGS.page).toBe(true);
+    expect(loadSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
+  test("the retired page-breaks key is dropped and the stored page choice wins", () => {
+    installStorage(JSON.stringify({ page: false, pageBreaks: true }));
+    expect(loadSettings()).toEqual({ ...DEFAULT_SETTINGS, page: false });
+
+    installStorage(JSON.stringify({ page: true, pageBreaks: false }));
+    expect(loadSettings()).toEqual({ ...DEFAULT_SETTINGS, page: true });
+  });
+});

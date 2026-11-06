@@ -13,8 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { EditorView, placeholder } from "@codemirror/view";
 import { lineNumbers } from "@codemirror/view";
-import { Annotation, Compartment, EditorState, StateEffect } from "@codemirror/state";
-import type { Transaction } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, StateEffect, Transaction } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
 import { history, invertedEffects, isolateHistory } from "@codemirror/commands";
 import { keymap } from "@codemirror/view";
@@ -23,6 +22,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
 import { acmFormattingKeymap } from "./formatting";
 import { listIndentKeymap } from "./listIndent";
+import { listRenumber } from "./listRenumber";
 import { CriticMarkup } from "./criticMarkupParser";
 import { critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
@@ -54,7 +54,6 @@ export interface UseCodeMirrorOptions {
   lineNumbers?: boolean;
   page?: boolean;
   bionic?: boolean;
-  pageBreaks?: boolean;
   spellcheck?: boolean;
   richPreview?: boolean;
 }
@@ -165,12 +164,11 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   const callbacksCompartment = useRef(new Compartment());
   // Compartment for the optional line-number gutter (toggled from settings).
   const lineNumbersCompartment = useRef(new Compartment());
-  // Compartment for the optional A4 "page" view (toggled from settings).
+  // Compartment for Page view: the A4 sheet theme plus its page-break markers
+  // and page tally, one setting (CONTEXT.md "Page view").
   const pageCompartment = useRef(new Compartment());
   // Compartment for the optional bionic-reading bolding (toggled from settings).
   const bionicCompartment = useRef(new Compartment());
-  // Compartment for the optional A4 page-break markers (toggled from settings).
-  const pageBreaksCompartment = useRef(new Compartment());
   // Compartment for the optional spell-check underline (toggled from settings).
   const spellcheckCompartment = useRef(new Compartment());
   // One global switch owns both Markdown and CriticMarkup presentation layers.
@@ -216,6 +214,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
           },
         ]),
         keymap.of([...defaultKeymap, ...historyKeymap]),
+        listRenumber((tr) => tr.annotation(decisionAnnotation) !== undefined),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
           "aria-label": "Markdown document editor",
@@ -243,9 +242,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
         lineNumbersCompartment.current.of(
           optsRef.current.lineNumbers ? lineNumbers() : [],
         ),
-        pageCompartment.current.of(optsRef.current.page ? pageTheme : []),
+        pageCompartment.current.of(optsRef.current.page ? [pageTheme, pageBreaks] : []),
         bionicCompartment.current.of(optsRef.current.bionic ? bionicReading : []),
-        pageBreaksCompartment.current.of(optsRef.current.pageBreaks ? pageBreaks : []),
         spellcheckCompartment.current.of(optsRef.current.spellcheck ? spellcheck : []),
         updateListener,
       ],
@@ -292,7 +290,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: pageCompartment.current.reconfigure(opts.page ? pageTheme : []),
+      effects: pageCompartment.current.reconfigure(opts.page ? [pageTheme, pageBreaks] : []),
     });
   }, [opts.page]);
 
@@ -304,15 +302,6 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
       effects: bionicCompartment.current.reconfigure(opts.bionic ? bionicReading : []),
     });
   }, [opts.bionic]);
-
-  // Toggle the A4 page-break markers in place when the setting changes.
-  useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    view.dispatch({
-      effects: pageBreaksCompartment.current.reconfigure(opts.pageBreaks ? pageBreaks : []),
-    });
-  }, [opts.pageBreaks]);
 
   // Toggle the spell-check underline in place when the setting changes.
   useEffect(() => {
@@ -358,7 +347,9 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
 
     view.dispatch({
       changes: { from, to: curEnd, insert },
-      annotations: remoteAnnotation.of(true),
+      // Transaction.remote: local-only filters (list renumbering) leave a
+      // remote snapshot exactly as the file has it.
+      annotations: [remoteAnnotation.of(true), Transaction.remote.of(true)],
       // No scrollIntoView — preserve the reader's position. Selection maps
       // through the change automatically.
     });

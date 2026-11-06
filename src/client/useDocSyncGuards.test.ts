@@ -16,6 +16,7 @@ import {
   reconnectSnapshotStartsNewEpoch,
   reconnectSnapshotNeedsStateRestore,
   saveResponseMatchesCurrentEpoch,
+  unloadWouldLoseEdits,
 } from "./useDocSync";
 import type { DecisionEvent } from "../lib/decision";
 
@@ -362,5 +363,12 @@ describe("document sync guards", () => {
         probe: async () => false,
       }),
     ).toBe("unavailable");
+  });
+});
+
+describe("leaving the page", () => {
+  test("warns while any edit is unconfirmed, and not once it is saved", () => {
+    expect(unloadWouldLoseEdits("edited")).toBe(true);
+    expect(unloadWouldLoseEdits(null)).toBe(false);
   });
 });

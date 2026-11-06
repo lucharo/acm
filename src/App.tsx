@@ -431,7 +431,6 @@ function Workspace({
     lineNumbers: settings.lineNumbers,
     page: settings.page,
     bionic: settings.bionic,
-    pageBreaks: settings.pageBreaks,
     spellcheck: settings.spellcheck,
     richPreview: settings.richPreview,
   });
@@ -1286,7 +1285,6 @@ function Workspace({
       { id: "page", label: settings.page ? "Disable page view" : "Enable page view", run: () => onChangeSettings({ page: !settings.page }) },
       { id: "lines", label: settings.lineNumbers ? "Hide line numbers" : "Show line numbers", run: () => onChangeSettings({ lineNumbers: !settings.lineNumbers }) },
       { id: "bionic", label: settings.bionic ? "Disable bionic reading" : "Enable bionic reading", run: () => onChangeSettings({ bionic: !settings.bionic }) },
-      { id: "pagebreaks", label: settings.pageBreaks ? "Hide A4 page breaks" : "Show A4 page breaks", run: () => onChangeSettings({ pageBreaks: !settings.pageBreaks }) },
       { id: "progressbar", label: settings.progressBar ? "Hide reading progress bar" : "Show reading progress bar", run: () => onChangeSettings({ progressBar: !settings.progressBar }) },
       { id: "rich-preview", label: settings.richPreview ? "Show raw Markdown source" : "Show rich preview", run: () => onChangeSettings({ richPreview: !settings.richPreview }) },
       { id: "seen", label: settings.showSeen ? "Hide seen comments" : "Show seen comments", run: () => onChangeSettings({ showSeen: !settings.showSeen }) },

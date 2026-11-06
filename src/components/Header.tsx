@@ -270,11 +270,6 @@ export default function Header(props: HeaderProps) {
                 onToggle={() => onChangeSettings({ bionic: !settings.bionic })}
               />
               <SettingRow
-                label="A4 page breaks"
-                checked={settings.pageBreaks}
-                onToggle={() => onChangeSettings({ pageBreaks: !settings.pageBreaks })}
-              />
-              <SettingRow
                 label="Reading progress bar"
                 checked={settings.progressBar}
                 onToggle={() => onChangeSettings({ progressBar: !settings.progressBar })}

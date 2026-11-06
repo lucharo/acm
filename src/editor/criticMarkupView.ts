@@ -142,10 +142,15 @@ class StandaloneInsertionWidget extends WidgetType {
     return other.from === this.from && other.to === this.to && other.inner === this.inner;
   }
   toDOM(view: EditorView) {
+    // Outer block carries the vertical spacing as padding so CodeMirror's height
+    // map includes it (#70); the card itself is the inner section.
+    const block = document.createElement("div");
+    block.className = "cm-crit-block";
+    block.setAttribute("contenteditable", "false");
     const wrap = document.createElement("section");
     wrap.className = "cm-crit-block-ins";
-    wrap.setAttribute("contenteditable", "false");
     wrap.setAttribute("aria-label", "Tracked addition");
+    block.appendChild(wrap);
 
     const toolbar = document.createElement("div");
     toolbar.className = "cm-crit-block-toolbar";
@@ -159,7 +164,7 @@ class StandaloneInsertionWidget extends WidgetType {
     content.className = "cm-crit-block-content";
     appendRichBlocks(content, this.inner);
     wrap.appendChild(content);
-    return wrap;
+    return block;
   }
 }
 
