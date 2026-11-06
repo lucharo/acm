@@ -2,6 +2,10 @@ export interface EditInvocation {
   kind: "edit";
   file?: string;
   port?: number;
+  /** Folder relative images may reach (default: the doc's git repo, else its folder). */
+  assetRoot?: string;
+  /** Remote host names to accept besides loopback (repeatable --allow-host). */
+  allowHosts?: string[];
   open: boolean;
 }
 
@@ -59,7 +63,10 @@ running ACM editor; snapshot before every write):
 
 Edit options:
   --port <n>         Port to serve on (default 12000; auto-increments if busy)
-  --no-open          Don't auto-open the browser
+  --allow-host <name> Also accept this remote host, e.g. a Tailscale name (repeatable;
+                     default: ACM_ALLOWED_HOSTS, else this Mac's Tailscale name if up)
+  --asset-root <dir> Folder images may load from (default: the doc's git repo, else its folder)
+  --no-open          Don't auto-open the browser (also ACM_NO_OPEN=1; a set $BROWSER is the opener)
   -h, --help         Show this help`;
 
 export function parseInvocation(
@@ -99,6 +106,24 @@ export function parseInvocation(
         return { kind: "error", message: "acm edit: --port requires an integer from 0 to 65535" };
       }
       edit.port = port;
+      index += 1;
+      continue;
+    }
+    if (value === "--allow-host") {
+      const raw = argv[index + 1];
+      if (raw === undefined || raw.startsWith("-")) {
+        return { kind: "error", message: "acm edit: --allow-host requires a host name" };
+      }
+      edit.allowHosts = [...(edit.allowHosts ?? []), raw];
+      index += 1;
+      continue;
+    }
+    if (value === "--asset-root") {
+      const raw = argv[index + 1];
+      if (raw === undefined || raw.startsWith("-")) {
+        return { kind: "error", message: "acm edit: --asset-root requires a folder" };
+      }
+      edit.assetRoot = raw;
       index += 1;
       continue;
     }

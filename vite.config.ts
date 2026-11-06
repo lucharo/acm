@@ -60,6 +60,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), dictionaryRaw()],
   server: {
     port: devPort,
+    // Fail rather than drift to the next port: dev's supervisor (#34) retries this
+    // one, so the printed URL and open tabs keep working after a restart.
+    strictPort: true,
     proxy: {
       // Keep the browser-facing Host intact so the backend's same-origin guard
       // compares it with Origin correctly. The backend binds IPv4 explicitly.

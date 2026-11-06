@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./config";
 import { prepareDocumentTarget } from "./documentTarget";
-import { isAllowedOrigin, isLoopbackHost, serveAppAsset } from "./http";
+import { refuseOutsideBoundary, serveAppAsset } from "./http";
 import { listRecentDocuments } from "./recent";
 import { mergeConfigPatch } from "../lib/seenState";
 
@@ -34,6 +34,9 @@ async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
 export function startLauncherServer(opts: StartLauncherOptions): AcmLauncherServer {
   const cwd = resolve(opts.cwd);
   const staticDir = opts.staticDir ?? "./dist";
+  // Loopback only, even with allowed remote hosts (#73): opening a document
+  // moves to a new port, which a single tunnel (tailscale serve) can't follow.
+  const allowedHosts = new Set<string>();
   let opening = false;
   let settingsWriteChain: Promise<unknown> = Promise.resolve();
   const withSettingsLock = <T>(fn: () => Promise<T>): Promise<T> => {
@@ -49,12 +52,8 @@ export function startLauncherServer(opts: StartLauncherOptions): AcmLauncherServ
     port: opts.port,
     maxRequestBodySize: 64 * 1024,
     async fetch(req) {
-      if (!isLoopbackHost(req.headers.get("host"))) {
-        return new Response("Forbidden: ACM accepts loopback requests only", { status: 403 });
-      }
-      if (!isAllowedOrigin(req)) {
-        return new Response("Forbidden: cross-origin requests are not allowed", { status: 403 });
-      }
+      const refused = refuseOutsideBoundary(req, allowedHosts);
+      if (refused) return refused;
       const { pathname } = new URL(req.url);
       if (pathname === "/api/session" && req.method === "GET") {
         return Response.json({ mode: "launcher", cwd, recent: await listRecentDocuments() });

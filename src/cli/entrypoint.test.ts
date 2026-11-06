@@ -17,7 +17,8 @@ async function runBriefly(args: string[], configHomeIsFile = false) {
   if (configHomeIsFile) writeFileSync(configHome, "blocked\n");
   const proc = Bun.spawn([process.execPath, cli, ...args], {
     cwd,
-    env: { ...process.env, XDG_CONFIG_HOME: configHome },
+    // ACM_ALLOWED_HOSTS="" skips Tailscale discovery, which would eat this 800 ms budget.
+    env: { ...process.env, XDG_CONFIG_HOME: configHome, ACM_ALLOWED_HOSTS: "" },
     stdout: "pipe",
     stderr: "pipe",
   });

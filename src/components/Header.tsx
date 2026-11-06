@@ -9,8 +9,11 @@ import { MOD } from "../lib/platform";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
 import type { Font, Theme, SpellVariant, PrintStyle, ViewSettings } from "../lib/viewSettings";
+import { documentFileName } from "../lib/documentTitle";
 
 export interface HeaderProps {
+  /** Absolute path of the served document, shown as its file name (#33). */
+  documentPath?: string;
   connected: boolean;
   saveState: SaveState;
   lastSavedAt: number | null;
@@ -68,6 +71,7 @@ export function commentsTogglePresentation(
 
 export default function Header(props: HeaderProps) {
   const {
+    documentPath,
     connected,
     saveState,
     lastSavedAt,
@@ -130,6 +134,14 @@ export default function Header(props: HeaderProps) {
       <span className="hidden h-5 w-px bg-[var(--line-strong)] min-[360px]:block" aria-hidden="true" />
       <span className="hidden text-[13px] font-semibold tracking-tight min-[360px]:inline">
         ACM <span className="hidden text-[var(--faint)] sm:inline">· Agent CriticMarkup</span>
+        {documentPath && (
+          <span
+            className="ml-1 inline-block max-w-[40vw] truncate align-bottom text-[var(--muted)]"
+            title={documentPath}
+          >
+            · {documentFileName(documentPath)}
+          </span>
+        )}
       </span>
 
       <div className="ml-auto flex flex-wrap items-center justify-end gap-2 gap-y-1">

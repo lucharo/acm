@@ -39,6 +39,7 @@ import type {
 import { appendRichBlocks, appendRichInline } from "./richMarkdown";
 import { appendMath, findMathRanges } from "./math";
 import { standaloneInsertionTokens } from "./standaloneInsertion";
+import { assetStatus, imageFailureText } from "./imageFailure";
 import { acceptedMarkdown, scanTokens } from "../lib/criticmarkup";
 import { isComment } from "../lib/types";
 
@@ -128,16 +129,21 @@ class ImageWidget extends WidgetType {
     const wrap = document.createElement("span");
     wrap.className = "cm-md-image";
     const img = document.createElement("img");
-    img.src = /^(https?:|data:)/i.test(this.url)
+    const src = /^(https?:|data:)/i.test(this.url)
       ? this.url
       : `/api/asset?path=${encodeURIComponent(this.url)}`;
+    img.src = src;
     img.alt = this.alt;
     // Dragging a rendered image would put its /api/asset URL on the drag — a
     // re-drop would insert a broken duplicate ref (or navigate). Not a gesture.
     img.draggable = false;
     img.onerror = () => {
-      wrap.textContent = `⚠ ${this.url} (missing)`;
+      wrap.textContent = imageFailureText(this.url, null);
       wrap.className = "cm-md-image cm-md-image-missing";
+      // A refused path (403) is "blocked", not "missing" (#64).
+      void assetStatus(src).then((answer) => {
+        if (answer?.status === 403) wrap.textContent = imageFailureText(this.url, 403, answer.body);
+      });
     };
     wrap.appendChild(img);
     return wrap;

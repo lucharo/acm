@@ -102,6 +102,9 @@ describe("isConnectionRefused — discriminator shape robustness", () => {
     expect(isConnectionRefused({ code: "ConnectionRefused" })).toBe(true);
     expect(isConnectionRefused({ cause: { code: "ConnectionRefused" } })).toBe(true);
     expect(isConnectionRefused(Object.assign(new Error("x"), { code: "ConnectionRefused" }))).toBe(true);
+    // Bun 1.4 moved the code to the POSIX name on a TypeError (1.3: Error + "ConnectionRefused").
+    expect(isConnectionRefused(Object.assign(new TypeError("x"), { code: "ECONNREFUSED" }))).toBe(true);
+    expect(isConnectionRefused({ cause: { code: "ECONNREFUSED" } })).toBe(true);
     expect(isConnectionRefused(new DOMException("timed out", "TimeoutError"))).toBe(false);
     expect(isConnectionRefused({ name: "TimeoutError", code: 23 })).toBe(false);
     expect(isConnectionRefused(undefined)).toBe(false);

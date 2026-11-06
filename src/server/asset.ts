@@ -5,7 +5,8 @@
 // <slugged stem>-<hash8>.<ext>, so re-dropping the same image reuses the same
 // file and names never collide without -1/-2 suffix bookkeeping.
 
-import { join, resolve, sep, extname, basename } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, resolve, extname, basename, dirname, relative, isAbsolute, sep } from "node:path";
 import { IMAGE_EXTS, RENDERABLE_IMAGE_EXTS } from "../lib/imageTypes";
 
 // The insert gesture is images-only by decision (a PDF drop is rejected with a
@@ -74,15 +75,59 @@ export async function saveAsset(
   return { path: rel, stem: parts.stem };
 }
 
-/** Resolve a doc-relative IMAGE path to an absolute one, or null when it
- *  escapes the doc's directory (traversal guard) or isn't an image type. The
- *  extension whitelist keeps the route an IMAGE route — without it, any file
- *  under the doc's directory (settings.json, sibling .md drafts) would be
- *  readable by whoever can reach the server. Deliberately allows any
- *  directory under docDir — not just assets/ — so hand-written references
- *  like ![](figures/plot.png) render too. */
-export function resolveUnderDocDir(docDir: string, rel: string): string | null {
-  if (!RENDERABLE_IMAGE_EXTS.has(extname(rel).slice(1).toLowerCase())) return null;
+/** The nearest directory at or above `dir` holding a `.git` entry (a directory,
+ *  or a worktree's `.git` file), or null outside any repository. */
+export function findGitRoot(dir: string): string | null {
+  for (let d = resolve(dir); ; d = dirname(d)) {
+    if (existsSync(join(d, ".git"))) return d;
+    if (dirname(d) === d) return null;
+  }
+}
+
+/** The directory relative image references may reach (#64): an explicit root
+ *  (`acm edit --asset-root`, ACM_ASSET_ROOT) wins; else the doc's git repository,
+ *  so a spec can show `../../org/docs/assets/x.png`; else the doc's own folder. */
+export function assetRootFor(docDir: string, explicitRoot?: string): string {
+  if (explicitRoot) return resolve(explicitRoot);
+  return findGitRoot(docDir) ?? resolve(docDir);
+}
+
+export type AssetResolution = { ok: true; path: string } | { ok: false; reason: "not-image" | "outside-root" };
+
+/** Is `abs` at or below `root`? path.relative handles a filesystem root ("/",
+ *  "C:\\") and same-prefix siblings (/docs/essay-evil vs /docs/essay). */
+const within = (root: string, abs: string) => {
+  const rel = relative(root, abs);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+};
+
+function realpathOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path; // absent: nothing to follow (the route 404s it)
+  }
+}
+
+/** Resolve a doc-relative IMAGE path to an absolute one. Refused when it isn't
+ *  an image type (`not-image` — keeps the route an IMAGE route: settings.json or
+ *  a sibling .md draft must never be readable) or when it lands outside both the
+ *  doc's folder and `assetRoot` (`outside-root`, the traversal guard — checked on
+ *  the symlink-resolved path too, so a link inside the root can't leak a file
+ *  outside it, or a link named like an image onto a non-image). Any directory
+ *  under those roots serves, not just assets/. */
+const isImagePath = (path: string) => RENDERABLE_IMAGE_EXTS.has(extname(path).slice(1).toLowerCase());
+
+export function resolveAsset(assetRoot: string, docDir: string, rel: string): AssetResolution {
+  if (!isImagePath(rel)) return { ok: false, reason: "not-image" };
   const abs = resolve(docDir, rel);
-  return abs.startsWith(docDir + sep) ? abs : null;
+  const roots = [resolve(docDir), resolve(assetRoot)];
+  if (!roots.some((root) => within(root, abs))) return { ok: false, reason: "outside-root" };
+  const real = realpathOr(abs);
+  if (real !== abs) {
+    // A link must land inside a root AND on an image: `leak.png -> ../.env` is refused.
+    if (!roots.some((root) => within(realpathOr(root), real))) return { ok: false, reason: "outside-root" };
+    if (!isImagePath(real)) return { ok: false, reason: "not-image" };
+  }
+  return { ok: true, path: abs };
 }

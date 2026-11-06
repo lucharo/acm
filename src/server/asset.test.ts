@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 
-import { assetFileName, saveAsset, resolveUnderDocDir } from "./asset";
+import { assetFileName, assetRootFor, findGitRoot, resolveAsset, saveAsset } from "./asset";
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 /** Bytes that sniff as the given type (real magic numbers + a varying tail). */
@@ -85,30 +85,127 @@ describe("saveAsset", () => {
   });
 });
 
-describe("resolveUnderDocDir", () => {
+describe("resolveAsset — doc directory only (no wider root)", () => {
   const docDir = `${sep}docs${sep}essay`;
+  const under = (rel: string) => resolveAsset(docDir, docDir, rel);
 
   test("resolves paths inside the doc directory", () => {
-    expect(resolveUnderDocDir(docDir, "assets/a.png")).toBe(join(docDir, "assets", "a.png"));
-    expect(resolveUnderDocDir(docDir, "figures/plot.png")).toBe(join(docDir, "figures", "plot.png"));
+    expect(under("assets/a.png")).toEqual({ ok: true, path: join(docDir, "assets", "a.png") });
+    expect(under("figures/plot.png")).toEqual({ ok: true, path: join(docDir, "figures", "plot.png") });
   });
 
   test("blocks traversal above the doc directory", () => {
-    expect(resolveUnderDocDir(docDir, "../secrets.png")).toBeNull();
-    expect(resolveUnderDocDir(docDir, "assets/../../secrets.png")).toBeNull();
-    expect(resolveUnderDocDir(docDir, "/etc/passwd")).toBeNull();
+    expect(under("../secrets.png")).toEqual({ ok: false, reason: "outside-root" });
+    expect(under("assets/../../secrets.png")).toEqual({ ok: false, reason: "outside-root" });
+    expect(under("/etc/passwd")).toEqual({ ok: false, reason: "not-image" });
+    expect(under("/etc/x.png")).toEqual({ ok: false, reason: "outside-root" });
   });
 
   test("serves only image types — not arbitrary files under docDir", () => {
-    expect(resolveUnderDocDir(docDir, "settings.json")).toBeNull();
-    expect(resolveUnderDocDir(docDir, "draft.md")).toBeNull();
-    expect(resolveUnderDocDir(docDir, "noext")).toBeNull();
+    expect(under("settings.json")).toEqual({ ok: false, reason: "not-image" });
+    expect(under("draft.md")).toEqual({ ok: false, reason: "not-image" });
+    expect(under("noext")).toEqual({ ok: false, reason: "not-image" });
     // svg serves (hand-written refs) even though it isn't an upload type
-    expect(resolveUnderDocDir(docDir, "figures/diagram.svg")).toBe(join(docDir, "figures", "diagram.svg"));
+    expect(under("figures/diagram.svg")).toEqual({ ok: true, path: join(docDir, "figures", "diagram.svg") });
+  });
+
+  test("a file or folder whose name starts with two dots is not traversal", () => {
+    expect(under("..figure.png")).toEqual({ ok: true, path: join(docDir, "..figure.png") });
+    expect(under("..drafts/x.png")).toEqual({ ok: true, path: join(docDir, "..drafts", "x.png") });
   });
 
   test("a sneaky same-prefix sibling dir does not pass the guard", () => {
     // /docs/essay-evil shares the string prefix but is NOT under /docs/essay.
-    expect(resolveUnderDocDir(docDir, "../essay-evil/x.png")).toBeNull();
+    expect(under("../essay-evil/x.png")).toEqual({ ok: false, reason: "outside-root" });
+  });
+});
+
+describe("resolveAsset — a wider asset root (#64)", () => {
+  const root = `${sep}repo`;
+  const docDir = join(root, "specs", "plan");
+
+  test("a parent-relative image under the root resolves", () => {
+    expect(resolveAsset(root, docDir, "../../org/docs/assets/run.png")).toEqual({
+      ok: true,
+      path: join(root, "org", "docs", "assets", "run.png"),
+    });
+  });
+
+  test("a sibling assets/ image still resolves", () => {
+    expect(resolveAsset(root, docDir, "assets/a.png")).toEqual({ ok: true, path: join(docDir, "assets", "a.png") });
+  });
+
+  test("a path above the root is blocked, and non-images stay refused inside it", () => {
+    expect(resolveAsset(root, docDir, "../../../etc/x.png")).toEqual({ ok: false, reason: "outside-root" });
+    expect(resolveAsset(root, docDir, "../../.env")).toEqual({ ok: false, reason: "not-image" });
+    expect(resolveAsset(root, docDir, "../../package.json")).toEqual({ ok: false, reason: "not-image" });
+  });
+
+  test("an explicit root that does not contain the doc still serves the doc's own images", () => {
+    const shared = `${sep}shared${sep}figures`;
+    expect(resolveAsset(shared, docDir, "assets/a.png")).toEqual({ ok: true, path: join(docDir, "assets", "a.png") });
+    expect(resolveAsset(shared, docDir, "/shared/figures/b.png")).toEqual({ ok: true, path: join(shared, "b.png") });
+  });
+
+  test("a filesystem root as the asset root contains everything below it", () => {
+    expect(resolveAsset(sep, docDir, "/figures/plot.png")).toEqual({ ok: true, path: join(sep, "figures", "plot.png") });
+  });
+
+  test("a symlink inside the root pointing outside it is blocked", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "acm-asset-link-")));
+    const repo = join(base, "repo");
+    const outside = join(base, "outside");
+    mkdirSync(join(repo, "docs"), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret.png"), "x");
+    symlinkSync(join(outside, "secret.png"), join(repo, "docs", "leak.png"));
+
+    expect(resolveAsset(repo, join(repo, "docs"), "leak.png")).toEqual({ ok: false, reason: "outside-root" });
+  });
+});
+
+describe("resolveAsset — a symlink must point at an image too", () => {
+  test("an image-named link inside the root to a secret inside the root is refused", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "acm-asset-secret-")));
+    mkdirSync(join(base, "assets"));
+    mkdirSync(join(base, "specs", "plan"), { recursive: true });
+    writeFileSync(join(base, ".env"), "TOKEN=secret\n");
+    symlinkSync(join(base, ".env"), join(base, "assets", "leak.png"));
+    writeFileSync(join(base, "assets", "real.png"), "x");
+    symlinkSync(join(base, "assets", "real.png"), join(base, "assets", "alias.png"));
+
+    expect(resolveAsset(base, join(base, "specs", "plan"), "../../assets/leak.png")).toEqual({ ok: false, reason: "not-image" });
+    expect(resolveAsset(base, join(base, "specs", "plan"), "../../assets/alias.png")).toEqual({
+      ok: true,
+      path: join(base, "assets", "alias.png"),
+    });
+  });
+});
+
+describe("assetRootFor", () => {
+  test("an explicit root wins", () => {
+    expect(assetRootFor("/x/y", "/x")).toBe("/x");
+  });
+
+  test("inside a git repo, the repo root", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "acm-asset-git-")));
+    mkdirSync(join(base, ".git"));
+    mkdirSync(join(base, "specs", "plan"), { recursive: true });
+
+    expect(findGitRoot(join(base, "specs", "plan"))).toBe(base);
+    expect(assetRootFor(join(base, "specs", "plan"))).toBe(base);
+  });
+
+  test("a worktree's .git file marks its root too", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "acm-asset-wt-")));
+    writeFileSync(join(base, ".git"), "gitdir: /elsewhere\n");
+    mkdirSync(join(base, "docs"));
+
+    expect(assetRootFor(join(base, "docs"))).toBe(base);
+  });
+
+  test("outside any repo, the doc directory", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "acm-asset-norepo-")));
+    expect(assetRootFor(base)).toBe(base);
   });
 });

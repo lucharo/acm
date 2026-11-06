@@ -86,8 +86,11 @@ npx --yes skills@1.5.20 add . --skill acm-review --agent codex claude-code --glo
 
 ```bash
 bun install --frozen-lockfile
-bun run dev                # Vite (:12000) + Bun server (:12001) — open http://localhost:12000
+bun run dev                # Vite (random :12001–12499) + Bun server; prints and opens the URL
 ```
+
+If either process exits, dev restarts it. `ACM_NO_OPEN=1` (or `BROWSER=/usr/bin/true`)
+skips opening the browser, for agents and headless runs; `acm edit` honours both too.
 
 (The legacy `ACM_DOC=/path/to/your.md bun run start` env path still works for the
 single-process prod server.)
@@ -149,6 +152,24 @@ exact source range and reopen the matching thread without disrupting table parsi
 Yes. Use `$…$` for inline maths and `$$…$$` for display maths. ACM renders both
 through KaTeX in prose, table cells, tracked additions and print, including the
 standalone binary. Code spans, code fences and currency-like prose stay literal.
+
+### Can I open ACM from another device over Tailscale?
+
+Yes. ACM listens on loopback and refuses any other `Host` (the DNS-rebinding
+guard), except hosts you allow: `acm edit doc.md --allow-host mac.tailnet.ts.net`
+or `ACM_ALLOWED_HOSTS`. With neither set, the Mac's Tailscale MagicDNS name is
+allowed when Tailscale is up (`ACM_ALLOWED_HOSTS=` turns that off). Then
+`tailscale serve --bg --https=10464 http://127.0.0.1:12000` and open
+`https://<mac>.<tailnet>.ts.net:10464/` on the other device. Open the document with
+`acm edit <file>`: the launcher stays local, because opening a document from it moves to a
+new port that the tunnel does not follow.
+
+### Can a document show images from outside its folder?
+
+Yes, within its git repository: `![](../../org/docs/assets/run.png)` renders from
+a spec anywhere in the same repo. For a document outside a repo, name the folder
+with `acm edit doc.md --asset-root <dir>` (or `ACM_ASSET_ROOT`). Only image
+types are served, and a path outside the root shows as blocked, not missing.
 
 ### How does ACM track who wrote reviewed text?
 

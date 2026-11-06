@@ -25,7 +25,7 @@ import { merge3, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
-import { saveAsset, resolveUnderDocDir } from "./src/server/asset";
+import { saveAsset, assetRootFor, resolveAsset } from "./src/server/asset";
 import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
 import {
   isDecisionEvent,
@@ -37,7 +37,8 @@ import {
   appendDecisionEvents as appendDecisionEventsToStore,
   readDecisionHistory,
 } from "./src/server/decisions";
-import { isAllowedOrigin, isLoopbackHost, serveAppAsset } from "./src/server/http";
+import { refuseOutsideBoundary, resolveAllowedHosts, serveAppAsset } from "./src/server/http";
+import { tailscaleDnsName } from "./src/server/tailscale";
 import { mergeConfigPatch } from "./src/lib/seenState";
 import { documentUpdateLockPath, withFileUpdateLock } from "./src/server/fileLock";
 import {
@@ -63,6 +64,11 @@ export interface StartServerOptions {
   /** Embedded SPA assets (url-path → bun file path) — used by the compiled binary.
    *  When set, takes precedence over staticDir. */
   staticAssets?: Map<string, string>;
+  /** Directory relative image references may reach beyond the doc's folder
+   *  (#64). Default: the doc's git repository root, else the doc's folder. */
+  assetRoot?: string;
+  /** Remote host names accepted besides loopback (#73), e.g. a Tailscale name. */
+  allowedHosts?: readonly string[];
   /** Test seam for the external filesystem boundary. */
   appendDecisionEvent?: (docPath: string, event: DecisionEvent) => Promise<{ appended: boolean }>;
   appendDecisionEvents?: (
@@ -94,6 +100,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const docPath = resolve(opts.docPath);
   const docDir = dirname(docPath);
   const docName = basename(docPath);
+  const assetRoot = assetRootFor(docDir, opts.assetRoot);
+  const allowedHosts = new Set(opts.allowedHosts ?? []);
   const staticDir = opts.staticDir ?? "./dist";
   const staticAssets = opts.staticAssets;
   const appendDecisionEvent = opts.appendDecisionEvent ?? appendDecisionEventToStore;
@@ -337,12 +345,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
     maxRequestBodySize: 33 * 1024 * 1024,
 
     async fetch(req) {
-      if (!isLoopbackHost(req.headers.get("host"))) {
-        return new Response("Forbidden: ACM accepts loopback requests only", { status: 403 });
-      }
-      if (!isAllowedOrigin(req)) {
-        return new Response("Forbidden: cross-origin requests are not allowed", { status: 403 });
-      }
+      const refused = refuseOutsideBoundary(req, allowedHosts);
+      if (refused) return refused;
       const url = new URL(req.url);
       const { pathname } = url;
 
@@ -632,15 +636,19 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return Response.json({ ok: true });
       }
 
-      // GET /api/asset?path=<rel> → serve a file the doc references by relative
-      // path (issue #3). Any path UNDER the doc's directory is fair game — not
-      // just assets/ — so hand-written references like ![](figures/plot.png)
-      // render; anything resolving above docDir is refused (traversal guard).
+      // GET /api/asset?path=<rel> → serve an image the doc references by
+      // relative path (issues #3, #64). Any path under the doc's folder or the
+      // asset root (default: the doc's git repo) is fair game — so
+      // ![](figures/plot.png) and ![](../../org/docs/x.png) render; anything
+      // outside is refused with 403 (the client shows "blocked", not "missing").
       if (pathname === "/api/asset" && req.method === "GET") {
         const rel = url.searchParams.get("path") ?? "";
-        const abs = resolveUnderDocDir(docDir, rel);
-        if (!abs) return new Response("Forbidden", { status: 403 });
-        const file = Bun.file(abs);
+        const asset = resolveAsset(assetRoot, docDir, rel);
+        if (!asset.ok) {
+          const why = asset.reason === "not-image" ? "not an image type" : `outside the asset root ${assetRoot}`;
+          return new Response(`Blocked: ${why}`, { status: 403 });
+        }
+        const file = Bun.file(asset.path);
         if (!(await file.exists())) return new Response("Not found", { status: 404 });
         // CSP sandbox: an on-disk SVG (or anything else) opened directly from
         // this route must never run scripts on the app's origin. <img> rendering
@@ -829,12 +837,21 @@ function pidOnPort(port: number): string | null {
 
 // ── Dev / `bun run start` entry: boot from env (back-compat with bun run dev) ──
 // Only runs when this file is executed directly, not when imported by cli.ts.
+// No doc means refuse, never a silent fallback to the repo seed (#33): serving
+// the bundled stub instead of your document looks exactly like lost work.
 if (import.meta.main) {
+  const docArg = process.env.ACM_DOC?.trim();
+  if (!docArg) {
+    process.stderr.write(
+      "\n✗ ACM: no document — set ACM_DOC to the .md file to edit:\n" +
+        "  ACM_DOC=/path/to/doc.md bun run start   (or: just prod /path/to/doc.md, acm edit doc.md)\n\n",
+    );
+    process.exit(2);
+  }
   const port = Number(process.env.ACM_PORT ?? 12000);
-  serveOrDie(port, () =>
-    startServer({
-      docPath: process.env.ACM_DOC ?? "seed/sample-essay.md",
-      port,
-    }),
-  );
+  const assetRoot = process.env.ACM_ASSET_ROOT?.trim() || undefined;
+  const allowedHosts = resolveAllowedHosts({ flags: [], env: process.env.ACM_ALLOWED_HOSTS, detect: tailscaleDnsName });
+  const acm = serveOrDie(port, () => startServer({ docPath: docArg, port, assetRoot, allowedHosts }));
+  const remote = allowedHosts.length ? `\n  also allowed: ${allowedHosts.join(", ")}` : "";
+  console.log(`\n  ACM ready → http://localhost:${acm.port}\n  editing: ${acm.docPath}${remote}\n`);
 }

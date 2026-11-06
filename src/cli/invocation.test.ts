@@ -22,6 +22,32 @@ describe("parseInvocation", () => {
     });
   });
 
+  test("--asset-root names the folder relative images may reach", () => {
+    expect(parse(["edit", "spec.md", "--asset-root", "../.."])).toEqual({
+      kind: "edit",
+      file: "spec.md",
+      assetRoot: "../..",
+      open: true,
+    });
+    expect(parse(["edit", "spec.md", "--asset-root"])).toEqual({
+      kind: "error",
+      message: "acm edit: --asset-root requires a folder",
+    });
+  });
+
+  test("--allow-host may repeat", () => {
+    expect(parse(["edit", "a.md", "--allow-host", "mac.ts.net", "--allow-host", "pi.ts.net"])).toEqual({
+      kind: "edit",
+      file: "a.md",
+      allowHosts: ["mac.ts.net", "pi.ts.net"],
+      open: true,
+    });
+    expect(parse(["edit", "--allow-host"])).toEqual({
+      kind: "error",
+      message: "acm edit: --allow-host requires a host name",
+    });
+  });
+
   test("a bare filename has no compatibility path", () => {
     expect(parse(["essay.md"])).toEqual({
       kind: "error",

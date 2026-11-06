@@ -86,6 +86,16 @@ paragraphs, lists and tables are proposals until the human accepts them.
 - After the write, verify that proposed prose is represented by suggestion tokens rather
   than ordinary Markdown, so the human can accept or reject every contribution.
 
+### Keep feedback brief, proportionate and atomic
+
+- A comment is a sentence or two unless the point genuinely needs more.
+- A replacement is about the size of what it replaces: a ten-word span gets roughly ten words
+  back, not fifty, unless the human asked for a strong rewrite.
+- One change per `SUGGEST:`, on the smallest span that carries it, written in document order so
+  the human reviews top to bottom.
+- A big restructure is `{++additions++}` for the new material plus `SUGGEST:` only on the precise
+  spans that change, never one sweeping replacement (#63).
+
 ### Preserve canonical source terminology
 
 Before introducing or renaming a technical term, check the cited primary source and the
@@ -215,11 +225,10 @@ if (diags(after) > diags(before)) throw "write corrupted markup";
 The 2-line balance check (`{==` = `==}`, `{>>` = `<<}`, word-count delta vs backup) stays
 as a cheap pre-check only. A failure means a corrupted anchor — restore the backup rather
 than writing further.
-For very large reply sweeps (~20+ threads), one scripted write beats N `acm reply`
-calls: build `{offset → reply}` from `groupThreads`, insert each `{>>@you: …<<}` at its
-`thread.to` sorted DESCENDING so earlier offsets stay valid, then re-scan + gate.
-(A 148-thread sweep landed this way in one write; its lone failure was a mis-keyed
-offset — verify the pending count hits 0 afterwards.)
+For very large reply sweeps (~20+ threads), one `acm reply --batch <edits.json>` beats N
+`acm reply` calls: build `[{id, match, insert}]` from `groupThreads` (`match` = a unique phrase
+of the thread's last comment, `insert` = your `{>>@you: …<<}`). It is one verb write (merged,
+snapshotted, idempotent, offsets re-scanned per entry); verify the pending count hits 0 afterwards.
 
 ## Clearing threads — the reply sweep
 
@@ -371,6 +380,12 @@ no server is running** — a blind write while an editor is live skips the merge
 guard and can clobber the human's unsaved typing (the exact failure #38 prevents). So
 for review work prefer the `acm` verbs: they pick the safe path automatically, snapshot,
 and validate; raw writes don't.
+
+Before any scripted read-modify-write, run `acm history 3 --doc <file>`. A newest `edit:` entry
+from the last two minutes means the human is in the document (history commits only after a minute
+of quiet, so an older entry is weak evidence they have left): use the verbs, which merge
+server-side, or wait and re-check. A comment, suggestion or span replacement always goes through
+the verbs (#66).
 
 When you genuinely need direct writes with an editor live (bulk scripted transforms the
 verbs can't express), do the **stop-the-world dance**: `cp` a timestamped backup → find

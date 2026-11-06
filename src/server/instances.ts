@@ -63,17 +63,16 @@ export async function liveInstances(): Promise<InstanceEntry[]> {
 export type ProbeState = "live" | "dead" | "unreachable";
 
 /** Was this fetch rejection a connection REFUSED (nothing listening — truly dead)?
- *  Bun surfaces it as `err.code === "ConnectionRefused"` today; check `cause` and
- *  `name` too so a Bun upgrade moving the code can't silently turn every refusal
- *  into "unreachable" (which would wedge CLI writes behind a stale registry entry).
+ *  Bun 1.3 surfaces it as `Error{code: "ConnectionRefused"}`; Bun 1.4 as
+ *  `TypeError{code: "ECONNREFUSED"}`. Accept both names, on the error or its
+ *  `cause`, so a Bun upgrade moving the code can't silently turn every refusal
+ *  into "unreachable" (which wedges CLI writes behind a stale registry entry).
  *  The single discriminator for every caller — don't re-derive it inline. */
+const REFUSED = new Set<unknown>(["ConnectionRefused", "ECONNREFUSED"]);
 export function isConnectionRefused(err: unknown): boolean {
   const e = err as { code?: unknown; name?: unknown; cause?: { code?: unknown; name?: unknown } };
   return (
-    e?.code === "ConnectionRefused" ||
-    e?.name === "ConnectionRefused" ||
-    e?.cause?.code === "ConnectionRefused" ||
-    e?.cause?.name === "ConnectionRefused"
+    REFUSED.has(e?.code) || REFUSED.has(e?.name) || REFUSED.has(e?.cause?.code) || REFUSED.has(e?.cause?.name)
   );
 }
 

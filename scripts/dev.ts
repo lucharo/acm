@@ -8,6 +8,8 @@
 // Bun WebSocket, not Vite HMR — see vite.config.ts.)
 
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { openBrowser } from "../src/server/browserOpen";
+import { supervise } from "../src/server/supervise";
 
 /** True if `port` is bindable right now (probe by briefly listening). */
 function isFree(port: number): boolean {
@@ -52,22 +54,22 @@ const env = {
   ACM_DOC: doc,
 };
 
-const procs = [
-  Bun.spawn(["bun", "--watch", "server.ts"], { stdout: "inherit", stderr: "inherit", env }),
-  Bun.spawn(["bunx", "vite"], { stdout: "inherit", stderr: "inherit", env }),
+// Each child is supervised: if the API server or Vite exits, it is restarted
+// (with backoff) rather than taking the whole dev session down with it (#34).
+const children = [
+  supervise("server", () => Bun.spawn(["bun", "--watch", "server.ts"], { stdout: "inherit", stderr: "inherit", env })),
+  supervise("vite", () => Bun.spawn(["bunx", "vite"], { stdout: "inherit", stderr: "inherit", env })),
 ];
 
 const url = `http://localhost:${devPort}`;
 console.log(`\n  ACM dev → ${url}   (API :${apiPort}; prod stays on :12000)\n  doc: ${doc}\n`);
-// Give Vite a moment to bind, then open the browser to the random dev URL.
-setTimeout(() => Bun.spawn(["open", url]), 1500);
+// Give Vite a moment to bind, then open the browser to the random dev URL
+// (skipped under ACM_NO_OPEN=1; BROWSER=/usr/bin/true opens nothing either).
+setTimeout(() => openBrowser(url), 1500);
 
-function shutdown() {
-  for (const p of procs) p.kill();
+async function shutdown() {
+  await Promise.all(children.map((c) => c.stop()));
   process.exit(0);
 }
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-
-await Promise.race(procs.map((p) => p.exited));
-shutdown();
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

@@ -6,25 +6,14 @@
 
 import { resolve } from "node:path";
 import { startServer } from "./server";
+import { resolveAllowedHosts } from "./src/server/http";
+import { tailscaleDnsName } from "./src/server/tailscale";
+import { openBrowser } from "./src/server/browserOpen";
 import { HELP_TEXT, OVERVIEW_TEXT, parseInvocation } from "./src/cli/invocation";
 import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
 import { prepareDocumentTarget } from "./src/server/documentTarget";
 import { startLauncherServer } from "./src/server/launcher";
 import { recordRecentDocument } from "./src/server/recent";
-
-function openBrowser(url: string) {
-  const command =
-    process.platform === "darwin"
-      ? ["open", url]
-      : process.platform === "win32"
-        ? ["cmd", "/c", "start", "", url]
-        : ["xdg-open", url];
-  try {
-    Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
-  } catch {
-    // The URL is always printed, so a missing desktop opener is non-fatal.
-  }
-}
 
 function isBusyPort(error: unknown): boolean {
   return (error as { code?: string })?.code === "EADDRINUSE";
@@ -91,6 +80,14 @@ if (invocation.kind === "agent") {
 
 const assets = await loadStaticAssets();
 const preferredPort = invocation.port ?? 12000;
+const assetRootRaw = invocation.assetRoot ?? (process.env.ACM_ASSET_ROOT?.trim() || undefined);
+const assetRootArg = assetRootRaw ? resolve(assetRootRaw) : undefined;
+const allowedHosts = resolveAllowedHosts({
+  flags: invocation.allowHosts ?? [],
+  env: process.env.ACM_ALLOWED_HOSTS,
+  detect: tailscaleDnsName,
+});
+const remoteLine = allowedHosts.length ? `\n  also allowed: ${allowedHosts.join(", ")}` : "";
 const rememberRecentDocument = async (documentPath: string) => {
   if (await recordRecentDocument(documentPath)) return;
   console.error(
@@ -106,12 +103,12 @@ try {
       process.exit(2);
     }
     const acm = startOnFreePort(preferredPort, (port) =>
-      startServer({ docPath: target.path, port, ...assets }),
+      startServer({ docPath: target.path, port, assetRoot: assetRootArg, allowedHosts, ...assets }),
     );
     await rememberRecentDocument(target.path);
     const url = `http://localhost:${acm.port}`;
     if (target.created) console.log(`Created new document: ${target.path}`);
-    console.log(`\n  ACM ready → ${url}\n  editing: ${target.path}\n`);
+    console.log(`\n  ACM ready → ${url}\n  editing: ${target.path}${remoteLine}\n`);
     if (invocation.open) openBrowser(url);
   } else {
     let launcher: ReturnType<typeof startLauncherServer>;
@@ -123,7 +120,7 @@ try {
         activateDocument: async (documentPath) => {
           const documentStartPort = launcher.port < 65_535 ? launcher.port + 1 : 0;
           const acm = startOnFreePort(documentStartPort, (documentPort) =>
-            startServer({ docPath: documentPath, port: documentPort, ...assets }),
+            startServer({ docPath: documentPath, port: documentPort, assetRoot: assetRootArg, allowedHosts, ...assets }),
           );
           await rememberRecentDocument(documentPath);
           setTimeout(() => launcher.stop(), 750);
@@ -132,7 +129,7 @@ try {
       }),
     );
     const url = `http://localhost:${launcher.port}`;
-    console.log(`\n  ACM launcher → ${url}\n  folder: ${launcher.cwd}\n`);
+    console.log(`\n  ACM launcher → ${url}\n  folder: ${launcher.cwd}${remoteLine}\n`);
     if (invocation.open) openBrowser(url);
   }
 } catch (error) {

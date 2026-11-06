@@ -26,6 +26,7 @@ import SelectionActions from "./components/SelectionActions";
 import HealReview from "./components/HealReview";
 import Toc from "./components/Toc";
 import Header from "./components/Header";
+import { documentTabTitle } from "./lib/documentTitle";
 import ContextMenu from "./components/ContextMenu";
 import type { MenuItem, MenuState } from "./components/ContextMenu";
 import type { ViewSettings } from "./lib/viewSettings";
@@ -310,6 +311,10 @@ function Workspace({
     [threads],
   );
   const { seen, setSeen } = useSeenState(documentPath, documentCommentKeys);
+
+  useEffect(() => {
+    document.title = documentTabTitle(documentPath);
+  }, [documentPath]);
 
   // Personal spelling dictionary (persisted). Mirror it into the spellcheck engine
   // whenever it changes so the underline + suggestions honour the user's words.
@@ -1473,6 +1478,7 @@ function Workspace({
   return (
     <div className="acm-workspace flex h-full flex-col bg-[var(--bg)]">
       <Header
+        documentPath={documentPath}
         connected={connected}
         saveState={saveState}
         lastSavedAt={lastSavedAt}
