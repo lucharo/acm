@@ -812,6 +812,49 @@ describe("hardWrap", () => {
     expect(countWords(wrapped)).toBe(countWords(content));
     expect(hardWrap(wrapped, 88)).toBe(wrapped);
   });
+
+  // #122: lines are split before tokens are seen, so a construct's inner line that
+  // looks like a block (quote, list, heading, blank) used to cut the construct in two.
+  test("a multi-line comment whose next line looks like a quote stays byte-identical", () => {
+    const text = "Intro {>>@luis: first  line\n> second<<} end.\n";
+    expect(hardWrap(text, 88)).toBe(text);
+  });
+
+  test("a comment line that looks like a list item stays inside the comment", () => {
+    const text = "Some prose {>>@a: one  two\n- three<<} that runs on past the width for sure, yes.\n";
+    const wrapped = hardWrap(text, 30);
+    expect(scanTokens(wrapped).map((t) => t.raw)).toEqual(["{>>@a: one  two\n- three<<}"]);
+  });
+
+  test("a whole-line insertion block stays a block when prose follows it", () => {
+    const text = "{++# H\n\n- x++}\nTail\n";
+    expect(hardWrap(text, 88)).toBe(text);
+  });
+
+  test("a one-line heading insertion stays its own line when prose follows", () => {
+    const text = "{++# H++}\nTail\n";
+    expect(hardWrap(text, 88)).toBe(text);
+  });
+
+  test("backticks in two separate comments don't pair into a code span", () => {
+    const text = "Intro {>>@a: `one<<} and {>>@b: `two  words\n> three<<} end.\n";
+    expect(hardWrap(text, 88)).toBe(text);
+  });
+
+  test("a comment spanning lines doesn't make the next comment look like code", () => {
+    const text = "Intro {>>@a: one\nmiddle\nlongclosing<<} and {>>@b: two  words\n> three<<} end.\n";
+    expect(hardWrap(text, 88)).toBe(text);
+  });
+
+  test("construct-shaped text inside a code fence is not a construct", () => {
+    const text = '```\ns = "{>>open"\n```\nThen <<} closes nothing.\n\n```\ns = "a  b"\n```\n';
+    expect(hardWrap(text, 88)).toBe(text);
+  });
+
+  test("a comment that starts on a structural line keeps its continuation verbatim", () => {
+    const text = "> quoted {>>@a: x\nlong continuation line that would otherwise be refilled<<} tail\n\nNext.\n";
+    expect(hardWrap(text, 20).startsWith("> quoted {>>@a: x\nlong continuation line that would otherwise be refilled<<} tail\n")).toBe(true);
+  });
 });
 
 // ── validateMarkup (#18) — positioned diagnostics for everything that leaks ───

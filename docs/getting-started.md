@@ -52,7 +52,7 @@ acm edit notes.md
 
 - Each `acm edit` serves exactly one document. Open a second document with a second `acm edit`; it takes the next free port.
 - `acm edit` with no file opens a launcher with **New**, **Open** and **Recent Documents**.
-- Run `acm` on its own for a short overview, and `acm --help` for every command.
+- Run `acm` on its own for a short overview, `acm --help` for every command, and `acm <command> --help` for one.
 
 Stop the editor with `Ctrl+C` in its terminal once the header shows **Saved**; ACM saves a moment after you stop typing.
 

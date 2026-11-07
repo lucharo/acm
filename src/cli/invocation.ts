@@ -13,6 +13,7 @@ export type Invocation =
   | { kind: "overview" }
   | { kind: "help" }
   | { kind: "agent"; verb: string; args: string[] }
+  | { kind: "verb-help"; text: string }
   | { kind: "legacy-skill" }
   | EditInvocation
   | { kind: "error"; message: string };
@@ -69,6 +70,30 @@ Edit options:
   --no-open          Don't auto-open the browser (also ACM_NO_OPEN=1; a set $BROWSER is the opener)
   -h, --help         Show this help`;
 
+const VERB_OPTIONS = `Options:
+  --doc <file.md>    The document (else $ACM_DOC, else the doc open in the running ACM editor)
+  --author <name>    Who the comment or decision is from (default: $ACM_AUTHOR, else claude)
+  --group <id>       comment, suggest: tag a set; accept, reject: act on the whole set
+  --json             threads, spell list, decisions: machine-readable output
+  --                 End of options: text after it may start with --
+  (--doc, --author and --group also take --flag=value; every write snapshots the doc first)`;
+
+/** \`acm <verb> --help\` (#117): the verb's lines from HELP_TEXT, then the options
+ *  the verbs share. One source of truth, so the two helps can't drift. */
+export function verbHelp(verb: string): string {
+  const lines = HELP_TEXT.split("\n");
+  const usage: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!new RegExp(`^  acm ${verb}( |$)`).test(lines[i])) continue;
+    usage.push(lines[i]);
+    while (i + 1 < lines.length && /^ {6,}\S/.test(lines[i + 1]) && !/^\s+acm /.test(lines[i + 1])) usage.push(lines[++i]);
+  }
+  if (usage.length === 0) return HELP_TEXT; // e.g. the deprecated `apply`
+  // import writes a new file of its own (positional out.md): no --doc, no snapshot.
+  if (verb === "import") return `Usage:\n${usage.join("\n")}`;
+  return `Usage:\n${usage.join("\n")}\n\n${VERB_OPTIONS}`;
+}
+
 export function parseInvocation(
   argv: string[],
   isAgentVerb: (value?: string) => boolean,
@@ -77,7 +102,12 @@ export function parseInvocation(
   if (first === undefined) return { kind: "overview" };
   if (first === "-h" || first === "--help") return { kind: "help" };
   if (first === "skill") return { kind: "legacy-skill" };
-  if (isAgentVerb(first)) return { kind: "agent", verb: first, args: argv.slice(1) };
+  if (isAgentVerb(first)) {
+    const args = argv.slice(1);
+    const flags = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+    if (flags.includes("--help") || flags.includes("-h")) return { kind: "verb-help", text: verbHelp(first) };
+    return { kind: "agent", verb: first, args };
+  }
   if (first !== "edit") {
     if (!first.startsWith("-")) {
       return {

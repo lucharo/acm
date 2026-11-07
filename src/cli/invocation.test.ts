@@ -74,3 +74,38 @@ describe("parseInvocation", () => {
     });
   });
 });
+
+describe("acm <verb> --help (#117)", () => {
+  test("--help or -h after a verb prints that verb's usage and the shared options", () => {
+    const text = [
+      "Usage:",
+      '  acm reply "<phrase>" "<text>"     Reply to the thread matching <phrase> (= comment -r)',
+      "  acm reply --batch <edits.json>    Batch reply-append (idempotent); [{id,match,insert}]",
+      "",
+      "Options:",
+      "  --doc <file.md>    The document (else $ACM_DOC, else the doc open in the running ACM editor)",
+      "  --author <name>    Who the comment or decision is from (default: $ACM_AUTHOR, else claude)",
+      "  --group <id>       comment, suggest: tag a set; accept, reject: act on the whole set",
+      "  --json             threads, spell list, decisions: machine-readable output",
+      "  --                 End of options: text after it may start with --",
+      "  (--doc, --author and --group also take --flag=value; every write snapshots the doc first)",
+    ].join("\n");
+    expect(parse(["reply", "--help"])).toEqual({ kind: "verb-help", text });
+    expect(parse(["reply", "hmm", "-h"])).toEqual({ kind: "verb-help", text });
+  });
+
+  test("a wrapped usage line keeps its continuation; import lists no document options", () => {
+    expect(parse(["import", "--help"])).toEqual({
+      kind: "verb-help",
+      text: [
+        "Usage:",
+        "  acm import <Google Docs URL|file.docx> [out.md]",
+        "                                     Google Docs/Word → CriticMarkup, including comments",
+      ].join("\n"),
+    });
+  });
+
+  test("after `--`, --help is text for the verb", () => {
+    expect(parse(["reply", "hmm", "--", "--help"])).toEqual({ kind: "agent", verb: "reply", args: ["hmm", "--", "--help"] });
+  });
+});

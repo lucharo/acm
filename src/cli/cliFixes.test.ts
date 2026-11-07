@@ -445,3 +445,14 @@ describe("#106 acm wrap keeps the document's line endings", () => {
     );
   });
 });
+
+describe("#117 acm <verb> --help", () => {
+  test("prints the verb's usage and exits 0, with no document needed", async () => {
+    const r = await cli(["threads", "--help"], { ACM_DOC: "" });
+    expect(r.code).toBe(0);
+    expect(r.out.split("\n").slice(0, 2)).toEqual([
+      "Usage:",
+      "  acm threads [--json]              List threads: anchor, authors, count, [SUGGEST]",
+    ]);
+  });
+});

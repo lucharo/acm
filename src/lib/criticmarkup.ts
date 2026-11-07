@@ -960,11 +960,46 @@ function wrapParagraph(para: string, width: number): string {
   return lines.join("\n");
 }
 
+/** The fenced code blocks of `lines` (the same fence rule hardWrap applies), as
+ *  offset ranges. Construct-shaped text inside them is an example. A plain line
+ *  scan, so markup elsewhere can't make prose look like code. */
+function fencedCodeRanges(lines: string[]): SourceRange[] {
+  const ranges: SourceRange[] = [];
+  let at = 0;
+  let open: number | null = null;
+  for (const line of lines) {
+    if (/^ {0,3}(```|~~~)/.test(line)) {
+      if (open === null) open = at;
+      else {
+        ranges.push({ from: open, to: at + line.length });
+        open = null;
+      }
+    }
+    at += line.length + 1;
+  }
+  if (open !== null) ranges.push({ from: open, to: at });
+  return ranges;
+}
+
 export function hardWrap(text: string, width = 88): string {
   const lines = text.split("\n");
   const out: string[] = [];
   let para: string[] = [];
   let inFence = false;
+  // A construct is atomic over its WHOLE range (#122): a line that starts inside a
+  // multi-line token is its continuation and goes wherever the token's first line
+  // went, whatever block it looks like (quote, list, heading, blank, fence). A
+  // whole-line insertion block stays a block (verbatim, never joined with prose),
+  // and construct-shaped text inside code is an example, not a construct.
+  const fenced = fencedCodeRanges(lines);
+  const tokens = scanTokens(text).filter(
+    (tok) =>
+      (text.slice(tok.from, tok.to).includes("\n") || isStandaloneInsertion(text, tok)) &&
+      !positionInRanges(tok.from, fenced),
+  );
+  let t = 0;
+  let lineStart = 0;
+  let lastToPara = false;
   const flush = () => {
     if (para.length) {
       out.push(wrapParagraph(para.join("\n"), width));
@@ -972,6 +1007,19 @@ export function hardWrap(text: string, width = 88): string {
     }
   };
   for (const line of lines) {
+    const start = lineStart;
+    lineStart += line.length + 1;
+    while (t < tokens.length && tokens[t].to <= start) t++;
+    if (t < tokens.length && tokens[t].from < start) {
+      (lastToPara ? para : out).push(line);
+      continue;
+    }
+    lastToPara = false;
+    if (t < tokens.length && tokens[t].from < lineStart && isStandaloneInsertion(text, tokens[t])) {
+      flush();
+      out.push(line);
+      continue;
+    }
     if (/^ {0,3}(```|~~~)/.test(line)) {
       flush();
       inFence = !inFence;
@@ -984,6 +1032,7 @@ export function hardWrap(text: string, width = 88): string {
       continue;
     }
     para.push(line);
+    lastToPara = true;
   }
   flush();
   return out.join("\n");

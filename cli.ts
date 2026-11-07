@@ -56,6 +56,10 @@ if (invocation.kind === "help") {
   console.log(HELP_TEXT);
   process.exit(0);
 }
+if (invocation.kind === "verb-help") {
+  console.log(invocation.text);
+  process.exit(0);
+}
 if (invocation.kind === "error") {
   console.error(invocation.message);
   process.exit(2);

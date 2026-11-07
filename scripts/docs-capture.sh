@@ -64,6 +64,7 @@ capture accept-group acm accept --group time --doc morning-walk.md
 capture resolve acm resolve "worth saying how often" --doc morning-walk.md
 capture spell acm spell --doc morning-walk.md
 capture spell-suggest acm spell suggest --doc morning-walk.md
+capture spell-help acm spell --help
 capture_fail no-doc acm threads
 capture_fail ambiguous acm suggest "ten minutes" "a quarter of an hour" --doc morning-walk.md
 

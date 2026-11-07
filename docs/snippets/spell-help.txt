@@ -1,0 +1,15 @@
+$ acm spell --help
+Usage:
+  acm spell [list] [--json]         List flagged words: count, suggestions, line
+  acm spell add <word…>             Keep words in your personal dictionary
+  acm spell ignore <word…>          Stop flagging words in THIS doc only
+  acm spell replace "<w>" "<fix>"   Fix every flagged <w> in the doc (case-preserving)
+  acm spell suggest [word…]         One SUGGEST[g:spelling] card per flagged word
+
+Options:
+  --doc <file.md>    The document (else $ACM_DOC, else the doc open in the running ACM editor)
+  --author <name>    Who the comment or decision is from (default: $ACM_AUTHOR, else claude)
+  --group <id>       comment, suggest: tag a set; accept, reject: act on the whole set
+  --json             threads, spell list, decisions: machine-readable output
+  --                 End of options: text after it may start with --
+  (--doc, --author and --group also take --flag=value; every write snapshots the doc first)

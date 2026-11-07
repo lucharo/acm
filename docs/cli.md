@@ -25,6 +25,14 @@ Value options take `--doc notes.md` or `--doc=notes.md`. Any other `--word` is r
 acm suggest -- "--verbose" "--quiet"
 ```
 
+`acm <command> --help` (or `-h`) prints that command's usage and these options, for example:
+
+??? example "`acm spell --help`"
+
+    ```text
+    --8<-- "spell-help.txt"
+    ```
+
 How the review commands behave:
 
 - **Matching is by text**, never by id. The quoted argument must match exactly one place, or the command changes nothing, says why and exits 1:
