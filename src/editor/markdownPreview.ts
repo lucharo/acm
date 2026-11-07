@@ -580,7 +580,7 @@ export function previewStyleNeedsRebuild(change: {
 }
 
 // ── STYLE plugin ──────────────────────────────────────────────────────────────
-function buildStyle(view: EditorView): DecorationSet {
+export function buildStyle(view: EditorView): DecorationSet {
   // Collect ranges then sort by (from, startSide) so the builder never receives
   // out-of-order input — heading marks and inline marks can interleave.
   const ranges: Range<Decoration>[] = [];
@@ -600,8 +600,9 @@ function buildStyle(view: EditorView): DecorationSet {
         ) {
           return false;
         }
-        // Don't descend into CriticMarkup — its view owns styling there.
-        if (name.startsWith("CM")) return false;
+        // CriticMarkup's own view colours its spans; Markdown inside a highlight,
+        // insertion or deletion still gets its inline style (an anchored code
+        // span stays code, #85). A comment body parses as one opaque node.
         // Inactive tables are one block widget; active tables deliberately stay
         // raw, without nested preview styling obscuring the editable source.
         if (name === "Table" || name === "FencedCode" || name === "CodeBlock") return false;

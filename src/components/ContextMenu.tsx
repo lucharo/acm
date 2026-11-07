@@ -58,7 +58,7 @@ export default function ContextMenu({ menu, onClose }: { menu: MenuState | null;
           return (
             <div
               key={i}
-              className="px-2.5 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]"
+              className="px-2.5 pb-0.5 pt-1 text-[10px] font-medium text-[var(--faint)]"
             >
               {it.label}
             </div>

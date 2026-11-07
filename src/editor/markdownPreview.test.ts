@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { EditorState } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+
+import { CriticMarkup } from "./criticMarkupParser";
+import { standaloneInsertionTokensField } from "./standaloneInsertion";
 
 import {
+  buildStyle,
   renderedTableCellSelector,
   tableCellReviewState,
   tableCellLinkSelection,
@@ -49,5 +56,33 @@ describe("rich table keyboard navigation", () => {
         },
       ],
     });
+  });
+});
+
+describe("inline styles inside CriticMarkup (#85)", () => {
+  function styledText(doc: string, className: string): string[] {
+    const state = EditorState.create({
+      doc,
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [CriticMarkup] }),
+        standaloneInsertionTokensField,
+      ],
+    });
+    const view = { state, visibleRanges: [{ from: 0, to: doc.length }], hasFocus: false };
+    const out: string[] = [];
+    buildStyle(view as unknown as EditorView).between(0, doc.length, (from, to, deco) => {
+      if (deco.spec.class === className) out.push(doc.slice(from, to));
+    });
+    return out;
+  }
+
+  test("an anchored code span keeps its code style", () => {
+    const doc = "Run {==`bunx --bun skills add x`==}{>>@You: npx?<<} now.";
+
+    expect(styledText(doc, "cm-md-code")).toEqual(["`bunx --bun skills add x`"]);
+  });
+
+  test("a comment body stays one opaque node, never styled", () => {
+    expect(styledText("Text{>>@You: see `code` here<<}.", "cm-md-code")).toEqual([]);
   });
 });

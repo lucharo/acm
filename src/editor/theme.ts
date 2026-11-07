@@ -17,14 +17,14 @@ export const acmTheme: Extension = EditorView.theme(
     "&": {
       color: "var(--ink)",
       backgroundColor: "transparent",
-      fontSize: "17px",
+      fontSize: "16px",
     },
     "&.cm-focused": {
       outline: "none",
     },
     ".cm-scroller": {
       fontFamily: "var(--editor-font)",
-      lineHeight: "1.7",
+      lineHeight: "1.68",
       overflow: "auto",
     },
     // Centred prose column. The comment sidebar is its own panel, so the editor
@@ -75,18 +75,21 @@ export const acmTheme: Extension = EditorView.theme(
 
     // ── Markdown live-preview classes (styled by markdownPreview.ts marks) ──────
     ".cm-md-h1": {
-      fontSize: "1.85em",
-      fontWeight: "700",
+      fontSize: "1.6em",
+      fontWeight: "600",
+      letterSpacing: "-0.012em",
       lineHeight: "1.25",
     },
     ".cm-md-h2": {
-      fontSize: "1.45em",
-      fontWeight: "700",
+      fontSize: "1.3em",
+      fontWeight: "600",
+      letterSpacing: "-0.012em",
       lineHeight: "1.3",
     },
     ".cm-md-h3": {
-      fontSize: "1.2em",
-      fontWeight: "650",
+      fontSize: "1.1em",
+      fontWeight: "600",
+      letterSpacing: "-0.012em",
       lineHeight: "1.35",
     },
     ".cm-md-h4, .cm-md-h5, .cm-md-h6": {
@@ -95,12 +98,14 @@ export const acmTheme: Extension = EditorView.theme(
     },
     ".cm-md-strong": { fontWeight: "700" },
     ".cm-md-em": { fontStyle: "italic" },
+    // Quiet inline code: a faint tint, no box edge, so it reads as part of
+    // the sentence rather than a grey block (#79).
     ".cm-md-code": {
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: "0.88em",
-      background: "var(--line)",
-      borderRadius: "4px",
-      padding: "0.08em 0.32em",
+      fontSize: "0.86em",
+      background: "color-mix(in srgb, var(--ink) 5%, transparent)",
+      borderRadius: "3px",
+      padding: "0.05em 0.22em",
     },
     ".cm-math-widget": {
       color: "inherit",
@@ -153,7 +158,7 @@ export const acmTheme: Extension = EditorView.theme(
     },
     // Bionic-reading: emboldened word-leads (toggled in settings).
     ".cm-bionic": {
-      fontWeight: "700",
+      fontWeight: "560", // lighter than bold, so long passages stay calm (#79)
     },
     // Spell check: a red wavy underline under a misspelled word (editor/spellcheck.ts).
     // Decoration-only, so it layers cleanly over any prose — including green
@@ -326,9 +331,9 @@ export const acmTheme: Extension = EditorView.theme(
       maxWidth: "100%",
       margin: "0",
       overflowX: "auto",
-      border: "1px solid var(--line-strong)",
+      border: "0",
       borderRadius: "6px",
-      backgroundColor: "var(--line)",
+      backgroundColor: "color-mix(in srgb, var(--ink) 4%, transparent)",
       padding: "0.7em 0.85em",
       whiteSpace: "pre-wrap",
       overflowWrap: "anywhere",
@@ -342,10 +347,8 @@ export const acmTheme: Extension = EditorView.theme(
       marginBottom: "0.35em",
       color: "var(--faint)",
       fontFamily: "ui-sans-serif, system-ui, sans-serif",
-      fontSize: "0.72em",
-      fontWeight: "700",
-      letterSpacing: "0.06em",
-      textTransform: "uppercase",
+      fontSize: "0.78em",
+      fontWeight: "500",
     },
     ".cm-rich-html-table": {
       width: "100%",
@@ -373,11 +376,13 @@ export const acmTheme: Extension = EditorView.theme(
     },
 
     // ── CriticMarkup mark classes ───────────────────────────────────────────────
+    // An inline addition is green, underlined text: no box, so a one-line
+    // addition (a sentence, a list item) sits in the flow of the text (#79).
     ".cm-crit-ins": {
       color: "var(--crit-ins)",
-      backgroundColor: "var(--crit-ins-bg)",
-      borderRadius: "3px",
-      padding: "0.02em 0.06em",
+      textDecoration: "underline",
+      textDecorationThickness: "2px",
+      textUnderlineOffset: "3px",
     },
     // The widget's outer element holds the spacing as padding (#70); the
     // bordered card is the inner section.
@@ -404,10 +409,8 @@ export const acmTheme: Extension = EditorView.theme(
     },
     ".cm-crit-block-label": {
       color: "var(--crit-ins)",
-      fontSize: "0.74em",
-      fontWeight: "700",
-      letterSpacing: "0.04em",
-      textTransform: "uppercase",
+      fontSize: "0.78em",
+      fontWeight: "600",
     },
     ".cm-crit-block-actions": {
       display: "flex",
@@ -506,8 +509,7 @@ export const acmTheme: Extension = EditorView.theme(
       padding: "0.02em 0.06em",
     },
     ".cm-crit-hl": {
-      backgroundColor: "var(--crit-hl-bg)",
-      color: "var(--crit-hl-ink)",
+      backgroundColor: "color-mix(in srgb, var(--crit-hl-bg) 70%, transparent)",
       borderRadius: "3px",
       padding: "0.02em 0.06em",
     },
@@ -520,8 +522,7 @@ export const acmTheme: Extension = EditorView.theme(
     // same hue (colourblind-safe density cue), like GDocs darkening regions with
     // more comments. Sits under --active/--seen, which override the feel as needed.
     ".cm-crit-hl--busy": {
-      backgroundColor: "var(--crit-hl-bg-strong)",
-      boxShadow: "inset 0 0 0 1px var(--crit-hl-ink)",
+      backgroundColor: "var(--crit-hl-bg)",
     },
     // …but an ACTIVE busy span keeps its bottom accent: equal-specificity --active
     // and --busy both set boxShadow, so without this the later --busy ring would win
@@ -604,6 +605,24 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-crit-comment-anchor--active": {
       opacity: "1",
       transform: "scale(1.25)",
+    },
+    // A point comment (no highlighted span) is a small "Note" pill, so it can
+    // be found in the text; clicking it opens its card (#79). Two classes, so
+    // the phone-width dot size below does not shrink it.
+    ".cm-crit-comment-anchor.cm-crit-comment-anchor--point": {
+      width: "auto",
+      height: "auto",
+      padding: "0 0.35em",
+      borderRadius: "999px",
+      color: "#fff",
+      opacity: "1",
+      verticalAlign: "0.1em",
+      fontFamily: "ui-sans-serif, -apple-system, system-ui, sans-serif",
+      fontSize: "0.68em",
+      lineHeight: "1.5",
+    },
+    ".cm-crit-comment-anchor--point::before": {
+      content: '"Note"',
     },
 
     // ── Inline SUGGEST: pair (renders like a native substitution) ───────────────

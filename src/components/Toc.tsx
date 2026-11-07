@@ -21,7 +21,7 @@ export default function Toc({ headings, activeFrom, onJump, onClose }: TocProps)
   return (
     <div className="fixed left-2 top-16 z-30 flex max-h-[calc(100vh-5rem)] w-60 flex-col rounded-xl border border-[var(--line)] bg-[var(--panel)] shadow-2xl">
       <div className="flex items-center gap-2 border-b border-[var(--line)] px-3 py-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">Table of contents</span>
+        <span className="text-[11px] font-semibold text-[var(--muted)]">Table of contents</span>
         <button
           type="button"
           onClick={onClose}

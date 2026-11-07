@@ -9,6 +9,42 @@ import { standaloneInsertionPresentation } from "./criticMarkupView";
 import { documentPreviewExtension } from "./previewMode";
 
 describe("standalone insertion previews", () => {
+  test("a one-line list item or sentence stays an inline insertion (#79)", () => {
+    const content = [
+      "1. one",
+      "{++2. new item++}",
+      "{++- a bullet++}",
+      "{++* a starred bullet++}",
+      "{+++ a plus bullet++}",
+      "{++A whole new sentence.++}",
+      "{++## A new heading++}",
+      "{++> A quote++}",
+    ].join("\n");
+
+    expect(standaloneInsertionPreviews(content).map((token) => token.inner)).toEqual([
+      "## A new heading",
+      "> A quote",
+    ]);
+  });
+
+  test("a one-line addition with Markdown formatting or a block form keeps the rich preview", () => {
+    const content = [
+      "{++Use `bun` and **ACM**.++}",
+      "{++See [the docs](https://example.com).++}",
+      "{++---++}",
+      "{++    indented code++}",
+      "{++\n\nNew paragraph.\n\n++}",
+    ].join("\n");
+
+    expect(standaloneInsertionPreviews(content).map((token) => token.inner)).toEqual([
+      "Use `bun` and **ACM**.",
+      "See [the docs](https://example.com).",
+      "---",
+      "    indented code",
+      "\n\nNew paragraph.\n\n",
+    ]);
+  });
+
   test("rich additions keep review actions in the comment rail", () => {
     expect(standaloneInsertionPresentation()).toEqual({
       label: "Added",

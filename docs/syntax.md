@@ -8,9 +8,9 @@ ACM reads standard [CriticMarkup](https://github.com/CriticMarkup/CriticMarkup-t
 
 | Write | Meaning | ACM shows |
 | --- | --- | --- |
-| `{++added text++}` | Inline suggestion: insert | Green text with ✓ ✗, an **ADD** card |
-| `{--removed text--}` | Inline suggestion: delete | Red struck text with ✓ ✗, a **DELETE** card |
-| `{~~old~>new~~}` | Inline suggestion: replace | Struck old → green new, a **REPLACE** card |
+| `{++added text++}` | Inline suggestion: insert | Green underlined text with ✓ ✗, an **Add** card |
+| `{--removed text--}` | Inline suggestion: delete | Red struck text with ✓ ✗, a **Delete** card |
+| `{~~old~>new~~}` | Inline suggestion: replace | Struck old → green new, a **Replace** card |
 | `{==span==}` | Highlight | Yellow; a marking only, not a suggestion |
 | `{>>note<<}` | Comment | A card in the margin |
 
@@ -34,7 +34,9 @@ ACM reads standard [CriticMarkup](https://github.com/CriticMarkup/CriticMarkup-t
     {==In winter the towpath floods==}{>>@Sam: how often?<<}{>>@claude: a few days each winter<<}
     ```
 
-- A comment with no highlight before it is a point comment, attached to where it sits.
+- A comment with no highlight before it is a point comment, attached to where it sits. It shows as a small **Note** pill in the text; click it to open its card.
+
+An addition on a line of its own reads inline like any other when it is one line of plain text (a sentence or a list item). A multi-line addition, or one line with formatting or a block (heading, quote, table, code, rule), renders as a block with an **Added** label, its card in the margin.
 
 ## SUGGEST cards
 
@@ -44,7 +46,7 @@ To propose new wording for a span, wrap the span where it already is in a highli
 {==I don't listen to anything while I walk==}{>>@claude: SUGGEST: I walk without headphones<<}
 ```
 
-- ACM shows the span struck with the new wording beside it, and a **SUGGESTED EDIT** card with **Apply**.
+- ACM shows the span struck with the new wording beside it, and a **Suggested edit** card with **Apply**.
 - An empty `SUGGEST:` proposes deleting the span.
 - A `SUGGEST:` written as a reply targets the thread's span, so a thread can end in a concrete edit.
 

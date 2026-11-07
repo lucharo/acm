@@ -8,14 +8,15 @@ This page is for the person deciding. Every comment and suggestion becomes a car
 
 | In the page | Card in the margin | Your decisions |
 | --- | --- | --- |
-| Green text with ✓ ✗ | **ADD**: an inline suggestion to insert text | Accept, reject, edit, reply |
-| Red struck text with ✓ ✗ | **DELETE**: an inline suggestion to remove text | Accept, reject, reply |
-| Struck old → green new | **REPLACE**: an inline substitution | Accept, reject, edit, reply |
-| Struck span followed by green wording | **SUGGESTED EDIT**: a SUGGEST card on an anchored span | Apply, Apply & resolve, Reject, edit, reply |
+| Green underlined text with ✓ ✗ | **Add**: an inline suggestion to insert text | Accept, reject, edit, reply |
+| Red struck text with ✓ ✗ | **Delete**: an inline suggestion to remove text | Accept, reject, reply |
+| Struck old → green new | **Replace**: an inline substitution | Accept, reject, edit, reply |
+| Struck span followed by green wording | **Suggested edit**: a SUGGEST card on an anchored span | Apply, Apply & resolve, Reject, edit, reply |
 | Yellow highlight with dots | A comment thread on that span | Reply, Suggest edit, Mark seen, Resolve |
+| A **Note** pill in the text | A point comment (no highlighted span) | Click it to open its card |
 | Yellow highlight, no card | A plain highlight, a marking only | Edit the text |
 
-- REPLACE and SUGGESTED EDIT look alike in the page; the card label tells them apart. Both are suggestions, but only SUGGEST cards can join a suggestion group or be accepted from the shell.
+- Replace and Suggested edit look alike in the page; the card label tells them apart. Both are suggestions, but only SUGGEST cards can join a suggestion group or be accepted from the shell.
 - Each card shows its author (`@claude`, `@Sam`), coloured per author. Authors are self-declared labels, not accounts.
 - A pill above the cards counts the comment threads you have not marked seen ("4 open"), and reads "all caught up" when there are none. Its ↑ and ↓ arrows step through the cards.
 - A document with no cards uses no margin and stays centred; the comments button in the header shows or hides the margin by hand.
@@ -39,7 +40,7 @@ Comments can share a group too (an agent writes them with `acm comment --group <
 
 ## Comment, reply and resolve
 
-- **Select text** to reveal **Add comment** and **Make suggestion** beside the selection, or press `Cmd+Option+M` / `Cmd+Option+S` (`Ctrl+Alt+M` / `Ctrl+Alt+S` on Windows and Linux).
+- **Select text** to reveal **Add comment** and **Make suggestion** beside the selection, or press `Cmd+Option+M` / `Cmd+Option+S` (`Ctrl+Alt+M` / `Ctrl+Alt+S` on Windows and Linux). The comment box takes the cursor, so you can type straight away.
 - **Reply** adds a comment to the thread. **Suggest edit** on a thread proposes new wording for its span.
 - **Mark seen** records that you have read a thread. Agents see the same seen state in `acm threads`.
 - **Resolve** removes the whole thread, comments and anchor markup, keeps the prose and moves to the next card. A resolved thread is gone from the file; [history](#undo-and-history) still has it.

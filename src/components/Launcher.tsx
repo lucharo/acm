@@ -67,7 +67,7 @@ export default function Launcher({ session }: { session: LauncherSession }) {
           <form onSubmit={submit(true, newPath)} className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5 shadow-sm">
             <h2 className="text-lg font-semibold">New document</h2>
             <p className="mt-1 text-sm text-[var(--muted)]">Name a Markdown file before ACM creates it.</p>
-            <label className="mt-5 block text-xs font-medium uppercase tracking-wide text-[var(--faint)]" htmlFor="new-document-path">
+            <label className="mt-5 block text-xs font-medium text-[var(--faint)]" htmlFor="new-document-path">
               Name or path
             </label>
             <input
@@ -90,7 +90,7 @@ export default function Launcher({ session }: { session: LauncherSession }) {
           <form onSubmit={submit(false, openPath)} className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5 shadow-sm">
             <h2 className="text-lg font-semibold">Open document</h2>
             <p className="mt-1 text-sm text-[var(--muted)]">Use an absolute path or one relative to the launch folder.</p>
-            <label className="mt-5 block text-xs font-medium uppercase tracking-wide text-[var(--faint)]" htmlFor="open-document-path">
+            <label className="mt-5 block text-xs font-medium text-[var(--faint)]" htmlFor="open-document-path">
               Existing path
             </label>
             <input

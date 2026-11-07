@@ -318,7 +318,7 @@ function SuggestionBlock({
   return (
     <div className="pt-1">
       <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">{badge}</span>
+        <span className="text-[10px] font-semibold text-[var(--muted)]">{badge}</span>
         {onEdit ? (
           <button
             type="button"
@@ -383,7 +383,7 @@ function CommentBody({
   }
   return (
     <div>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--crit-comment)]">Suggested edit</div>
+      <div className="mb-1 text-[10px] font-semibold text-[var(--crit-comment)]">Suggested edit</div>
       <p className="whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-2 py-1.5 text-[15px] leading-relaxed text-[var(--crit-ins)]">
         {repl.trim() ? repl : "(delete this span)"}
       </p>

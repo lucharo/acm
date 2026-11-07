@@ -61,9 +61,17 @@ function standaloneInsertionRange(content: string, from: number, to: number): bo
   );
 }
 
-/** True when an insertion occupies a whole Markdown line/block in `content`.
- * The token may contain newlines and blank lines; only the surrounding line
- * prefixes/suffixes must be indentation whitespace. */
+// One line of plain added prose or one plain list item reads as an inline green
+// insertion (#79). A block form (heading, quote, table, fence, HTML, rule,
+// indented code) or inline Markdown (code, emphasis, links, maths, escapes)
+// needs the rich block preview, which renders it.
+const BLOCK_LINE = /^(?:[ \t]*(?:#{1,6}[ \t]|>|\||```|~~~|<)|(?: {4}|\t)|[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
+const INLINE_MARKDOWN = /[`*_[\]<$\\~]/;
+
+/** True when an insertion occupies a whole Markdown line/block in `content`
+ * AND needs the rendered block preview: it spans several lines, or its one line
+ * is a block construct. The token may contain newlines and blank lines; only the
+ * surrounding line prefixes/suffixes must be indentation whitespace. */
 export function isStandaloneInsertion(
   content: string,
   token: Pick<CritToken, "type" | "from" | "to">,
@@ -71,6 +79,11 @@ export function isStandaloneInsertion(
   if (token.type !== "insert") return false;
   const raw = content.slice(token.from, token.to);
   if (!raw.startsWith("{++") || !raw.endsWith("++}")) return false;
+  const inner = raw.slice(3, -3);
+  const oneLine = !inner.includes("\n");
+  // A bullet's own marker (`* item`) is not formatting.
+  const text = inner.replace(/^[ \t]*[-*+][ \t]+/, "");
+  if (oneLine && !BLOCK_LINE.test(inner) && !INLINE_MARKDOWN.test(text)) return false;
   return standaloneInsertionRange(content, token.from, token.to);
 }
 

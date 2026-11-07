@@ -238,7 +238,7 @@ export default function Header(props: HeaderProps) {
               />
               <div className="my-1 border-t border-[var(--line)]" />
               <div className="px-2 py-1.5">
-                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
+                <div className="mb-1 text-[10px] font-medium text-[var(--faint)]">
                   Your name (on comments you add)
                 </div>
                 <input
@@ -339,7 +339,7 @@ export default function Header(props: HeaderProps) {
               </button>
               <div className="my-1 border-t border-[var(--line)]" />
               <div className="px-2 py-1.5">
-                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
+                <div className="mb-1 text-[10px] font-medium text-[var(--faint)]">
                   Agent-review skill
                 </div>
                 <p className="text-[11px] leading-snug text-[var(--muted)]">
@@ -383,7 +383,7 @@ function Segmented<T extends string>({
 }) {
   return (
     <div className="px-2 py-1.5">
-      <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
+      <div className="mb-1 text-[10px] font-medium text-[var(--faint)]">
         {label}
       </div>
       <div className="flex gap-1">
@@ -557,7 +557,7 @@ function SpellingTab({
       )}
       <div className="my-1 border-t border-[var(--line)]" />
       <div className="px-2 py-1.5">
-        <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--faint)]">
+        <div className="mb-1 text-[10px] font-medium text-[var(--faint)]">
           Personal dictionary{dictionary.length ? ` · ${dictionary.length}` : ""}
         </div>
         <form onSubmit={submit} className="flex gap-1">

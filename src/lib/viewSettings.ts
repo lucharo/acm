@@ -27,14 +27,14 @@ export interface ViewSettings {
 }
 export const FONT_STACKS: Record<Font, string> = {
   serif: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
-  sans: 'ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+  sans: '-apple-system, "SF Pro Text", ui-sans-serif, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
   mono: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
 };
 export const FONT_LABELS: Record<Font, string> = { serif: "Serif", sans: "Sans", mono: "Mono" };
 
 export const DEFAULT_SETTINGS: ViewSettings = {
   theme: "system", // fresh installs follow the OS; stored choices override
-  font: "serif",
+  font: "sans",
   page: true,
   lineNumbers: false,
   bionic: false,

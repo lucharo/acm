@@ -41,7 +41,7 @@ export default function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
         <div className="grid max-h-[64vh] grid-cols-1 gap-x-8 gap-y-5 overflow-y-auto p-4 sm:grid-cols-2">
           {groups.map((group) => (
             <section key={group.title}>
-              <h3 className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--faint)]">
+              <h3 className="mb-0.5 text-[11px] font-semibold text-[var(--faint)]">
                 {group.title}
               </h3>
               {group.note ? (

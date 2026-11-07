@@ -31,7 +31,8 @@ import {
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { Facet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import type { EditorState, Extension, Range, RangeSet } from "@codemirror/state";
-import { suggestCards } from "../lib/criticmarkup";
+import { groupThreads, scanTokens, suggestCards, threadAnchorHighlightFor } from "../lib/criticmarkup";
+import type { CommentToken } from "../lib/types";
 import type { SuggestCard } from "../lib/criticmarkup";
 import { appendRichBlocks } from "./richMarkdown";
 import { standaloneInsertionTokens } from "./standaloneInsertion";
@@ -218,15 +219,19 @@ class CommentAnchorWidget extends WidgetType {
   constructor(
     readonly from: number,
     readonly to: number,
+    /** A point comment: no highlighted span, the marker is all there is. */
+    readonly point: boolean,
   ) {
     super();
   }
   eq(other: CommentAnchorWidget) {
-    return other.from === this.from && other.to === this.to;
+    return other.from === this.from && other.to === this.to && other.point === this.point;
   }
   toDOM() {
     const el = document.createElement("span");
-    el.className = "cm-crit-comment-anchor";
+    el.className = this.point
+      ? "cm-crit-comment-anchor cm-crit-comment-anchor--point"
+      : "cm-crit-comment-anchor";
     el.title = "View comment";
     el.setAttribute("contenteditable", "false");
     el.setAttribute("data-from", String(this.from));
@@ -446,6 +451,31 @@ const markPlugin = ViewPlugin.fromClass(
   },
 );
 
+/** Offsets of the POINT comments: comments with no anchoring highlight, by
+ * the same rules every card uses (a stray space or a reply's thread root still
+ * anchors). Derived per document, like the suggestion cards. */
+function pointCommentOffsets(content: string): Set<number> {
+  const tokens = scanTokens(content);
+  const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
+  const threads = groupThreads(comments, content);
+  return new Set(
+    comments
+      .filter((comment) => threadAnchorHighlightFor(content, comment, tokens, threads) === null)
+      .map((comment) => comment.from),
+  );
+}
+
+export const pointCommentsField = StateField.define<Set<number>>({
+  create: (state) => pointCommentOffsets(state.doc.toString()),
+  update(value, tr) {
+    return tr.docChanged ? pointCommentOffsets(tr.newDoc.toString()) : value;
+  },
+});
+
+export function isPointComment(state: EditorState, from: number): boolean {
+  return state.field(pointCommentsField).has(from);
+}
+
 // ── WIDGET + COMMENT-HIDE plugin (→ regular decorations) ──────────────────────
 function buildWidgets(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
@@ -493,7 +523,7 @@ function buildWidgets(view: EditorView): DecorationSet {
                   sug.groupId,
                   sug.groupSize,
                 )
-              : new CommentAnchorWidget(node.from, node.to);
+              : new CommentAnchorWidget(node.from, node.to, isPointComment(view.state, node.from));
             // A comment body may contain REAL newlines (multi-line reply). View
             // plugins MAY NOT provide replace decorations that span a line break
             // (CM6 throws and the whole view blanks out — seen in the wild). Split
@@ -684,6 +714,7 @@ export function criticMarkupExtension(): Extension {
   return [
     critHighlightField,
     suggestCardsField,
+    pointCommentsField,
     standaloneInsertionPreviewField,
     EditorView.outerDecorations.of((view) =>
       view.plugin(markPlugin)?.decorations ?? Decoration.none,
