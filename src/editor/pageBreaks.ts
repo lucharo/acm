@@ -141,6 +141,34 @@ const pageBreaksTheme = EditorView.theme({
     color: "var(--faint)",
     lineHeight: "1",
   },
+  // Page view's sheet (#79): the break is a real cut, Docs-style. The gap runs
+  // the sheet's full width (its 2.5rem side padding plus the 1px edge) in the
+  // desk colour, so one page ends and the next begins. Vertical spacing stays
+  // padding, never margin, or the line-number gutter drifts (#70).
+  "@media (min-width: 641px)": {
+    // White space closes the page above and opens the page below (its
+    // margins); between them the desk-coloured band with soft shadows.
+    ".cm-content:has(.cm-acm-pagegap) .cm-acm-pagegap": {
+      display: "block",
+      padding: "36px 0",
+    },
+    ".cm-content:has(.cm-acm-pagegap) .cm-acm-pagegap-rule": {
+      display: "none",
+    },
+    ".cm-content:has(.cm-acm-pagegap) .cm-acm-pagegap-label": {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      height: "44px",
+      margin: "0 calc(-2.5rem - 1px)",
+      backgroundColor: "var(--desk)",
+      boxShadow:
+        "inset 0 8px 9px -9px rgba(0, 0, 0, 0.22), inset 0 -8px 9px -9px rgba(0, 0, 0, 0.22)",
+      color: "var(--faint)",
+      fontSize: "10.5px",
+      letterSpacing: "0.02em",
+    },
+  },
   // Fixed page-position chip, bottom-left of the editor frame.
   ".cm-acm-pagechip": {
     position: "absolute",

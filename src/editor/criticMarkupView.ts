@@ -215,28 +215,45 @@ class AcceptRejectWidget extends WidgetType {
 }
 
 /** A small speech-bubble glyph standing in for hidden comment markup. */
+/** More stacked comments than this fold into one dot with the count (#79). */
+export const DOT_STACK_LIMIT = 5;
+
 class CommentAnchorWidget extends WidgetType {
   constructor(
     readonly from: number,
     readonly to: number,
     /** A point comment: no highlighted span, the marker is all there is. */
     readonly point: boolean,
+    /** Its place in a run of directly stacked comments, and the run's size. */
+    readonly stack: CommentStack = { index: 0, size: 1 },
   ) {
     super();
   }
   eq(other: CommentAnchorWidget) {
-    return other.from === this.from && other.to === this.to && other.point === this.point;
+    return (
+      other.from === this.from &&
+      other.to === this.to &&
+      other.point === this.point &&
+      other.stack.index === this.stack.index &&
+      other.stack.size === this.stack.size
+    );
   }
   toDOM() {
     const el = document.createElement("span");
+    const folds = !this.point && this.stack.size > DOT_STACK_LIMIT;
     el.className = this.point
       ? "cm-crit-comment-anchor cm-crit-comment-anchor--point"
-      : "cm-crit-comment-anchor";
-    el.title = "View comment";
+      : folds
+        ? this.stack.index === 0
+          ? "cm-crit-comment-anchor cm-crit-comment-anchor--count"
+          : "cm-crit-comment-anchor cm-crit-comment-anchor--folded"
+        : "cm-crit-comment-anchor";
+    if (folds && this.stack.index === 0) el.textContent = String(this.stack.size);
+    el.title = folds ? `${this.stack.size} comments` : "View comment";
     el.setAttribute("contenteditable", "false");
     el.setAttribute("data-from", String(this.from));
     el.setAttribute("data-to", String(this.to));
-    return el; // visual is a CSS dot (theme.ts); no text content
+    return el; // visual is a CSS dot (theme.ts); a folded stack shows its count
   }
   ignoreEvent() {
     return false;
@@ -476,6 +493,41 @@ export function isPointComment(state: EditorState, from: number): boolean {
   return state.field(pointCommentsField).has(from);
 }
 
+export interface CommentStack {
+  index: number;
+  size: number;
+}
+
+/** Runs of comments written directly one after another (a thread's dots),
+ * keyed by each comment's offset. */
+export function commentStacks(content: string): Map<number, CommentStack> {
+  const comments = scanTokens(content).filter((t) => t.type === "comment");
+  // An anchored SUGGEST comment draws its own inline widget, not a dot.
+  const suggestions = new Set(suggestCards(content).map((card) => card.commentFrom));
+  const stacks = new Map<number, CommentStack>();
+  let run: number[] = [];
+  const close = () => {
+    const dots = run.filter((from) => !suggestions.has(from));
+    dots.forEach((from, index) => stacks.set(from, { index, size: dots.length }));
+  };
+  comments.forEach((comment, i) => {
+    if (i > 0 && comments[i - 1].to !== comment.from) {
+      close();
+      run = [];
+    }
+    run.push(comment.from);
+  });
+  close();
+  return stacks;
+}
+
+export const commentStacksField = StateField.define<Map<number, CommentStack>>({
+  create: (state) => commentStacks(state.doc.toString()),
+  update(value, tr) {
+    return tr.docChanged ? commentStacks(tr.newDoc.toString()) : value;
+  },
+});
+
 // ── WIDGET + COMMENT-HIDE plugin (→ regular decorations) ──────────────────────
 function buildWidgets(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
@@ -523,7 +575,12 @@ function buildWidgets(view: EditorView): DecorationSet {
                   sug.groupId,
                   sug.groupSize,
                 )
-              : new CommentAnchorWidget(node.from, node.to, isPointComment(view.state, node.from));
+              : new CommentAnchorWidget(
+                  node.from,
+                  node.to,
+                  isPointComment(view.state, node.from),
+                  view.state.field(commentStacksField).get(node.from),
+                );
             // A comment body may contain REAL newlines (multi-line reply). View
             // plugins MAY NOT provide replace decorations that span a line break
             // (CM6 throws and the whole view blanks out — seen in the wild). Split
@@ -715,6 +772,7 @@ export function criticMarkupExtension(): Extension {
     critHighlightField,
     suggestCardsField,
     pointCommentsField,
+    commentStacksField,
     standaloneInsertionPreviewField,
     EditorView.outerDecorations.of((view) =>
       view.plugin(markPlugin)?.decorations ?? Decoration.none,

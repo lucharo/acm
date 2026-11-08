@@ -480,3 +480,30 @@ describe("Ask agent (#76)", () => {
     expect(html).not.toContain(">Ask agent</button>");
   });
 });
+
+describe("long threads at rest (#79)", () => {
+  function thread(bodies: string[]): SidebarCard {
+    const comments = bodies.map((body, index) => {
+      const raw = `{>>@claude: ${body}<<}`;
+      return { id: `t${index}`, type: "comment" as const, from: index, to: index + raw.length, raw, author: "claude", body };
+    });
+    return { kind: "comment", id: "t0", from: 0, to: 10, comments };
+  }
+
+  test("a thread of more than three comments shows its first and last and counts the rest", () => {
+    const html = renderSidebar([thread(["first", "second", "third", "fourth", "last"])]);
+
+    expect(["first", "second", "third", "fourth", "last"].filter((body) => html.includes(`>${body}<`))).toEqual([
+      "first",
+      "last",
+    ]);
+    expect(html).toContain("3 more replies");
+  });
+
+  test("a thread of three comments shows them all", () => {
+    const html = renderSidebar([thread(["first", "second", "last"])]);
+
+    expect(html).not.toContain("more repl");
+    expect(html).toContain(">second<");
+  });
+});

@@ -25,6 +25,7 @@ import MobileCommentComposer from "./components/MobileCommentComposer";
 import SelectionActions from "./components/SelectionActions";
 import HealReview from "./components/HealReview";
 import Toc from "./components/Toc";
+import FormatToolbar from "./components/FormatToolbar";
 import Header from "./components/Header";
 import { documentTabTitle } from "./lib/documentTitle";
 import ContextMenu from "./components/ContextMenu";
@@ -389,6 +390,7 @@ function Workspace({
       const sel = u.state.selection.main;
       setHasSelection(!sel.empty);
       setSelectionRange(sel.empty ? null : { from: sel.from, to: sel.to });
+      setCursorLine(u.state.doc.lineAt(sel.head).number);
       // Tell the server where the caret is so agent writes avoid this span (#38).
       reportSelection(sel.from, sel.to);
     }
@@ -437,6 +439,8 @@ function Workspace({
 
   // Selection state powers the "Add comment" affordance.
   const [hasSelection, setHasSelection] = useState(false);
+  // The caret's line, so the toolbar's paragraph-style menu follows the cursor.
+  const [cursorLine, setCursorLine] = useState(1);
   const [selectionRange, setSelectionRange] = useState<{ from: number; to: number } | null>(null);
   const [selectionProvenance, setSelectionProvenance] = useState<ProvenanceSegment[] | null>(null);
   const [selectionProvenanceLoading, setSelectionProvenanceLoading] = useState(false);
@@ -1563,6 +1567,16 @@ function Workspace({
           setSettingsOpen(false);
           openSpellReview();
         }}
+        issues={{ count: diagnostics.length, fixable: fixableCount, onReview: () => setReviewOpen(true) }}
+        toolbar={
+          <FormatToolbar
+            view={view}
+            selectionTick={cursorLine}
+            hasSelection={hasSelection}
+            onAddComment={openComposer}
+            onMakeSuggestion={openSuggestionComposer}
+          />
+        }
       />
 
       {/* Reading-progress bar — sits flush under the header, grows left→right as
@@ -1581,10 +1595,10 @@ function Workspace({
       <div className="flex min-h-0 flex-1">
         {/* Reading area: the editor (page) and the comment column are ONE centred
             group so comments sit just right of the page (short connectors), with the
-            desk filling the outer margins in page view. */}
+            page background filling the outer margins. */}
         <div
           ref={readingRef}
-          className={`flex min-w-0 flex-1 justify-center ${settings.page ? "bg-[var(--desk)]" : "bg-[var(--bg)]"}`}
+          className={`flex min-w-0 flex-1 justify-center ${settings.page ? "bg-[var(--desk)]" : "bg-[var(--panel)]"}`}
         >
           <div
             className="grid min-w-0 transition-[grid-template-columns,max-width] duration-200 ease-out"
@@ -1712,31 +1726,6 @@ function Workspace({
           onJumpManual={goToFirstIssue}
           onClose={() => setReviewOpen(false)}
         />
-      ) : diagnostics.length > 0 ? (
-        // Calm, honest status pill (amber = recoverable, NOT the destructive red).
-        // Splits the count: auto-fixable vs needs-you. "Review" opens the per-issue
-        // walkthrough rather than blindly healing.
-        <button
-          type="button"
-          onClick={() => setReviewOpen(true)}
-          className="fixed bottom-3 right-3 z-40 flex items-center gap-2 rounded-full border border-[var(--warn)] bg-[var(--warn-bg)] py-1.5 pl-3 pr-3.5 text-[12px] shadow-lg transition-transform hover:scale-[1.03]"
-          title="Some markup can't display or apply (a leaking highlight, a stray close, a comment inside another, or a SUGGEST card with no span). Click to review and fix."
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span className="font-medium text-[var(--ink)]">
-            {diagnostics.length} markup issue{diagnostics.length === 1 ? "" : "s"}
-            <span className="font-normal text-[var(--muted)]">
-              {" — "}
-              {fixableCount} auto-fixable
-              {diagnostics.length - fixableCount > 0 ? `, ${diagnostics.length - fixableCount} need you` : ""}
-            </span>
-          </span>
-          <span className="rounded-full bg-[var(--warn)] px-2 py-0.5 text-[11px] font-semibold text-[var(--panel)]">Review</span>
-        </button>
       ) : null}
 
       {paletteOpen ? <CommandPalette actions={paletteActions} onClose={() => setPaletteOpen(false)} /> : null}

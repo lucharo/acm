@@ -108,8 +108,9 @@ _Avoid_: content, body text.
 ## Reading & instances
 
 **Page view**:
-The document rendered as A4 sheets: the sheet styling, the page-break markers,
-and the page tally are one concept and one setting (`page`, on by default).
+The document shown as a page: its edges on a light grey desk, the A4
+page-break markers and the page tally are one concept and one setting (`page`,
+on by default).
 _Avoid_: page breaks (as a separate setting), sheet mode.
 
 **Page**:

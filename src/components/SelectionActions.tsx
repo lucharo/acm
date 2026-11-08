@@ -49,8 +49,10 @@ const SOURCE_LABELS: Record<ProvenanceSource, string> = {
 };
 
 export function provenanceSummary(
-  segments: readonly ProvenanceSegment[],
+  allSegments: readonly ProvenanceSegment[],
 ): { label: string; title: string } | null {
+  // Text written before provenance was recorded has no author to show.
+  const segments = allSegments.filter((segment) => segment.author.trim() && segment.author !== "Unknown");
   if (segments.length === 0) return null;
   const authors = [...new Set(segments.map((segment) => segment.author))];
   if (authors.length > 1) {

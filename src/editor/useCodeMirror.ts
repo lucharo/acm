@@ -164,8 +164,8 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   const callbacksCompartment = useRef(new Compartment());
   // Compartment for the optional line-number gutter (toggled from settings).
   const lineNumbersCompartment = useRef(new Compartment());
-  // Compartment for Page view: the A4 sheet theme plus its page-break markers
-  // and page tally, one setting (CONTEXT.md "Page view").
+  // Compartment for Page view: the page's edges, page-break markers and the
+  // page tally (CONTEXT.md "Page view").
   const pageCompartment = useRef(new Compartment());
   // Compartment for the optional bionic-reading bolding (toggled from settings).
   const bionicCompartment = useRef(new Compartment());

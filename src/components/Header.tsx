@@ -3,8 +3,8 @@
 // Workspace; the only local state is whether the settings menu is open.
 
 import { useState } from "react";
-import type { FormEvent } from "react";
-import { CodeXml, Eye, ListTree, MessageSquare, PanelRight, Settings } from "lucide-react";
+import type { FormEvent, ReactNode } from "react";
+import { CodeXml, Eye, FileText, ListTree, MessageSquare, PanelRight, Settings } from "lucide-react";
 import { MOD } from "../lib/platform";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
@@ -42,6 +42,10 @@ export interface HeaderProps {
   /** Count of flagged words in the document + opener for the review modal. */
   flaggedCount: number;
   onOpenReview: () => void;
+  /** The formatting toolbar, shown in the title bar on wide screens. */
+  toolbar?: ReactNode;
+  /** Markup that cannot render (#79: a chip here instead of a floating banner). */
+  issues?: { count: number; fixable: number; onReview: () => void };
 }
 
 export const headerIconButtonClass =
@@ -95,6 +99,8 @@ export default function Header(props: HeaderProps) {
     onRemoveWord,
     flaggedCount,
     onOpenReview,
+    toolbar,
+    issues,
   } = props;
 
   // settingsOpen is lifted to the Workspace (prop) so ⌘, can toggle it; only the
@@ -102,7 +108,7 @@ export default function Header(props: HeaderProps) {
   const [settingsTab, setSettingsTab] = useState<"display" | "review" | "spelling">("display");
 
   return (
-    <header className="relative flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
+    <header className="relative flex min-h-14 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
       <div className="flex items-center gap-1">
         <button
           type="button"
@@ -132,7 +138,19 @@ export default function Header(props: HeaderProps) {
       </div>
 
       <span className="hidden h-5 w-px bg-[var(--line-strong)] min-[360px]:block" aria-hidden="true" />
-      <span className="hidden text-[13px] font-semibold tracking-tight min-[360px]:inline">
+      {documentPath ? (
+        <span className="flex min-w-0 items-center gap-2">
+          <FileText size={22} strokeWidth={1.5} className="shrink-0 text-[var(--accent-doc)]" aria-hidden="true" />
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="truncate text-[15px] font-medium text-[var(--ink)]" title={documentPath}>
+              {documentFileName(documentPath)}
+            </span>
+            <span className="truncate text-[11px] text-[var(--faint)]">ACM · reviewing with agents</span>
+          </span>
+        </span>
+      ) : null}
+      {toolbar ? <div className="mx-auto hidden lg:flex">{toolbar}</div> : null}
+      <span className={`hidden text-[13px] font-semibold tracking-tight min-[360px]:inline ${documentPath ? "!hidden" : ""}`}>
         ACM <span className="hidden text-[var(--faint)] sm:inline">· Agent CriticMarkup</span>
         {documentPath && (
           <span
@@ -145,22 +163,24 @@ export default function Header(props: HeaderProps) {
       </span>
 
       <div className="ml-auto flex flex-wrap items-center justify-end gap-2 gap-y-1">
-        <span className="hidden text-[11px] tabular-nums text-[var(--faint)] sm:inline" title="Word count (accepted prose)">
-          {wordCount.toLocaleString()} words
-        </span>
+        {issues && issues.count > 0 ? (
+          <button
+            type="button"
+            onClick={issues.onReview}
+            className="flex h-7 items-center gap-1.5 rounded-full bg-[var(--warn-bg)] px-2.5 text-[12px] font-medium text-[var(--ink)] hover:brightness-95"
+            title={`${issues.count} markup issue${issues.count === 1 ? "" : "s"} render raw: ${issues.fixable} auto-fixable${issues.count - issues.fixable > 0 ? `, ${issues.count - issues.fixable} need you` : ""}. Click to review and fix.`}
+            aria-label={`${issues.count} markup issues: review`}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            {issues.count}
+          </button>
+        ) : null}
 
-        <SaveBadge state={saveState} lastSavedAt={lastSavedAt} />
-
-        <span
-          className="hidden items-center gap-1.5 text-[11px] text-[var(--muted)] sm:flex"
-          title={connected ? "Live — watching the file" : "Disconnected"}
-        >
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ backgroundColor: connected ? "var(--crit-ins)" : "var(--crit-del)" }}
-          />
-          {connected ? "live" : "offline"}
-        </span>
+        <SaveBadge state={saveState} lastSavedAt={lastSavedAt} connected={connected} wordCount={wordCount} />
 
         <button
           type="button"
@@ -622,23 +642,38 @@ const SAVE_BADGE: Record<SaveState, { label: string; color: string; title: strin
 
 /** Explicit Saved / Saving / Unsaved / Offline / Conflict indicator. When saved,
  *  shows the wall-clock time of the last write (HH:MM:SS) for the paranoid. */
-function SaveBadge({ state, lastSavedAt }: { state: SaveState; lastSavedAt: number | null }) {
+/** One status for the document (#79): word count, then the save state with the
+ * live connection as its dot; the save time is in the tooltip. */
+function SaveBadge({
+  state,
+  lastSavedAt,
+  connected,
+  wordCount,
+}: {
+  state: SaveState;
+  lastSavedAt: number | null;
+  connected: boolean;
+  wordCount: number;
+}) {
   const s = SAVE_BADGE[state];
-  const label =
-    state === "saved" && lastSavedAt
-      ? `Saved ${new Date(lastSavedAt).toLocaleTimeString([], { hour12: false })}`
-      : s.label;
+  const saved = state === "saved" && lastSavedAt
+    ? `Last written to disk at ${new Date(lastSavedAt).toLocaleTimeString()}`
+    : s.title;
+  const live = connected ? "Live: watching the file" : "Disconnected";
   return (
     <span
-      className="flex items-center gap-1.5 text-[11px] tabular-nums"
+      className="flex items-center gap-1.5 text-[12px] tabular-nums"
       style={{ color: s.color }}
-      title={state === "saved" && lastSavedAt ? `Last written to disk at ${new Date(lastSavedAt).toLocaleTimeString()}` : s.title}
+      title={`${saved}\n${live}`}
     >
+      <span className="hidden text-[var(--faint)] sm:inline" title="Word count (accepted prose)">
+        {wordCount.toLocaleString()} words
+      </span>
       <span
         className="inline-block h-2 w-2 rounded-full"
-        style={{ backgroundColor: s.color, opacity: state === "saved" ? 0.5 : 1 }}
+        style={{ backgroundColor: connected ? "var(--crit-ins)" : "var(--crit-del)" }}
       />
-      {label}
+      {s.label}
     </span>
   );
 }

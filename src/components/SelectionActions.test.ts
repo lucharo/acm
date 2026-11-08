@@ -53,6 +53,16 @@ describe("selection authorship summary", () => {
     expect(summary?.title).toContain("12 Aug 2026");
   });
 
+  test("says nothing when no author was recorded for the text", () => {
+    expect(provenanceSummary([
+      { from: 0, to: 9, author: "Unknown", source: "baseline", timestamp: "2026-08-12T10:00:00.000Z" },
+    ])).toBeNull();
+    expect(provenanceSummary([
+      { from: 0, to: 4, author: "Unknown", source: "baseline", timestamp: "2026-08-12T10:00:00.000Z" },
+      { from: 4, to: 9, author: "Luis", source: "human", timestamp: "2026-08-12T10:01:00.000Z" },
+    ])?.label).toBe("By Luis");
+  });
+
   test("summarises a mixed-author selection without repeating an author", () => {
     expect(provenanceSummary([
       { from: 0, to: 3, author: "Luis", source: "human", timestamp: "2026-08-12T10:00:00.000Z" },

@@ -664,10 +664,12 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                     onClick={() => onFocusThread(card)}
                     onContextMenu={card.kind === "comment" ? (e) => onCardContextMenu?.(card, e) : undefined}
                     className={[
-                      "group absolute cursor-pointer rounded-xl bg-[var(--panel)] px-3.5 py-3 text-left transition-shadow",
+                      "group absolute cursor-pointer rounded-[10px] px-3.5 py-3 text-left transition-shadow",
+                      // Look C (#79): resting cards are flat grey; the active card
+                      // lifts onto the page colour with a hairline ring.
                       isActive
-                        ? "z-10 shadow-[0_4px_16px_rgba(0,0,0,0.14)] ring-1 ring-[var(--line-strong)]"
-                        : "shadow-[0_1px_3px_rgba(0,0,0,0.08)] hover:shadow-[0_3px_10px_rgba(0,0,0,0.12)]",
+                        ? "z-10 bg-[var(--panel)] shadow-[0_0_0_1px_var(--line-strong),0_6px_18px_rgba(0,0,0,0.08)]"
+                        : "bg-[var(--bg)] hover:shadow-[0_0_0_1px_var(--line)]",
                     ].join(" ")}
                     style={{
                       top: l ? l.cardY : 0,
@@ -681,7 +683,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       visibility: l ? "visible" : "hidden",
                       opacity: isExiting ? 0 : 1,
                       backgroundColor: isSeen && !isActive ? "var(--bg)" : undefined,
-                      boxShadow: isSeen && !isActive ? "none" : undefined,
                       outline: isSeen && !isActive ? "1px solid var(--line)" : undefined,
                       transform: isExiting ? "scale(0.96)" : undefined,
                       transition: l ? "opacity 200ms ease, transform 200ms ease" : "none",
@@ -813,7 +814,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onResolveThread(card); }}
                           title="Resolve thread"
-                          className="absolute right-2 top-2.5 rounded p-1 text-[var(--faint)] opacity-0 transition-opacity hover:bg-[var(--line)] hover:text-[var(--ink)] group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                          className="absolute right-2 top-2.5 rounded p-1 text-[var(--accent-doc)] hover:bg-[var(--line)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                           aria-label="Resolve thread"
                         >
                           <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -823,7 +824,24 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       </>
                     )}
 
-                    {card.comments.map((c, i) => (
+                    {card.comments.map((c, i) => {
+                      // A long thread at rest shows its first and last comment and
+                      // a count of the rest (#79); focusing the card shows them all.
+                      const collapsed = !isActive && card.comments.length > 3;
+                      const hidden = card.comments.length - 2;
+                      if (collapsed && i > 0 && i < card.comments.length - 1) {
+                        return i === 1 ? (
+                          <button
+                            key={`${card.id}-more`}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); onFocusThread(card); }}
+                            className="mt-2.5 flex w-full items-center gap-2 border-t border-[var(--line)] pt-2.5 text-[12px] font-medium text-[var(--accent-doc)] hover:underline"
+                          >
+                            {hidden} more {hidden === 1 ? "reply" : "replies"}
+                          </button>
+                        ) : null;
+                      }
+                      return (
                       <div
                         key={c.id}
                         className={`group/cmt ${i > 0 || card.kind === "suggestion" ? "mt-2.5 border-t border-[var(--line)] pt-2.5" : ""}`}
@@ -831,8 +849,14 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                         {/* A comment card's first row reserves space (pr-14) for the
                             seen/resolve buttons; replies + suggestion-card rows don't. */}
                         <div className={`mb-1 flex items-center gap-1.5 ${card.kind === "comment" && i === 0 ? "pr-14" : "pr-1"}`}>
-                          <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: authorColor(c.author) }} />
-                          <span className="truncate text-[12px] font-medium" style={{ color: authorColor(c.author) }}>
+                          <span
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
+                            style={{ backgroundColor: authorColor(c.author) }}
+                            aria-hidden="true"
+                          >
+                            {(c.author ?? "?").replace(/^@/, "").charAt(0).toUpperCase()}
+                          </span>
+                          <span className="truncate text-[13px] font-semibold text-[var(--ink)]">
                             {c.author ?? "anonymous"}
                           </span>
                           <button
@@ -959,7 +983,8 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           );
                         })()}
                       </div>
-                    ))}
+                      );
+                    })}
 
                     {replyingId === card.id ? (
                       <div className="mt-2.5" onClick={(e) => e.stopPropagation()}>

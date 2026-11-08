@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
 import { CriticMarkup } from "./criticMarkupParser";
-import { isPointComment, pointCommentsField } from "./criticMarkupView";
+import { commentStacks, isPointComment, pointCommentsField } from "./criticMarkupView";
 
 function pointFlags(doc: string): boolean[] {
   const state = EditorState.create({
@@ -29,5 +29,32 @@ describe("point comments (#79)", () => {
   test("a comment with no highlight before it is a point comment", () => {
     expect(pointFlags("A sentence.{>>@a: point<<} More.")).toEqual([true]);
     expect(pointFlags("{>>@a: first<<}{>>@b: stacked<<}")).toEqual([true, true]);
+  });
+});
+
+describe("stacked comment dots (#79)", () => {
+  test("comments written one after another form one stack; a gap starts another", () => {
+    const doc = "a {==b==}{>>1<<}{>>2<<}{>>3<<} c {==d==}{>>4<<}";
+    const stacks = commentStacks(doc);
+    const offsets = [...doc.matchAll(/\{>>/g)].map((m) => m.index);
+
+    expect(offsets.map((from) => stacks.get(from))).toEqual([
+      { index: 0, size: 3 },
+      { index: 1, size: 3 },
+      { index: 2, size: 3 },
+      { index: 0, size: 1 },
+    ]);
+  });
+
+  test("a SUGGEST comment, drawn as its own widget, is not counted as a dot", () => {
+    const doc = "a {==b==}{>>@c: SUGGEST: B<<}{>>1<<}{>>2<<}";
+    const stacks = commentStacks(doc);
+    const offsets = [...doc.matchAll(/\{>>/g)].map((m) => m.index);
+
+    expect(offsets.map((from) => stacks.get(from))).toEqual([
+      undefined,
+      { index: 0, size: 2 },
+      { index: 1, size: 2 },
+    ]);
   });
 });

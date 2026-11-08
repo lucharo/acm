@@ -30,13 +30,13 @@ export const acmTheme: Extension = EditorView.theme(
     // Centred prose column. The comment sidebar is its own panel, so the editor
     // only needs a modest right gutter for the comment-anchor glyphs + connectors.
     ".cm-content": {
-      maxWidth: "680px",
+      maxWidth: "720px",
       // Bottom margin = extra scroll reach when comment cards stack below the
       // last line (set by App from the sidebar's overflow report). A margin —
       // not min-height — so the page sheet never stretches past the prose; the
       // reach reads as desk/background, and scroll range still covers the cards.
       margin: "0 auto var(--acm-scroll-reach, 0px)",
-      padding: "2.5rem 3rem 6rem 3rem",
+      padding: "3.5rem 2.5rem 6rem 2.5rem",
       caretColor: "var(--ink)",
     },
     ".cm-line": {
@@ -75,8 +75,8 @@ export const acmTheme: Extension = EditorView.theme(
 
     // ── Markdown live-preview classes (styled by markdownPreview.ts marks) ──────
     ".cm-md-h1": {
-      fontSize: "1.6em",
-      fontWeight: "600",
+      fontSize: "1.9em",
+      fontWeight: "700",
       letterSpacing: "-0.012em",
       lineHeight: "1.25",
     },
@@ -542,12 +542,29 @@ export const acmTheme: Extension = EditorView.theme(
     },
 
     // ── Inline accept / reject pill buttons ─────────────────────────────────────
+    // Inline ✓/✗ float just above the end of their suggestion, take no room
+    // in the line, and appear only on the line under the pointer (or with
+    // keyboard focus), so a paragraph of suggestions reads as prose; the cards
+    // keep their own buttons. Absolute with no offsets keeps the box at its
+    // place in the text. Touch screens show them inline (rule below).
     ".cm-crit-controls": {
       display: "inline-flex",
+      position: "absolute",
+      transform: "translate(-0.6em, -1.05em)",
       gap: "2px",
-      margin: "0 0.15em 0 0.3em",
-      verticalAlign: "baseline",
+      padding: "1px",
+      borderRadius: "999px",
+      backgroundColor: "var(--panel)",
+      boxShadow: "0 1px 4px rgba(0, 0, 0, 0.18)",
       userSelect: "none",
+      opacity: "0",
+      pointerEvents: "none",
+      transition: "opacity 120ms ease",
+      zIndex: "2",
+    },
+    ".cm-line:hover .cm-crit-controls, .cm-crit-controls:focus-within": {
+      opacity: "1",
+      pointerEvents: "auto",
     },
     ".cm-crit-accept, .cm-crit-reject": {
       display: "inline-flex",
@@ -605,6 +622,23 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-crit-comment-anchor--active": {
       opacity: "1",
       transform: "scale(1.25)",
+    },
+    // A long stack of dots (more than DOT_STACK_LIMIT comments in a row) folds
+    // into one small pill with the count, so a busy discussion still stands out.
+    ".cm-crit-comment-anchor.cm-crit-comment-anchor--count": {
+      width: "auto",
+      height: "auto",
+      padding: "0 0.32em",
+      borderRadius: "999px",
+      color: "#fff",
+      opacity: "0.85",
+      fontFamily: "ui-sans-serif, -apple-system, system-ui, sans-serif",
+      fontSize: "0.62em",
+      fontWeight: "600",
+      lineHeight: "1.45",
+    },
+    ".cm-crit-comment-anchor--folded": {
+      display: "none",
     },
     // A point comment (no highlighted span) is a small "Note" pill, so it can
     // be found in the text; clicking it opens its card (#79). Two classes, so
@@ -697,6 +731,16 @@ export const acmTheme: Extension = EditorView.theme(
       ".cm-md-table-comment-add": {
         opacity: "1",
       },
+      ".cm-crit-controls": {
+        position: "static",
+        transform: "none",
+        margin: "0 0.15em 0 0.3em",
+        padding: "0",
+        boxShadow: "none",
+        backgroundColor: "transparent",
+        opacity: "1",
+        pointerEvents: "auto",
+      },
     },
     // Fatten inline review affordances through tablet widths. Inline controls
     // cannot reach 44px without breaking prose, but the surrounding suggestion or
@@ -717,33 +761,24 @@ export const acmTheme: Extension = EditorView.theme(
   { dark: false },
 );
 
-// Page view (toggled in settings): the document reads like an A4 sheet — a
-// panel-coloured page with a border + shadow, centred on a darker "desk".
-// Toggled via a Compartment in useCodeMirror that sits AFTER acmTheme, and the
-// earlier theme wins any property both declare. So the sheet's width, margin
-// and padding are acmTheme's .cm-content values; this theme adds only what the
-// base leaves unset (#39). Size the sheet in acmTheme.
+// Page view (toggled in settings): the page's edges show, Docs-style — a
+// panel-coloured sheet with a hairline edge and a soft shadow on a light grey
+// desk — plus the page-break markers. Sits AFTER acmTheme in the extension
+// array, and the earlier theme wins any shared property, so the sheet's width
+// and padding are acmTheme's; this theme adds only the edges and the desk (#39).
 export const pageTheme: Extension = EditorView.theme({
   ".cm-scroller": {
     backgroundColor: "var(--desk)",
-    padding: "2.5rem 0 5rem",
+    padding: "1.5rem 0 4rem",
   },
   ".cm-content": {
     backgroundColor: "var(--panel)",
     border: "1px solid var(--line)",
     borderRadius: "2px",
-    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.07), 0 14px 40px rgba(0, 0, 0, 0.09)",
-    minHeight: "70vh", // a fresh/short doc still reads as a sheet
+    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.06)",
+    minHeight: "70vh", // a fresh/short doc still reads as a page
   },
-
-  // ── Phone-width reading ───────────────────────────────────────────────────────
-  // The A4-sheet metaphor doesn't fit a phone: a bordered sheet centred on a desk
-  // just leaves a cramped column with slivers of desk either side. Drop the desk
-  // margin to a sliver and run the sheet edge-to-edge — no side border/radius/shadow
-  // (only the hairline top/bottom border survives, a faint "page" cue). The inner
-  // prose padding is governed by acmTheme's own phone rule (the base theme wins
-  // shared props like padding over this one), so we DON'T re-declare it here — we
-  // only strip the chrome that's unique to the sheet.
+  // On a phone the page runs edge to edge: no desk margin or sheet edge.
   "@media (max-width: 640px)": {
     ".cm-scroller": {
       padding: "0.5rem 0 4rem",
