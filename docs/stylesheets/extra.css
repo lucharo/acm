@@ -85,6 +85,3 @@ code, kbd, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, mon
 
 /* Flags and option names in reference tables stay on one line. */
 .md-typeset td:first-child code { white-space: nowrap; }
-
-/* The "Last reviewed" line each page closes with is a footnote, not body text. */
-.md-typeset > p:last-of-type > em:only-child { color: var(--acm-muted); font-size: 0.85em; font-style: normal; }
