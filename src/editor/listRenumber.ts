@@ -3,7 +3,8 @@
 // lists it touched get consecutive labels again, in the style each list already
 // uses: 1. 2. 3., a. b. c., A. B. C., i. ii. iii., I. II. III. Each nesting level
 // is its own list. The renumbering rides in the SAME transaction (a transaction
-// filter), so one undo restores both the edit and the old labels.
+// filter), or in the same history event for a review decision, so one undo
+// restores both the edit and the old labels.
 //
 // Lettered and roman lists are not lists to CommonMark (Lezer parses them as
 // paragraph text), so items are found by a line scan, not the syntax tree; the
@@ -11,10 +12,11 @@
 // (Transaction.remote) are never renumbered; undo/redo bypass filters.
 
 import { GFM, parser as baseMarkdownParser } from "@lezer/markdown";
-import { EditorState, Transaction } from "@codemirror/state";
+import { history } from "@codemirror/commands";
+import { Annotation, EditorState, Transaction } from "@codemirror/state";
 import type { ChangeSpec, Extension, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { scanTokens } from "../lib/criticmarkup";
+import { ANCHOR_GAP, scanTokens } from "../lib/criticmarkup";
 
 type Style = "decimal" | "lower-alpha" | "upper-alpha" | "lower-roman" | "upper-roman";
 
@@ -80,18 +82,33 @@ interface Span {
 /** CriticMarkup that matters to lists. `comments`: numbered lines inside a
  * comment body are its text, not document items. `blocks`: a change or
  * highlight that starts a line or spans lines may wrap an item's marker or
- * carry proposed items, so a list it touches waits until it is resolved. */
+ * carry proposed items, and a comment thread opening a line may sit before a
+ * marker the scan cannot see, so a list it touches waits until it is resolved.
+ * A comment anchored to a block is part of that block, and a block opening a
+ * line takes in the markup before it: either can reach the lines next to the list. */
 function critRanges(doc: Text): { comments: Span[]; blocks: Span[] } {
   const text = doc.toString();
   const comments: Span[] = [];
   const blocks: Span[] = [];
+  let leadFrom = 0; // the span of the markup opening the current line
+  let leadEnd = -1;
   for (const token of scanTokens(text)) {
-    if (token.type === "comment") comments.push({ from: token.from, to: token.to });
-    else if (
-      text.slice(token.from, token.to).includes("\n") ||
-      /^[ \t]*$/.test(text.slice(doc.lineAt(token.from).from, token.from))
-    ) {
-      blocks.push({ from: token.from, to: token.to });
+    const lineFrom = doc.lineAt(token.from).from;
+    // A token before leadEnd is nested in the markup that set it.
+    const leads =
+      token.from >= leadEnd && /^[ \t]*$/.test(text.slice(Math.max(lineFrom, leadEnd), token.from));
+    if (leads) {
+      if (leadEnd <= lineFrom) leadFrom = token.from;
+      leadEnd = token.to;
+    }
+    const span = { from: leads ? leadFrom : token.from, to: token.to };
+    if (token.type === "comment") {
+      comments.push({ from: token.from, to: token.to });
+      const anchor = blocks.find((block) => ANCHOR_GAP.test(text.slice(block.to, token.from)));
+      if (anchor) anchor.to = token.to;
+      else if (leads && markerAt(text.slice(token.to, doc.lineAt(token.to).to))) blocks.push(span);
+    } else if (leads || text.slice(token.from, token.to).includes("\n")) {
+      blocks.push(span);
     }
   }
   return { comments, blocks };
@@ -348,11 +365,18 @@ export function planListRenumber(tr: Transaction): ChangeSpec[] {
   return changes;
 }
 
+/** The relabelling that follows a review decision, which joins its history event. */
+export const decisionRelabel = Annotation.define<boolean>();
+
 /** `isDecision` marks a review decision's transaction (accept, reject, apply):
  * its audit event records offsets in that transaction's result, so the
  * renumbering follows in a transaction of its own instead of widening it. */
 export function listRenumber(isDecision: (tr: Transaction) => boolean): Extension {
   return [
+    // Replaces history's default rule, so adjacency has to be kept here.
+    history({
+      joinToEvent: (tr, isAdjacent) => isAdjacent || tr.annotation(decisionRelabel) === true,
+    }),
     EditorState.transactionFilter.of((tr) => {
       if (isDecision(tr)) return tr;
       const changes = planListRenumber(tr);
@@ -365,15 +389,18 @@ export function listRenumber(isDecision: (tr: Transaction) => boolean): Extensio
       const changes = planListRenumber(replay);
       if (changes.length === 0) return;
       const doc = update.state.doc;
-      // A view may not dispatch during its own update. Kept out of history:
-      // undoing the decision restores its markup, which holds the list until
-      // it is resolved again, and that resolution renumbers once more.
+      // A view may not dispatch during its own update. Joined to the decision's
+      // history event, so one undo restores its markup and every label, and redo
+      // brings both back. isolateHistory "full" leaves the history's prevTime at
+      // 0, and it only joins when time minus prevTime is under newGroupDelay, so
+      // this stamps time 0. That keeps prevTime at 0: the next edit is a new step.
       queueMicrotask(() => {
         if (update.view.state.doc !== doc) return;
         update.view.dispatch({
           changes,
-          userEvent: "input.renumber",
-          annotations: Transaction.addToHistory.of(false),
+          annotations: [decisionRelabel.of(true), Transaction.time.of(0)],
+          // The filter would read these labels as an edit and put the old ones back.
+          filter: false,
         });
       });
     }),

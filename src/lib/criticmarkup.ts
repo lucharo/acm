@@ -2100,7 +2100,7 @@ export function anchorHighlightFor(
 // whereas an anchor must also tolerate a bare stray space (`{==span==} {>>…<<}`)
 // so an incidental space never silently turns a suggestion un-applyable. Any prose
 // in the gap still disqualifies the highlight, so this can't bind the wrong span.
-const ANCHOR_GAP = /^(?:\s|\{==|==\})*$/;
+export const ANCHOR_GAP = /^(?:\s|\{==|==\})*$/;
 
 /** The outermost stacked `{==` open at/before `hl.from` — the true start of the
  *  anchor run (a stacked same-anchor thread reads `{=={==span==}…==}…`). */
