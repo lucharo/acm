@@ -149,6 +149,25 @@ describe("audit: tracked changes import as balanced suggestions", () => {
     expect(validateMarkup(result.markdown)).toEqual([]);
   });
 
+  test("a comment opened after several runs and split by a blank line stays a point comment", () => {
+    const runsBeforeStart = ["a", "b", "c", "d", "e", "f"].map(run).join("");
+    const archive = docx(
+      paragraph(
+        `<w:ins w:id="1">${runsBeforeStart}${rangeStart("1")}<w:r><w:t>g</w:t><w:br/><w:br/><w:t>h</w:t></w:r></w:ins>${run("tail")}${rangeEnd("1")}`,
+      ),
+      comment("1", "Editor", "Note."),
+    );
+
+    const result = convertDocx(archive);
+
+    expect(result).toEqual({
+      markdown: "{++abcdefg++}\n\n{++h++}tail{>>@Editor: Note.<<}\n",
+      comments: 1,
+      highlights: 0,
+    });
+    expect(validateMarkup(result.markdown)).toEqual([]);
+  });
+
   test("a range end with no start inside a tracked change lands after the change", () => {
     const archive = docx(
       paragraph(`<w:ins w:id="1">${run("text")}${rangeEnd("1")}</w:ins>`),

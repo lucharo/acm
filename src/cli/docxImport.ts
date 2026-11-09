@@ -301,6 +301,9 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
       .join("");
     const blankLine = /[ \t\r]*\n(?:[ \t\r]*\n)+/.exec(text);
     if (!blankLine) return;
+    // The collapse below moves every token after the opener, so a range that
+    // starts there has lost its position and can only be a point comment.
+    for (const [id, start] of openComments) if (start > openingIndex) unsafeComments.add(id);
     tokens.length = openingIndex + 1;
     if (blankLine.index > 0) tokens.push({ kind: "text", value: text.slice(0, blankLine.index) });
     closeTracked();
