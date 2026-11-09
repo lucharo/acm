@@ -22,4 +22,6 @@ envelope is invisible to the human reviewer.
   and no ACM instance to be authored.
 - The envelope's separator is exactly one space after `SUGGEST:` (or
   `SUGGEST[g:id]:`); everything after it, leading whitespace included, is the
-  replacement, so Apply swaps the span for it byte for byte.
+  replacement, so Apply swaps the span for it byte for byte. A hand-written,
+  unencoded comment body loses its trailing whitespace when parsed; `acm suggest`
+  and the editor store such bodies in the `~acm1~` encoding, which keeps it.
