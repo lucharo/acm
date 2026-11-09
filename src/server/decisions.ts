@@ -8,6 +8,7 @@ import {
   parsePersistedDecisionEvent,
   type DecisionEvent,
 } from "../lib/decision";
+import { strictUtf8 } from "./docText";
 import { selfIgnoreAcmDir } from "./history";
 import { withFileUpdateLock } from "./fileLock";
 
@@ -27,20 +28,26 @@ export interface DecisionHistory {
 }
 
 interface DecisionLogRead extends DecisionHistory {
-  text: string;
+  /** The last line was cut off, so the next append must start a new one. */
+  endsMidLine: boolean;
 }
 
 async function readDecisionLog(docPath: string): Promise<DecisionLogRead> {
   const path = decisionLogPath(docPath);
-  if (!existsSync(path)) return { decisionEvents: [], issues: [], text: "" };
-  const text = await readFile(path, "utf8");
+  if (!existsSync(path)) return { decisionEvents: [], issues: [], endsMidLine: false };
+  const bytes = await readFile(path);
   const decisionEvents: DecisionEvent[] = [];
   const issues: DecisionHistoryIssue[] = [];
-  for (const [index, line] of text.split("\n").entries()) {
-    if (!line) continue;
+  // Each line is decoded on its own, so damaged bytes cost only their own line.
+  for (let index = 0, start = 0; start < bytes.length; index += 1) {
+    const newline = bytes.indexOf(0x0a, start);
+    const end = newline === -1 ? bytes.length : newline;
+    const line = bytes.subarray(start, end);
+    start = end + 1;
+    if (line.length === 0) continue;
     let value: unknown;
     try {
-      value = JSON.parse(line);
+      value = JSON.parse(strictUtf8.decode(line));
     } catch {
       issues.push({
         line: index + 1,
@@ -60,7 +67,7 @@ async function readDecisionLog(docPath: string): Promise<DecisionLogRead> {
     }
     decisionEvents.push(event);
   }
-  return { decisionEvents, issues, text };
+  return { decisionEvents, issues, endsMidLine: bytes.length > 0 && bytes.at(-1) !== 0x0a };
 }
 
 export async function readDecisionHistory(docPath: string): Promise<DecisionHistory> {
@@ -105,7 +112,7 @@ export async function appendDecisionEvents(
       const acmDir = join(dirname(docPath), ".acm");
       await mkdir(dirname(path), { recursive: true });
       selfIgnoreAcmDir(acmDir);
-      const separator = existing.text && !existing.text.endsWith("\n") ? "\n" : "";
+      const separator = existing.endsMidLine ? "\n" : "";
       await appendFile(
         path,
         separator + pending.map((event) => `${JSON.stringify(event)}\n`).join(""),

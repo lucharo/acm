@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { rename } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { isDecisionEvent, type DecisionEvent } from "../lib/decision";
+import { realpathOr } from "./asset";
 import {
   ConfigIntegrityError,
   configHome,
@@ -23,8 +24,15 @@ interface DecisionRecoveryFile {
   decisionEvents: DecisionEvent[];
 }
 
+/** The folder's physical path plus the file name: the same identity as the decision
+ * log kept beside the document, whichever spelling of the folder opened it. */
+function recoveryDocumentPath(docPath: string): string {
+  const path = resolve(docPath);
+  return join(realpathOr(dirname(path)), basename(path));
+}
+
 function recoveryName(docPath: string): string {
-  const key = createHash("sha256").update(resolve(docPath)).digest("hex");
+  const key = createHash("sha256").update(recoveryDocumentPath(docPath)).digest("hex");
   return join("decision-recovery", `${key}.json`);
 }
 
@@ -35,7 +43,7 @@ export function decisionRecoveryPath(docPath: string): string {
 function emptyRecovery(docPath: string): DecisionRecoveryFile {
   return {
     version: DECISION_RECOVERY_VERSION,
-    documentPath: resolve(docPath),
+    documentPath: recoveryDocumentPath(docPath),
     decisionEvents: [],
   };
 }
@@ -45,7 +53,7 @@ function parseRecovery(docPath: string, value: unknown): DecisionRecoveryFile | 
   const candidate = value as Partial<DecisionRecoveryFile>;
   if (
     candidate.version !== DECISION_RECOVERY_VERSION ||
-    candidate.documentPath !== resolve(docPath) ||
+    candidate.documentPath !== recoveryDocumentPath(docPath) ||
     !Array.isArray(candidate.decisionEvents) ||
     !candidate.decisionEvents.every(isDecisionEvent)
   ) {

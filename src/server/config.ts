@@ -8,7 +8,8 @@
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
-import { open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { readFile, rename, unlink } from "node:fs/promises";
+import { withFileUpdateLock } from "./fileLock";
 
 export const SETTINGS_FILE = "settings.json";
 
@@ -95,48 +96,12 @@ export async function deleteConfig(name: string): Promise<void> {
   await removeIfPresent(configPath(name));
 }
 
-const CONFIG_LOCK_TIMEOUT_MS = 5_000;
-const CONFIG_LOCK_STALE_MS = 30_000;
-
 /** Hold the per-file cross-process lock for a complete config mutation. */
 export async function withConfigUpdateLock<T>(
   name: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  const lockPath = `${configPath(name)}.lock`;
-  mkdirSync(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + CONFIG_LOCK_TIMEOUT_MS;
-
-  while (true) {
-    try {
-      const handle = await open(lockPath, "wx");
-      await handle.writeFile(`${process.pid} ${new Date().toISOString()}\n`);
-      await handle.close();
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const lock = await stat(lockPath);
-        if (Date.now() - lock.mtimeMs > CONFIG_LOCK_STALE_MS) {
-          await removeIfPresent(lockPath);
-          continue;
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw statError;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting to update ACM config ${name}`);
-      }
-      await Bun.sleep(10);
-    }
-  }
-
-  try {
-    return await run();
-  } finally {
-    await removeIfPresent(lockPath);
-  }
+  return withFileUpdateLock(`${configPath(name)}.lock`, `config ${name}`, run);
 }
 
 /** Serialize a complete read-modify-write across every ACM process. */

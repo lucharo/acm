@@ -101,7 +101,7 @@ const within = (root: string, abs: string) => {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
 
-function realpathOr(path: string): string {
+export function realpathOr(path: string): string {
   try {
     return realpathSync(path);
   } catch {

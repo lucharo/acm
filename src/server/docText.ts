@@ -16,6 +16,10 @@ async function startsWithBom(path: string): Promise<boolean> {
 
 /** Does `text` start with a BOM? The write routes refuse such content (memory
  *  never holds one), rather than strip it and shift the offsets that come with it. */
+/** Refuses invalid bytes, where a lossy decode would store U+FFFD as if it were text.
+ *  Keeps a BOM, so JSON.parse rejects one just as req.json() does. */
+export const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
 export function startsWithBomChar(text: string): boolean {
   return text.startsWith(BOM);
 }

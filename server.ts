@@ -25,7 +25,7 @@ import { KEEP_VERSIONS, merge3, mergeKeepingBoth, changedSpan, changedFragments 
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
-import { readDocText, startsWithBomChar, writeDocText } from "./src/server/docText";
+import { readDocText, startsWithBomChar, strictUtf8, writeDocText } from "./src/server/docText";
 import { saveAsset, assetRootFor, resolveAsset } from "./src/server/asset";
 import { IMAGE_EXTS_LABEL } from "./src/lib/imageTypes";
 import {
@@ -298,7 +298,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // becomes a clean 400 at the call site instead of an unhandled 500.
   async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
     try {
-      return (await req.json()) as Record<string, unknown>;
+      return JSON.parse(strictUtf8.decode(await req.arrayBuffer())) as Record<string, unknown>;
     } catch {
       return null;
     }
