@@ -23,7 +23,7 @@ With the skill installed, a plain request is enough:
 Review notes.md in ACM. Comment on anything unclear and suggest tighter wording.
 ```
 
-The skill's source is [`skills/acm-review/SKILL.md`](https://github.com/lucharo/acm/blob/main/skills/acm-review/SKILL.md). Change that file, then run `bun run setup` to install it; never edit the installed copy under `~/.agents/skills/`.
+The skill's source is [`skills/acm-review/SKILL.md`](https://github.com/lucharo/acm/blob/main/skills/acm-review/SKILL.md). To change it, edit that file in a clone and run `bun run setup`; never edit the installed copy under `~/.agents/skills/`.
 
 ## Writes that never clobber your typing
 

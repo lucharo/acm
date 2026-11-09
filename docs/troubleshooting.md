@@ -2,7 +2,40 @@
 
 Find the message you see and follow the steps under it. Messages are quoted as `acm` prints them.
 
-## Setup
+## Install
+
+### No ACM build for this machine
+
+```text
+acm install: no ACM build for Linux on aarch64
+```
+
+ACM publishes binaries for macOS (Apple silicon or Intel) and Linux x64 with glibc. On anything else, [build from source](getting-started.md#from-source).
+
+### The download or checksum fails
+
+```text
+acm install: could not download https://github.com/lucharo/acm/releases/latest/download/SHA256SUMS
+acm install: checksum mismatch for acm-linux-x64; nothing was installed
+```
+
+Check your connection and run the installer again. Nothing is installed until the checksum matches.
+
+### An existing `acm` is not ACM
+
+```text
+acm install: /Users/you/.local/bin/acm already exists and is not ACM; set ACM_FORCE=1 to replace it or ACM_INSTALL_DIR to install elsewhere
+```
+
+Another program already uses that name. Set `ACM_FORCE=1` before `sh` to replace it, or `ACM_INSTALL_DIR` to keep it.
+
+### The editor still behaves like the old version
+
+Installing replaces the binary but leaves running editors alone. Stop the editor (`Ctrl+C`) and run `acm edit` again.
+
+## Building from source
+
+These come from `bun run setup` in a clone. The one-line installer needs neither Bun nor Node.
 
 ### ACM requires Bun 1.3.14
 
@@ -45,10 +78,6 @@ error: /Users/you/.local/bin/acm already exists and is not ACM; rerun with --for
 
 - The skill message means the installed skill was edited by hand. `bun run setup --force` copies it to `~/.agents/skill-backups/` first. Make lasting changes in the repository's `skills/acm-review/SKILL.md` instead.
 - The binary message means another program already uses that name. `--force` replaces it; choose another `ACM_INSTALL_DIR` to keep it.
-
-### The editor still behaves like the old version
-
-Setup replaces the binary but leaves running editors alone. Stop the editor (`Ctrl+C`) and run `acm edit` again.
 
 ## Review commands
 

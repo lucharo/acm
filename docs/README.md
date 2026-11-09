@@ -15,7 +15,7 @@ One row per doc. `Class` is the confirmed classification: evergreen docs track t
 | `docs/agents.md` | Pointing an agent at a document; write safety; HTTP endpoints | evergreen | `server.ts` |
 | `docs/cli.md` | Every `acm` command and option | evergreen | `cli.ts`, `src/cli/**` |
 | `docs/syntax.md` | CriticMarkup as ACM reads it | evergreen | `src/lib/criticmarkup.ts` |
-| `docs/troubleshooting.md` | Error messages and their fixes | evergreen | `scripts/setup.ts`, `src/cli/verbs.ts`, `server.ts` |
+| `docs/troubleshooting.md` | Error messages and their fixes | evergreen | `install.sh`, `scripts/setup.ts`, `src/cli/verbs.ts`, `server.ts` |
 | `docs/maintainers.md` | Build, test, rules, code map, shipping, docs | evergreen | `package.json`, `justfile`, `scripts/**`, `.github/workflows/**` |
 | `docs/adr/*.md` | Architecture decisions | point-in-time | — |
 | `visual-test.md` | Visual QA fixture document | point-in-time | — |

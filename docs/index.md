@@ -10,6 +10,8 @@
 
 ## Try it
 
+On macOS or Linux x64, with no Bun or Node needed:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh
 cd ~/writing        # any folder: acm works from anywhere

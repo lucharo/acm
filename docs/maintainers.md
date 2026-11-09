@@ -48,7 +48,7 @@ ACM has no separate lint command.
 
 ## Docs
 
-- Pages live in `docs/`, built with [Zensical](https://zensical.org) through `uvx`; the config is `zensical.toml`. `.github/workflows/docs.yml` runs a strict build on every pull request that touches them and publishes [acm.luischav.es](https://acm.luischav.es) on every push to `main`, through GitHub Pages. The deploy step is skipped while the repository is private.
+- Pages live in `docs/`, built with [Zensical](https://zensical.org) through `uvx`; the config is `zensical.toml`. `.github/workflows/docs.yml` runs a strict build on every pull request that touches them and publishes [acm.luischav.es](https://acm.luischav.es) on every push to `main`, through GitHub Pages.
 - CLI output and screenshots are real. `bash scripts/docs-capture.sh` (macOS: it uses `sips`) regenerates them from `seed/docs-demo.md` on a throwaway server: CLI output into `docs/snippets/`, screenshots into `docs/assets/`. Re-run it after a change to the CLI's output or the editor's look.
 - Architecture decisions are point-in-time records in `docs/adr/`; add a new one rather than rewriting an old one.
 
