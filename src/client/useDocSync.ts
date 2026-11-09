@@ -29,7 +29,7 @@ import {
   storeDecisionOutbox,
   type DecisionOutboxEntry,
 } from "./decisionOutbox";
-import { merge3 } from "../lib/merge";
+import { KEEP_VERSIONS, merge3 } from "../lib/merge";
 import { reconcileSave } from "./reconcile";
 
 interface UseDocSyncOptions {
@@ -97,6 +97,14 @@ interface UseDocSyncResult {
 const SAVE_DEBOUNCE_MS = 500;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
+
+function parseJsonOrEmpty(text: string): unknown {
+  try {
+    return JSON.parse(text) ?? {};
+  } catch {
+    return {};
+  }
+}
 
 export function reconnectSnapshotMatchesDocument(
   expectedDocumentPath: string | null,
@@ -374,6 +382,16 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   const auditEndpointEpoch = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // One save at a time (#128). A second PUT sent before the first answers carries
+  // the same baseVersion, so the server sees two versions of the line being typed,
+  // both descended from that base, and its keep-both merge writes the line twice.
+  const flushRunning = useRef(false);
+  const flushRequested = useRef(false);
+  const contentOnTheWire = useRef<string | null>(null);
+  // Saves that got no answer but may still have landed. The next PUT names them so
+  // the server merges from the newest that did, whatever else has changed since.
+  const unansweredSaveIds = useRef<string[]>([]);
+
   // Presence: a throttled caret push so agent writes can steer clear of where the
   // human is editing. Advisory only — the server-side merge is the real guarantee.
   const presenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -426,6 +444,11 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       setLastSavedAt(Date.now());
       return;
     }
+
+    // The echo of our own save, racing its HTTP response, while the user typed on.
+    // Nothing changed underneath us: the response advances the version and the
+    // newer keystrokes go out in the save after it.
+    if (content === contentOnTheWire.current) return;
 
     // DATA-INTEGRITY RULE: never rebase over UNSAVED local edits. If the buffer has
     // pending changes the user hasn't seen persisted, adopting remote content here
@@ -703,7 +726,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   // ── Debounced, version-checked save ─────────────────────────────────────────
   // Pending content is cleared ONLY on a confirmed write — never optimistically —
   // so a failed/offline/conflicting save always retains the user's edits.
-  const flush = useCallback(async () => {
+  const sendSave = useCallback(async () => {
     const sent = pendingContent.current;
     const sentDecisionEntries = decisionEntriesForFlush(
       pendingDecisionEntries.current,
@@ -818,7 +841,13 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     }
 
     const baseVersion = currentVersion.current; // the version this buffer descends from
+    contentOnTheWire.current = sent;
+    const saveId = globalThis.crypto.randomUUID();
+    const noteUnanswered = () => {
+      unansweredSaveIds.current = [...unansweredSaveIds.current, saveId].slice(-KEEP_VERSIONS);
+    };
     let res: Response;
+    let responseText: string;
     try {
       res = await fetch("/api/doc", {
         method: "PUT",
@@ -830,17 +859,24 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
           documentPath: documentPath.current,
           author: author.current,
           decisionEvents: sentDecisionEvents,
+          saveId,
+          unansweredSaveIds: unansweredSaveIds.current,
         }),
       });
+      responseText = await res.text(); // a dropped connection can fail here too
     } catch {
       if (!saveResponseMatchesCurrentEpoch(requestEpoch, currentServerEpoch.current)) {
         return;
       }
+      noteUnanswered();
+      connectedRef.current = false;
+      setConnected(false);
       setSaveState("offline"); // network blip — keep pending, retry on reconnect
+      wsRef.current?.close();
       return;
     }
 
-    const data = (await res.json().catch(() => ({}))) as {
+    const data = parseJsonOrEmpty(responseText) as {
       version?: number;
       content?: string;
       conflict?: string;
@@ -937,6 +973,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       sent,
       buffer: pendingContent.current,
     });
+    if (d.kind === "failed") noteUnanswered();
+    else if (d.kind !== "conflict") unansweredSaveIds.current = [];
     switch (d.kind) {
       case "failed":
         setSaveState(connectedRef.current ? "unsaved" : "offline"); // keep pending; retry on next edit/reconnect
@@ -969,6 +1007,24 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
         return;
     }
   }, []);
+
+  const flush = useCallback(async () => {
+    if (flushRunning.current) {
+      flushRequested.current = true; // sent once the save on the wire has answered
+      return;
+    }
+    flushRunning.current = true;
+    try {
+      await sendSave();
+    } finally {
+      flushRunning.current = false;
+      contentOnTheWire.current = null;
+      if (flushRequested.current) {
+        flushRequested.current = false;
+        void flushRef.current();
+      }
+    }
+  }, [sendSave]);
   const flushRef = useRef(flush);
   flushRef.current = flush;
 

@@ -21,7 +21,7 @@ import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
 import { addAnchoredComment } from "./src/lib/agentEdits";
-import { merge3, mergeKeepingBoth, changedSpan, changedFragments } from "./src/lib/merge";
+import { KEEP_VERSIONS, merge3, mergeKeepingBoth, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
 import { recordHistory } from "./src/server/history";
@@ -139,8 +139,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // flight, so keep plenty (prose docs are small; a few dozen copies is cheap). Past
   // the window we 409 "stale" and the editor recovers by adopting disk. The git
   // history (60s debounce) is far too coarse to serve as the merge base.
-  const KEEP_VERSIONS = 32;
   const contentByVersion = new Map<number, string>([[0, initialContent]]);
+  // What each recent editor save submitted, by the id the editor gave it. A save
+  // that got no answer may still have landed: the next one names it (#128).
+  const submittedBySaveId = new Map<string, { content: string; version: number }>();
   function recordVersion(content: string) {
     contentByVersion.set(version, content);
     for (const v of contentByVersion.keys()) if (v <= version - KEEP_VERSIONS) contentByVersion.delete(v);
@@ -427,8 +429,18 @@ export function startServer(opts: StartServerOptions): AcmServer {
         // Memory never holds a BOM (GET strips it, disk keeps the file's own: #92).
         if (startsWithBomChar(content)) return badField("content must not start with a BOM");
         if (!Number.isInteger(baseVersion)) return badField("baseVersion must be an integer");
+        const saveId = typeof body.saveId === "string" ? body.saveId : undefined;
+        const unansweredSaveIds = Array.isArray(body.unansweredSaveIds)
+          ? body.unansweredSaveIds.filter((id): id is string => typeof id === "string").slice(-KEEP_VERSIONS)
+          : [];
         return withLock(async () => {
-          const base = contentByVersion.get(baseVersion as number);
+          // The editor's buffer descends from what its newest landed save submitted,
+          // which is not what that save became if the server merged another writer in.
+          // A baseVersion at or past that save means the editor has moved on from it.
+          const landedSave = unansweredSaveIds
+            .map((id) => submittedBySaveId.get(id))
+            .findLast((save) => save !== undefined && save.version > (baseVersion as number));
+          const base = landedSave?.content ?? contentByVersion.get(baseVersion as number);
           if (base === undefined) {
             // Too far behind to reconstruct a merge base (rare given 500ms saves).
             // Refuse rather than guess; the editor adopts disk and the user re-applies.
@@ -443,6 +455,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
             keepBothOnOverlap: true,
           });
           if (!r.ok) return Response.json({ content: r.content, version: r.version, conflict: r.reason }, { status: 409 });
+          if (saveId) {
+            submittedBySaveId.set(saveId, { content, version: r.version });
+            if (submittedBySaveId.size > KEEP_VERSIONS) submittedBySaveId.delete(submittedBySaveId.keys().next().value!);
+          }
           try {
             await persistDecisionEvents(r.decisionEvents);
           } catch {

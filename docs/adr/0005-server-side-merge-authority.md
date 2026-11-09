@@ -21,6 +21,11 @@ the agent is told to retry rather than silently merged into the human's hands.
   afterwards would reach disk. The server keeps both sides instead, merging
   inside the line where the edits don't touch and otherwise keeping both
   versions of the lines, the human's first (`mergeKeepingBoth`).
+- The editor has at most one save on the wire (#128). A second one, sent before
+  the first answers, shares its base and looks like a same-line clash with
+  itself, which the keep-both merge above writes out as a repeated paragraph.
+  A save that got no answer may still have landed, so the next one names it
+  and the server merges from what that save submitted.
 - If the server answers but doesn't speak the merge protocol (an older build),
   callers fail loudly rather than falling back to a direct write — a live
   editor may hold unsaved human edits.

@@ -20,6 +20,9 @@
 
 import { scanTokens } from "./criticmarkup";
 
+/** How many recent document versions the server can still merge from. */
+export const KEEP_VERSIONS = 32;
+
 /** Split preserving exact bytes: `s.split("\n")` ↔ `parts.join("\n")` round-trips
  *  perfectly, including a trailing newline (→ a final "" element) or its absence. */
 function lines(s: string): string[] {
