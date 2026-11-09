@@ -265,7 +265,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
   let highlightCount = 0;
   const placedComments = new Set<string>();
   const tracked: TrackedMarker[] = [];
-  let openingMarker: ImportToken | null = null;
+  let openingIndex = -1;
   const deferredNotes: string[] = [];
 
   const flushDeferredNotes = (): void => {
@@ -276,8 +276,8 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
   const openTracked = (): void => {
     const marker = tracked.at(-1);
     if (!marker) return;
-    openingMarker = { kind: "text", value: marker[0] };
-    tokens.push(openingMarker);
+    openingIndex = tokens.length;
+    tokens.push({ kind: "text", value: marker[0] });
   };
 
   // A suggestion can hold neither a paragraph break nor another suggestion, and
@@ -286,8 +286,28 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
   const closeTracked = (): void => {
     const marker = tracked.at(-1);
     if (!marker) return;
-    if (tokens.at(-1) === openingMarker) tokens.pop();
+    if (tokens.length - 1 === openingIndex) tokens.pop();
     else tokens.push({ kind: "text", value: marker[1] });
+  };
+
+  // Line breaks can make a blank line mid-suggestion, which the grammar rejects
+  // just as it rejects a paragraph break, so the suggestion splits around it.
+  const pushText = (value: string): void => {
+    tokens.push({ kind: "text", value });
+    if (tracked.length === 0 || !value.includes("\n")) return;
+    const text = tokens
+      .slice(openingIndex + 1)
+      .map((token) => (token.kind === "text" ? token.value : ""))
+      .join("");
+    const blankLine = /[ \t\r]*\n(?:[ \t\r]*\n)+/.exec(text);
+    if (!blankLine) return;
+    tokens.length = openingIndex + 1;
+    if (blankLine.index > 0) tokens.push({ kind: "text", value: text.slice(0, blankLine.index) });
+    closeTracked();
+    tokens.push({ kind: "text", value: blankLine[0] });
+    openTracked();
+    const rest = text.slice(blankLine.index + blankLine[0].length);
+    if (rest) pushText(rest);
   };
 
   const walkTracked = (element: XmlElement, marker: TrackedMarker): void => {
@@ -320,8 +340,12 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
         case "moveFrom":
           walkTracked(element, DELETION);
           break;
-        case "Fallback":
-          break; // mc:Choice already carried this content; a renderer shows one or the other
+        case "AlternateContent": {
+          // These are alternative renderings of one thing: a renderer shows only one.
+          const rendering = directWordChild(element, "Choice") ?? directWordChild(element, "Fallback");
+          if (rendering) walk(rendering);
+          break;
+        }
         case "commentRangeStart":
           if (!openComments.has(wordAttribute(element, "id"))) {
             const id = wordAttribute(element, "id");
@@ -338,9 +362,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
           placedComments.add(id);
           const start = openComments.get(id);
           const note = formatComment(comments, id);
-          if (start === undefined) {
-            tokens.push({ kind: "text", value: note });
-          } else if (unsafeComments.has(id)) {
+          if (start === undefined || unsafeComments.has(id)) {
             openComments.delete(id);
             unsafeComments.delete(id);
             if (tracked.length > 0) deferredNotes.push(note);
@@ -372,7 +394,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
         }
         case "t":
         case "delText":
-          tokens.push({ kind: "text", value: element.textContent ?? "" });
+          pushText(element.textContent ?? "");
           break;
         case "tab":
           tokens.push({ kind: "text", value: "\t" });
@@ -382,7 +404,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
           break;
         case "br":
         case "cr":
-          tokens.push({ kind: "text", value: "\n" });
+          pushText("\n");
           break;
         default:
           walk(element);

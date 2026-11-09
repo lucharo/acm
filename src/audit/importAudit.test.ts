@@ -90,6 +90,80 @@ describe("audit: tracked changes import as balanced suggestions", () => {
     expect(result.markdown).toBe("{++caption boxed++}\n\n{++second++}\n\ntail\n");
     expect(validateMarkup(result.markdown)).toEqual([]);
   });
+
+  test.each([
+    {
+      name: "adjacent line breaks",
+      revision: `<w:r><w:t>first</w:t><w:br/><w:br/><w:t>second</w:t></w:r>`,
+      expected: "before {++first++}\n\n{++second++}\n",
+    },
+    {
+      name: "line breaks in separate runs around a space",
+      revision: `<w:r><w:t>first</w:t><w:br/></w:r>${run(" ")}<w:r><w:br/><w:t>second</w:t></w:r>`,
+      expected: "before {++first++}\n \n{++second++}\n",
+    },
+    {
+      name: "line breaks at both edges",
+      revision: `<w:r><w:br/><w:br/><w:t>middle</w:t><w:br/><w:br/></w:r>`,
+      expected: "before \n\n{++middle++}\n",
+    },
+    {
+      name: "a space before the line breaks",
+      revision: `${run(" ")}<w:r><w:br/><w:br/><w:t>second</w:t></w:r>`,
+      expected: "before  \n\n{++second++}\n",
+    },
+    {
+      name: "a text run holding the blank line",
+      revision: run("first\n\nsecond"),
+      expected: "before {++first++}\n\n{++second++}\n",
+    },
+    {
+      name: "three line breaks",
+      revision: `<w:r><w:t>first</w:t><w:br/><w:br/><w:br/><w:t>second</w:t></w:r>`,
+      expected: "before {++first++}\n\n{++\nsecond++}\n",
+    },
+  ])("an inline insertion splits at a blank line from $name", ({ revision, expected }) => {
+    const archive = docx(paragraph(`${run("before ")}<w:ins w:id="1">${revision}</w:ins>`));
+
+    const result = convertDocx(archive);
+
+    expect(result.markdown).toBe(expected);
+    expect(validateMarkup(result.markdown)).toEqual([]);
+  });
+
+  test("a comment opened mid-suggestion and closed after a blank-line split keeps all its prose", () => {
+    const archive = docx(
+      paragraph(
+        `<w:ins w:id="1">${run("a")}${rangeStart("1")}<w:r><w:t>b</w:t><w:br/><w:br/><w:t>c</w:t></w:r></w:ins>${run("d")}${rangeEnd("1")}`,
+      ),
+      comment("1", "Editor", "Note."),
+    );
+
+    const result = convertDocx(archive);
+
+    expect(result).toEqual({
+      markdown: "{++ab++}\n\n{++c++}d{>>@Editor: Note.<<}\n",
+      comments: 1,
+      highlights: 0,
+    });
+    expect(validateMarkup(result.markdown)).toEqual([]);
+  });
+
+  test("a range end with no start inside a tracked change lands after the change", () => {
+    const archive = docx(
+      paragraph(`<w:ins w:id="1">${run("text")}${rangeEnd("1")}</w:ins>`),
+      comment("1", "Editor", "Note."),
+    );
+
+    const result = convertDocx(archive);
+
+    expect(result).toEqual({
+      markdown: "{++text++}{>>@Editor: Note.<<}\n",
+      comments: 1,
+      highlights: 0,
+    });
+    expect(validateMarkup(result.markdown)).toEqual([]);
+  });
 });
 
 describe("audit: prose survives exactly once", () => {
@@ -104,6 +178,31 @@ describe("audit: prose survives exactly once", () => {
     const result = convertDocx(archive);
 
     expect(result.markdown).toBe("before boxed\n");
+  });
+
+  test("alternate content with two choices imports the first only", () => {
+    const box = (text: string) => `<w:drawing><w:txbxContent>${paragraph(run(text))}</w:txbxContent></w:drawing>`;
+    const archive = docx(
+      paragraph(
+        `${run("before ")}<mc:AlternateContent><mc:Choice Requires="wps">${box("first")}</mc:Choice><mc:Choice Requires="wpg">${box("second")}</mc:Choice><mc:Fallback>${box("third")}</mc:Fallback></mc:AlternateContent>`,
+      ),
+    );
+
+    const result = convertDocx(archive);
+
+    expect(result.markdown).toBe("before first\n");
+  });
+
+  test("alternate content with no choice imports its fallback", () => {
+    const archive = docx(
+      paragraph(
+        `${run("before ")}<mc:AlternateContent><mc:Fallback><w:pict><w:txbxContent>${paragraph(run("fallback"))}</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent>`,
+      ),
+    );
+
+    const result = convertDocx(archive);
+
+    expect(result.markdown).toBe("before fallback\n");
   });
 
   test("a non-breaking hyphen stays in the word", () => {
