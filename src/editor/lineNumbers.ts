@@ -63,6 +63,7 @@ const numberTheme = Prec.high(
       marginLeft: "calc(-2.65rem - var(--cm-ln-inset, 0px))",
       marginRight: "calc(0.65rem + var(--cm-ln-inset, 0px))",
       textAlign: "right",
+      whiteSpace: "nowrap",
       fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
       fontVariantNumeric: "tabular-nums",
       fontSize: "11px",
