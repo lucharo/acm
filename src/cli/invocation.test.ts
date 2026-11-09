@@ -13,6 +13,22 @@ describe("parseInvocation", () => {
     expect(parse(["edit"])).toEqual({ kind: "edit", open: true });
   });
 
+  test("acm skill opens the review skill and takes the edit options", () => {
+    expect(parse(["skill", "--port", "12345", "--no-open"])).toEqual({
+      kind: "edit",
+      reviewSkill: true,
+      port: 12345,
+      open: false,
+    });
+  });
+
+  test("acm skill refuses a document path", () => {
+    expect(parse(["skill", "notes.md"])).toEqual({
+      kind: "error",
+      message: "acm skill: takes no document; it opens your review preferences",
+    });
+  });
+
   test("acm edit accepts one explicit file and edit options", () => {
     expect(parse(["edit", "essay.md", "--port", "12345", "--no-open"])).toEqual({
       kind: "edit",

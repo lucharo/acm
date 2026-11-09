@@ -14,6 +14,7 @@ import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
 import { prepareDocumentTarget } from "./src/server/documentTarget";
 import { startLauncherServer } from "./src/server/launcher";
 import { recordRecentDocument } from "./src/server/recent";
+import { findUserReviewSkill, NO_REVIEW_PREFERENCES } from "./src/server/reviewSkill";
 
 function isBusyPort(error: unknown): boolean {
   return (error as { code?: string })?.code === "EADDRINUSE";
@@ -64,12 +65,6 @@ if (invocation.kind === "error") {
   console.error(invocation.message);
   process.exit(2);
 }
-if (invocation.kind === "legacy-skill") {
-  console.error("`acm skill` has been removed.");
-  console.error("Run the ACM install command again to install or refresh acm-review:");
-  console.error("  curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh");
-  process.exit(2);
-}
 if (invocation.kind === "agent") {
   try {
     const { setEmbeddedDicts } = await import("./src/cli/spellEngine");
@@ -100,6 +95,14 @@ const rememberRecentDocument = async (documentPath: string) => {
 };
 
 try {
+  if (invocation.reviewSkill) {
+    const skill = findUserReviewSkill();
+    if (!skill) {
+      console.log(NO_REVIEW_PREFERENCES);
+      process.exit(0);
+    }
+    invocation.file = skill;
+  }
   if (invocation.file) {
     const target = prepareDocumentTarget(invocation.file, process.cwd(), "open-or-create");
     if (!target.ok) {

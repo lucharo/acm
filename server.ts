@@ -38,7 +38,8 @@ import {
   appendDecisionEvents as appendDecisionEventsToStore,
   readDecisionHistory,
 } from "./src/server/decisions";
-import { refuseOutsideBoundary, resolveAllowedHosts, serveAppAsset } from "./src/server/http";
+import { isLoopbackHost, refuseOutsideBoundary, resolveAllowedHosts, serveAppAsset } from "./src/server/http";
+import { createUserReviewSkill, findUserReviewSkill, NO_REVIEW_PREFERENCES } from "./src/server/reviewSkill";
 import { tailscaleDnsName } from "./src/server/tailscale";
 import { mergeConfigPatch } from "./src/lib/seenState";
 import { documentUpdateLockPath, withFileUpdateLock } from "./src/server/fileLock";
@@ -70,6 +71,8 @@ export interface StartServerOptions {
   assetRoot?: string;
   /** Remote host names accepted besides loopback (#73), e.g. a Tailscale name. */
   allowedHosts?: readonly string[];
+  /** Opened by the editor for itself: an `acm` verb never picks it implicitly. */
+  auxiliary?: boolean;
   /** Test seam for the external filesystem boundary. */
   appendDecisionEvent?: (docPath: string, event: DecisionEvent) => Promise<{ appended: boolean }>;
   appendDecisionEvents?: (
@@ -125,6 +128,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
     opts.clearDecisionRecoveryEvents ?? clearDecisionRecoveryEventsInStore;
   const { port } = opts;
   const serverEpoch = crypto.randomUUID();
+  let reviewSkillServer: AcmServer | undefined;
 
   // ── Source-of-truth state ───────────────────────────────────────────────────
   let version = 0;
@@ -390,6 +394,29 @@ export function startServer(opts: StartServerOptions): AcmServer {
 
       if (pathname === "/api/session" && req.method === "GET") {
         return Response.json({ mode: "document", path: docPath });
+      }
+
+      if (pathname === "/api/review-skill" && req.method === "GET") {
+        return Response.json({ exists: findUserReviewSkill() !== null });
+      }
+
+      // POST /api/review-skill/open → open the user's review preferences in a
+      // second editor. Loopback only, like the launcher (#73): the new port can't
+      // be reached through a single tunnel.
+      if (pathname === "/api/review-skill/open" && req.method === "POST") {
+        if (!isLoopbackHost(req.headers.get("host"))) {
+          return Response.json({ error: "Run acm skill on the computer running ACM." }, { status: 409 });
+        }
+        try {
+          const create = new URL(req.url).searchParams.get("create") === "1";
+          const skillPath = create ? createUserReviewSkill() : findUserReviewSkill();
+          if (!skillPath) return Response.json({ error: NO_REVIEW_PREFERENCES }, { status: 404 });
+          if (skillPath === docPath) return Response.json({ url: new URL(req.url).origin });
+          reviewSkillServer ??= startServer({ docPath: skillPath, port: 0, staticDir, staticAssets, auxiliary: true });
+          return Response.json({ url: `http://localhost:${reviewSkillServer.port}` });
+        } catch (error) {
+          return Response.json({ error: (error as Error).message }, { status: 500 });
+        }
       }
 
       // GET /api/doc → current snapshot. `path` lets the client key per-document
@@ -818,7 +845,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
   // Register in ~/.config/acm/instances.json so `acm` verbs can resolve "the doc
   // open in the editor" without --doc/ACM_DOC. Fire-and-forget; liveness (pid
   // probing) is the authority, so no unregister-on-exit bookkeeping is needed.
-  void registerInstance(boundPort, docPath).catch(() => {
+  void registerInstance(boundPort, docPath, opts.auxiliary).catch(() => {
     console.error(
       "ACM warning: could not update the optional running-instance registry.",
     );
@@ -831,6 +858,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
     docPath,
     serverEpoch,
     stop: () => {
+      reviewSkillServer?.stop();
       watcher.close();
       if (debounce) clearTimeout(debounce);
       if (historyTimer) clearTimeout(historyTimer);

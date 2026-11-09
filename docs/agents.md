@@ -23,7 +23,9 @@ With the skill installed, a plain request is enough:
 Review notes.md in ACM. Comment on anything unclear and suggest tighter wording.
 ```
 
-The skill's source is [`skills/acm-review/SKILL.md`](https://github.com/lucharo/acm/blob/main/skills/acm-review/SKILL.md). To change it, edit that file in a clone and run `bun run setup`; never edit the installed copy under `~/.agents/skills/`.
+To change how agents review your documents, tell your agent, or ask it to interview you. It saves what you say in your own `acm-user-preferences` skill, which agents load alongside `acm-review` and ACM updates leave alone. Settings offers **Create your preferences** when you have none and **Edit your preferences** when you do; `acm skill` opens an existing one. Don't edit the installed skill under `~/.agents/skills/`: an update moves those edits to a backup.
+
+The skill's source is [`skills/acm-review/SKILL.md`](https://github.com/lucharo/acm/blob/main/skills/acm-review/SKILL.md).
 
 ## Writes that never clobber your typing
 

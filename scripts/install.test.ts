@@ -105,6 +105,18 @@ test("a fresh install adds the binary, its marker and the skill for both agents"
   expect(result.stdout).toContain("acm edit notes.md");
 });
 
+test("an install leaves the user's preferences skill alone", () => {
+  const preferences = join(home, ".agents", "skills", "acm-user-preferences", "SKILL.md");
+  mkdirSync(join(preferences, ".."), { recursive: true });
+  writeFileSync(preferences, "Never suggest em dashes.\n");
+
+  const result = runInstaller();
+
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(readFileSync(preferences, "utf8")).toBe("Never suggest em dashes.\n");
+  expect(existsSync(join(home, ".agents", "skill-backups"))).toBe(false);
+});
+
 test("the skill follows CLAUDE_CONFIG_DIR", () => {
   const configDir = join(home, "claude-config");
 

@@ -73,6 +73,10 @@ Opens one document in the editor, creating the file if it is missing. With no fi
 
 The old spelling `acm notes.md` is refused with a hint to use `acm edit notes.md`.
 
+## acm skill { data-toc-label="skill" }
+
+Opens your `acm-user-preferences` skill in the editor. The skill is yours and ACM doesn't maintain it: your agent creates it when you tell it a lasting preference or ask it to interview you, or use **Create your preferences** in Settings. Until it exists, `acm skill` says so and exits. Takes the same `--port`, `--allow-host`, `--asset-root` and `--no-open` options as `acm edit`.
+
 ## acm threads { data-toc-label="threads" }
 
 Lists every comment thread, SUGGEST cards included: id, message count, authors, flags and the start of the anchor. Inline suggestions without a comment are not listed. The `#id` is for reference; commands match by text.

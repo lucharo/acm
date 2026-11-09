@@ -10,6 +10,53 @@ file** — **the file is the source of truth.** You review by reading and writin
 file (or via the server's HTTP API). Everything you write is plain CriticMarkup; the
 human sees it rendered live.
 
+## The user's review preferences
+
+Load the `acm-user-preferences` skill if it exists, before reviewing. On how to review (tone, what
+to flag, when to suggest), it wins over this file. On commands and markup, this file wins.
+
+It belongs to the user and isn't maintained by ACM. The first time the user states a lasting preference for how you
+review, create the skill and record the preference in their words, under the suggested structure below. Add later preferences to the
+same file; when one replaces or retracts an entry, edit or delete that entry so the file never
+contradicts itself. Create it only once the user has stated a preference: never from a guess.
+
+If the skill doesn't exist, offer once per session to interview the user. If they accept, ask about
+their tone, what to flag, when to suggest a rewording and when to comment, and words or names to
+keep as written. Record their answers in their words.
+
+Put it where you load user-level skills, so it follows the user, and the user can open it in ACM
+with `acm skill`:
+
+- Claude Code: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/acm-user-preferences/SKILL.md`
+- Agents that read `~/.agents/skills/`: `~/.agents/skills/acm-user-preferences/SKILL.md`
+
+Keep one file. If it already exists in the other place, symlink to it rather than starting a second.
+
+Start the file with:
+
+```markdown
+---
+name: acm-user-preferences
+description: "The user's lasting preferences for reviewing documents in ACM. Load with acm-review before every review."
+---
+```
+
+Suggested structure, keeping only the sections the user has said something about:
+
+```markdown
+# Review preferences
+
+## Tone
+
+## What to flag
+
+## When to suggest a rewording, and when to comment
+
+## Words and names to keep as written
+```
+
+The skill belongs to the user. ACM never ships it, so updating ACM never overwrites it.
+
 ## The file is the API
 
 The document path is whatever the human opened (`acm edit <file>`). The file is the source

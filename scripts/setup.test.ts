@@ -61,10 +61,13 @@ test("bun run setup installs a working standalone CLI and managed skill", () => 
     expect(existsSync(join(home, ".claude", "skills", "acm-review", "SKILL.md"))).toBe(true);
     expect(readdirSync(ROOT).filter((name) => name.endsWith(".bun-build"))).toEqual([]);
 
-    const legacySkill = Bun.spawnSync([binary, "skill"], { cwd: home, env: { ...process.env, HOME: home } });
-    expect(legacySkill.exitCode).toBe(2);
-    expect(legacySkill.stderr.toString()).toContain("install.sh | sh");
-    expect(existsSync(join(home, "skill"))).toBe(false);
+    const skillWithDocument = Bun.spawnSync([binary, "skill", "notes.md"], {
+      cwd: home,
+      env: { ...process.env, HOME: home },
+    });
+    expect(skillWithDocument.exitCode).toBe(2);
+    expect(skillWithDocument.stderr.toString()).toContain("acm skill: takes no document");
+    expect(existsSync(join(home, "notes.md"))).toBe(false);
 
     const customAuxiliary = join(home, ".agents", "skills", "acm-review", "local-notes.md");
     writeFileSync(customAuxiliary, "locally customized\n");
