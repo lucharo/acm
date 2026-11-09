@@ -12,14 +12,17 @@
 // one; the "p. n / N" scroll chip is a separate DOM-only plugin.
 //
 // Word-based breaks are stable under CodeMirror's async line-height measurement —
-// the count never drifts as heights settle. A boundary that falls inside a long
-// soft-wrapped paragraph snaps to the nearest line boundary (frac ≥ 0.5 → after).
+// the count never drifts as heights settle. A boundary inside an ordinary paragraph
+// snaps to the nearest line boundary (frac ≥ 0.5 → after). One inside a paragraph
+// long enough to skew the page (the lib sets `offset`) stays in the paragraph, as an
+// inline widget at a sentence start, so the line wraps around the gap.
 
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
 import type { Extension, Text } from "@codemirror/state";
 import { pageBreakLines, WORDS_PER_A4_PAGE } from "../lib/criticmarkup";
+import { findMathRanges } from "./math";
 
 /** The spacer between pages: a slim gap with a dashed rule + "p. N" label. */
 class PageGapWidget extends WidgetType {
@@ -58,19 +61,19 @@ interface PageBreakState {
 }
 
 function buildSpacers(doc: Text): PageBreakState {
-  const { breaks, pages } = pageBreakLines(doc.toString());
+  const { breaks, pages } = pageBreakLines(doc.toString(), WORDS_PER_A4_PAGE, findMathRanges);
   const builder = new RangeSetBuilder<Decoration>();
   const positions: number[] = [];
   let lastPos = -1;
-  breaks.forEach(({ line, frac }, i) => {
-    // Snap the word boundary to the nearest LINE boundary (block widgets live
-    // between lines; sub-line precision isn't possible without real pagination).
-    const target = Math.min(frac >= 0.5 ? line + 1 : line, doc.lines);
-    const pos = doc.line(target).from;
-    if (pos === lastPos) return; // a >1-page line would stack spacers — keep one
+  breaks.forEach(({ line, frac, offset }, i) => {
+    const inline = offset !== undefined;
+    // Otherwise snap the word boundary to the nearest LINE boundary: block widgets
+    // live between lines.
+    const pos = inline ? doc.line(line).from + offset : doc.line(Math.min(frac >= 0.5 ? line + 1 : line, doc.lines)).from;
+    if (pos <= lastPos) return; // a >1-page line would stack spacers — keep one
     lastPos = pos;
     positions.push(pos);
-    builder.add(pos, pos, Decoration.widget({ widget: new PageGapWidget(i + 2), side: -1, block: true }));
+    builder.add(pos, pos, Decoration.widget({ widget: new PageGapWidget(i + 2), side: -1, block: !inline }));
   });
   return { deco: builder.finish(), positions, pages };
 }
@@ -100,18 +103,36 @@ class PageChipPlugin {
     if (u.docChanged || u.geometryChanged) this.updateChip();
   }
 
+  /** The gap's top in document coordinates. An inside-paragraph gap isn't at its
+   *  line's top, so it needs the rendered position; outside the rendered viewport
+   *  the line's top is on the same side of the viewport centre anyway. */
+  gapTop(pos: number): number {
+    const line = this.view.state.doc.lineAt(pos);
+    const coords = pos === line.from ? null : this.view.coordsAtPos(pos, -1);
+    return coords ? coords.top - this.view.documentTop : this.view.lineBlockAt(pos).top;
+  }
+
   updateChip() {
-    const { positions, pages } = this.view.state.field(pageBreaksField);
-    const sc = this.view.scrollDOM;
-    const mid = sc.scrollTop + sc.clientHeight / 2 - this.view.documentTop;
-    let page = 1;
-    for (const pos of positions) {
-      if (this.view.lineBlockAt(pos).top <= mid) page += 1;
-      else break;
-    }
-    const text = `p. ${Math.min(page, pages)} / ${pages}`;
-    if (this.chip.textContent !== text) this.chip.textContent = text;
-    this.chip.title = `≈ ${pages} A4 pages at ~${WORDS_PER_A4_PAGE} words/page (standard 11pt single-spaced)`;
+    // coordsAtPos reads layout, which isn't allowed during a view update.
+    this.view.requestMeasure({
+      key: this,
+      read: () => {
+        const { positions, pages } = this.view.state.field(pageBreaksField);
+        const sc = this.view.scrollDOM;
+        const mid = sc.getBoundingClientRect().top + sc.clientHeight / 2 - this.view.documentTop;
+        let page = 1;
+        for (const pos of positions) {
+          if (this.gapTop(pos) <= mid) page += 1;
+          else break;
+        }
+        return { page: Math.min(page, pages), pages };
+      },
+      write: ({ page, pages }) => {
+        const text = `p. ${page} / ${pages}`;
+        if (this.chip.textContent !== text) this.chip.textContent = text;
+        this.chip.title = `≈ ${pages} A4 pages at ~${WORDS_PER_A4_PAGE} words/page (standard 11pt single-spaced)`;
+      },
+    });
   }
 
   destroy() {

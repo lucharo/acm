@@ -1721,6 +1721,21 @@ export function countWords(text: string): number {
 /** Accepted-prose words per A4 page (11pt single-spaced ballpark) — the one
  *  pagination constant; UI copy derives from it too. */
 export const WORDS_PER_A4_PAGE = 550;
+/** A break may sit this fraction of a page away from its word boundary by snapping
+ *  to a line edge before it moves inside the paragraph. Paragraphs up to about 220
+ *  words therefore stay whole. A judgement value, not a measured one. */
+const MAX_PAGE_SNAP_FRACTION = 0.2;
+/** How far either side of the boundary to look for a sentence end, as a page fraction. */
+const SENTENCE_SEARCH_FRACTION = 0.1;
+
+export interface PageBreak {
+  /** 1-based line the page boundary falls on. */
+  line: number;
+  /** How far through that line's words the boundary falls. */
+  frac: number;
+  /** Offset into the line of an inside-paragraph break; absent for a line-edge break. */
+  offset?: number;
+}
 
 /**
  * Where A4 page breaks fall, estimated the way a STANDARD document would paginate
@@ -1730,11 +1745,17 @@ export const WORDS_PER_A4_PAGE = 550;
  * through that line's words the boundary falls (for interpolation inside long
  * soft-wrapped paragraph lines), plus the page total. Word counting matches {@link countWords} (comments
  * and deletions aren't prose), applied per line.
+ *
+ * A break gains an `offset` (UTF-16 offset into its line) when snapping it to the
+ * line's start or end would move it more than {@link MAX_PAGE_SNAP_FRACTION} of a
+ * page: the page then breaks inside the paragraph, at the sentence end nearest the
+ * boundary.
  */
 export function pageBreakLines(
   text: string,
   wordsPerPage = WORDS_PER_A4_PAGE,
-): { breaks: { line: number; frac: number }[]; pages: number } {
+  extraProtectedRanges: (text: string) => { from: number; to: number }[] = () => [],
+): { breaks: PageBreak[]; pages: number } {
   // countWords is applied PER LINE below, but comments/deletions may span lines
   // (multi-line reply bodies) — a per-line regex can't strip an unclosed half and
   // would count raw delimiter fragments as words. Blank them out FIRST, replacing
@@ -1743,25 +1764,115 @@ export function pageBreakLines(
     m.replace(/[^\n]/g, " "),
   );
   const lines = blanked.split("\n");
-  const breaks: { line: number; frac: number }[] = [];
+  const breaks: PageBreak[] = [];
+  let protectedRanges: SourceRange[] | undefined;
   let words = 0;
   let nextBoundary = wordsPerPage;
+  let lineStart = 0;
   for (let i = 0; i < lines.length; i++) {
+    const thisLineStart = lineStart;
+    lineStart += lines[i].length + 1;
     const w = countWords(lines[i]);
     if (w === 0) continue;
     const before = words;
     words += w;
+    let previousOffset = 0;
+    let candidates: PageBreakCandidate[] | undefined;
     // STRICTLY greater: a boundary landing exactly on the doc's last word fills
     // the page without starting a new one (no phantom trailing divider).
     while (words > nextBoundary) {
       // The boundary falls WITHIN this (possibly paragraph-long, soft-wrapped)
       // line — record how far through, so the renderer can interpolate the
       // divider inside the line's rendered block instead of snapping to its end.
-      breaks.push({ line: i + 1, frac: (nextBoundary - before) / w });
+      const wordsIntoLine = nextBoundary - before;
+      const frac = wordsIntoLine / w;
+      const pageBreak: PageBreak = { line: i + 1, frac };
+      // The last line with words has no next page to snap forward to.
+      const nothingToSnapTo = frac >= 0.5 && lines.slice(i + 1).every((later) => countWords(later) === 0);
+      if (nothingToSnapTo || Math.min(wordsIntoLine, w - wordsIntoLine) > wordsPerPage * MAX_PAGE_SNAP_FRACTION) {
+        protectedRanges ??= [...pageBreakProtectedRanges(text), ...extraProtectedRanges(text)];
+        candidates ??= pageBreakCandidates(lines[i], thisLineStart, protectedRanges);
+        const offset = nearestPageBreakOffset(
+          candidates,
+          wordsIntoLine,
+          Math.round(wordsPerPage * SENTENCE_SEARCH_FRACTION),
+          previousOffset,
+        );
+        if (offset !== undefined) {
+          pageBreak.offset = offset;
+          previousOffset = offset;
+        }
+      }
+      breaks.push(pageBreak);
       nextBoundary += wordsPerPage;
     }
   }
   return { breaks, pages: Math.max(1, Math.ceil(words / wordsPerPage)) };
+}
+
+/** Where a page break may not land: inside CriticMarkup, code, a link or image, HTML. */
+function pageBreakProtectedRanges(text: string): SourceRange[] {
+  return [
+    ...criticAwareLiteralRanges(text, { wholeLinks: true }).map((range) => ({
+      from: range.widenFrom ?? range.from,
+      to: range.to,
+    })),
+    ...scanTokens(text).map(({ from, to }) => ({ from, to })),
+  ];
+}
+
+interface PageBreakCandidate {
+  offset: number;
+  /** Accepted-prose words before this word. */
+  wordsBefore: number;
+  startsSentence: boolean;
+}
+
+/** Every word start in `line` where a page may begin. Tables and headings have none:
+ *  they keep whole-line breaks. */
+function pageBreakCandidates(
+  line: string,
+  lineStart: number,
+  protectedRanges: readonly SourceRange[],
+): PageBreakCandidate[] {
+  if (/^\s*(?:\||#{1,6}\s)/.test(line)) return [];
+  const candidates: PageBreakCandidate[] = [];
+  let wordsBefore = 0;
+  let segmentStart = 0;
+  for (const gap of line.matchAll(/\s+(?=\S)/g)) {
+    const offset = gap.index + gap[0].length;
+    if (positionInRanges(lineStart + offset, protectedRanges)) continue;
+    // countWords strips list and quote markers at the start of its input, so only
+    // the line's real start may be counted bare.
+    const segment = line.slice(segmentStart, offset);
+    wordsBefore += segmentStart === 0 ? countWords(segment) : countWords(`x ${segment}`) - 1;
+    segmentStart = offset;
+    const beforeGap = line.slice(Math.max(0, gap.index - 8), gap.index);
+    candidates.push({ offset, wordsBefore, startsSentence: /[.!?]["'\u201d\u2019)\]*_]*$/.test(beforeGap) });
+  }
+  return candidates;
+}
+
+/** The offset of the word that should open the next page, about `targetWords` into
+ *  the line: a sentence start when one lies within `windowWords`, else the nearest
+ *  word start that isn't protected. */
+function nearestPageBreakOffset(
+  candidates: readonly PageBreakCandidate[],
+  targetWords: number,
+  windowWords: number,
+  afterOffset: number,
+): number | undefined {
+  let nearestSentence: { offset: number; distance: number } | undefined;
+  let nearestWord: { offset: number; distance: number } | undefined;
+  for (const { offset, wordsBefore, startsSentence } of candidates) {
+    const distance = Math.abs(wordsBefore - targetWords);
+    if (offset <= afterOffset) continue;
+    if (!nearestWord || distance < nearestWord.distance) nearestWord = { offset, distance };
+    if (startsSentence && distance <= windowWords && (!nearestSentence || distance < nearestSentence.distance)) {
+      nearestSentence = { offset, distance };
+    }
+  }
+  return (nearestSentence ?? nearestWord)?.offset;
 }
 
 /**
