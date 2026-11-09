@@ -144,7 +144,7 @@ const pageBreaksTheme = EditorView.theme({
   // Page view's sheet (#79): the break is a real cut, Docs-style. The gap runs
   // the sheet's full width (its 2.5rem side padding plus the 1px edge) in the
   // desk colour, so one page ends and the next begins. Vertical spacing stays
-  // padding, never margin, or the line-number gutter drifts (#70).
+  // padding, never margin, or the height map drifts (#70).
   "@media (min-width: 641px)": {
     // White space closes the page above and opens the page below (its
     // margins); between them the desk-coloured band with soft shadows.
