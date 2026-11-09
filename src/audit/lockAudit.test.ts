@@ -20,7 +20,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { withFileUpdateLock, type FileUpdateLockOptions } from "../server/fileLock";
+import {
+  withFileUpdateLock,
+  type FileUpdateLockOptions,
+  type TakeoverStep,
+} from "../server/fileLock";
 
 let dir = "";
 
@@ -112,6 +116,176 @@ describe("audit: a crash mid-takeover does not wedge the lock", () => {
     expect({ whileFresh, onceStale, lockExists: existsSync(path) }).toEqual({
       whileFresh: "timed out",
       onceStale: "entered",
+      lockExists: false,
+    });
+  });
+});
+
+describe("audit: a paused takeover claimant cannot coexist with its successor", () => {
+  function gate() {
+    let open!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { wait, open };
+  }
+
+  function criticalSection() {
+    let active = 0;
+    let maximumActive = 0;
+    return {
+      maximumActive: () => maximumActive,
+      run: async (entered: () => void, mayFinish: Promise<void>) => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        entered();
+        await mayFinish;
+        active -= 1;
+        return "entered";
+      },
+    };
+  }
+
+  function seedDeadLock(path: string) {
+    mkdirSync(path);
+    writeFileSync(join(path, "owner.json"), ownerJson("dead-owner", deadPid()));
+  }
+
+  const paused = (onTakeoverStep: (step: TakeoverStep) => Promise<void>) => ({
+    timeoutMs: 2_000,
+    pollMs: 2,
+    staleMs: 60_000,
+    onTakeoverStep,
+  });
+
+  test("a claimant resuming after being superseded yields to its successor", async () => {
+    const path = lockPath();
+    seedDeadLock(path);
+    const section = criticalSection();
+    const claimCreated = gate();
+    const claimantResume = gate();
+    const claimantValidated = gate();
+    const claimantMove = gate();
+    const claimantYielded = gate();
+    const claimantEntered = gate();
+    const successorValidated = gate();
+    const successorMove = gate();
+    const successorEntered = gate();
+    const successorFinish = gate();
+    let claims = 0;
+
+    const claimant = withFileUpdateLock(
+      path,
+      "audit file",
+      () => section.run(claimantEntered.open, Promise.resolve()),
+      paused(async (step) => {
+        if (step === "claim-created" && ++claims === 1) {
+          claimCreated.open();
+          await claimantResume.wait;
+        }
+        if (step === "validated") {
+          claimantValidated.open();
+          await claimantMove.wait;
+        }
+        if (step === "yielded") claimantYielded.open();
+      }),
+    );
+    await claimCreated.wait;
+    utimesSync(join(path, "takeover.json"), ancient, ancient); // paused past staleMs
+    const successor = withFileUpdateLock(
+      path,
+      "audit file",
+      () => section.run(successorEntered.open, successorFinish.wait),
+      paused(async (step) => {
+        if (step === "validated") {
+          successorValidated.open();
+          await successorMove.wait;
+        }
+      }),
+    );
+    await successorValidated.wait;
+    claimantResume.open();
+    await Promise.race([claimantValidated.wait, claimantYielded.wait]);
+    successorMove.open();
+    await successorEntered.wait;
+    claimantMove.open();
+    await Promise.race([claimantEntered.wait, claimantYielded.wait]);
+    successorFinish.open();
+    const results = await Promise.all([claimant, successor]);
+
+    expect({ results, maximumActive: section.maximumActive(), lockExists: existsSync(path) }).toEqual({
+      results: ["entered", "entered"],
+      maximumActive: 1,
+      lockExists: false,
+    });
+  });
+
+  test("a successor re-reads its predecessor and yields once that claim is written", async () => {
+    const path = lockPath();
+    seedDeadLock(path);
+    const section = criticalSection();
+    const claimCreated = gate();
+    const claimantResume = gate();
+    const claimantValidated = gate();
+    const claimantMove = gate();
+    const claimantEntered = gate();
+    const claimantFinish = gate();
+    const successorSuperseding = gate();
+    const successorCreate = gate();
+    const successorValidated = gate();
+    const successorMove = gate();
+    const successorYielded = gate();
+    const successorEntered = gate();
+    let claims = 0;
+
+    const claimant = withFileUpdateLock(
+      path,
+      "audit file",
+      () => section.run(claimantEntered.open, claimantFinish.wait),
+      paused(async (step) => {
+        if (step === "claim-created" && ++claims === 1) {
+          claimCreated.open();
+          await claimantResume.wait;
+        }
+        if (step === "validated") {
+          claimantValidated.open();
+          await claimantMove.wait;
+        }
+      }),
+    );
+    await claimCreated.wait;
+    utimesSync(join(path, "takeover.json"), ancient, ancient); // paused past staleMs
+    const successor = withFileUpdateLock(
+      path,
+      "audit file",
+      () => section.run(successorEntered.open, Promise.resolve()),
+      paused(async (step) => {
+        if (step === "superseding") {
+          successorSuperseding.open();
+          await successorCreate.wait;
+        }
+        if (step === "validated") {
+          successorValidated.open();
+          await successorMove.wait;
+        }
+        if (step === "yielded") successorYielded.open();
+      }),
+    );
+    await successorSuperseding.wait;
+    claimantResume.open();
+    await claimantValidated.wait;
+    successorCreate.open();
+    await Promise.race([successorValidated.wait, successorYielded.wait]);
+    claimantMove.open();
+    await claimantEntered.wait;
+    successorMove.open();
+    await Promise.race([successorEntered.wait, successorYielded.wait]);
+    claimantFinish.open();
+    const results = await Promise.all([claimant, successor]);
+
+    expect({ results, maximumActive: section.maximumActive(), lockExists: existsSync(path) }).toEqual({
+      results: ["entered", "entered"],
+      maximumActive: 1,
       lockExists: false,
     });
   });

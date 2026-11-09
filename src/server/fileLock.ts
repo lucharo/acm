@@ -2,6 +2,7 @@ import {
   mkdir,
   open,
   lstat,
+  readdir,
   readFile,
   rename,
   rm,
@@ -31,7 +32,11 @@ export interface FileUpdateLockOptions {
   staleMs?: number;
   isProcessAlive?: (pid: number) => boolean;
   writeOwnerFile?: (path: string, contents: string) => Promise<void>;
+  /** Test seam: pauses a takeover at each point where two claimants can interleave. */
+  onTakeoverStep?: (step: TakeoverStep) => Promise<void>;
 }
+
+export type TakeoverStep = "superseding" | "claim-created" | "yielded" | "validated";
 
 const OWNER_FILE = "owner.json";
 const TAKEOVER_FILE = "takeover.json";
@@ -159,12 +164,38 @@ async function claimIsAbandoned(
   return identity !== null && Date.now() - identity.mtimeMs > staleMs;
 }
 
+function slotGeneration(file: string): number | null {
+  if (file === TAKEOVER_FILE) return 0;
+  const match = /^takeover\.(\d+)\.json$/.exec(file);
+  return match ? Number(match[1]) : null;
+}
+
+/** Run after the claim is written and before the lock is validated. A claimant only
+ * looks abandoned while its claim is unwritten, so it may yet resume: it writes and
+ * then looks for a successor, while a successor creates its slot and then re-reads
+ * its predecessors. Whichever order those land in, at least one of them yields. */
+async function claimIsExclusive(
+  lockPath: string,
+  generation: number,
+  staleMs: number,
+  isProcessAlive: (pid: number) => boolean,
+): Promise<boolean> {
+  for (const file of await readdir(lockPath)) {
+    const other = slotGeneration(file);
+    if (other === null || other === generation) continue;
+    if (other > generation) return false;
+    if (!(await claimIsAbandoned(lockPath, file, staleMs, isProcessAlive))) return false;
+  }
+  return true;
+}
+
 async function tryTakeOverDeadLock(
   lockPath: string,
   observedIdentity: LockIdentity,
   observedOwner: FileLockOwner | null,
   staleMs: number,
   isProcessAlive: (pid: number) => boolean,
+  onStep?: (step: TakeoverStep) => Promise<void>,
 ): Promise<boolean> {
   const token = crypto.randomUUID();
   const claim: FileLockOwner = {
@@ -174,7 +205,8 @@ async function tryTakeOverDeadLock(
     createdAt: Date.now(),
   };
   let claimFile = TAKEOVER_FILE;
-  for (let generation = 0; ; generation += 1) {
+  let generation = 0;
+  for (; ; generation += 1) {
     claimFile = takeoverSlot(generation);
     const claimPath = join(lockPath, claimFile);
     let claimCreated = false;
@@ -182,6 +214,7 @@ async function tryTakeOverDeadLock(
       const handle = await open(claimPath, "wx");
       claimCreated = true;
       try {
+        await onStep?.("claim-created");
         await handle.writeFile(JSON.stringify(claim));
       } finally {
         await handle.close();
@@ -198,11 +231,17 @@ async function tryTakeOverDeadLock(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (!(await claimIsAbandoned(lockPath, claimFile, staleMs, isProcessAlive))) return false;
+      await onStep?.("superseding");
     }
   }
 
   let moved = false;
   try {
+    // Before the identity check: a successor's slot leaves with the directory it is in.
+    if (!(await claimIsExclusive(lockPath, generation, staleMs, isProcessAlive))) {
+      await onStep?.("yielded");
+      return false;
+    }
     const currentIdentity = await lockIdentity(lockPath);
     if (!currentIdentity || !sameIdentity(currentIdentity, observedIdentity)) return false;
     const currentOwner = await readOwner(lockPath);
@@ -212,6 +251,7 @@ async function tryTakeOverDeadLock(
       : Date.now() - observedIdentity.mtimeMs > staleMs;
     if (!reclaimable) return false;
 
+    await onStep?.("validated");
     const stalePath = `${lockPath}.stale-${token}`;
     await rename(lockPath, stalePath);
     moved = true;
@@ -345,6 +385,7 @@ export async function withFileUpdateLock<T>(
             observedOwner,
             staleMs,
             isProcessAlive,
+            options.onTakeoverStep,
           ))
         ) {
           continue;
