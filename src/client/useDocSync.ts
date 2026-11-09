@@ -481,7 +481,6 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     }
     currentVersion.current = version;
     lastConfirmedContent.current = content;
-    unansweredSaves.current = []; // the buffer now descends from this state
     onRemoteUpdate.current(content, version);
     setSaveState(settledSaveState());
     setLastSavedAt(Date.now());
@@ -860,6 +859,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     contentOnTheWire.current = sent;
     const saveId = globalThis.crypto.randomUUID();
     const noteUnanswered = () => {
+      // Its echo or a newer push was adopted first, so the buffer has moved past it.
+      if (currentVersion.current !== baseVersion) return;
       unansweredSaves.current = [...unansweredSaves.current, { id: saveId, content: sent }].slice(-KEEP_VERSIONS);
     };
     let res: Response;

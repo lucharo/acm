@@ -97,6 +97,11 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
     rejectPutAfterLanding: false, // once
     rejectPutAfterEcho: false, // once, the echo delivered before the failure
     stripAuditFromReply: false, // once
+    rejectPutBeforeLanding: false, // once
+    rejectPutAfterHold: false, // once, after afterPutAnswered has run
+    replyProxy502: false, // once, the save having landed
+    holdPushes: false, // delivery to the hook waits, as on a slow socket
+    heldPushes: [] as Array<() => void>,
     failDecisionPosts: false,
     decisionReadsHeld: 0,
     pushedVersions: [] as number[],
@@ -122,12 +127,20 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
       const before = io.beforePutLeaves;
       io.beforePutLeaves = null;
       await before?.();
+      if (io.rejectPutBeforeLanding) {
+        io.rejectPutBeforeLanding = false;
+        throw new TypeError("connection lost");
+      }
       const pushesBefore = io.pushedVersions.length;
       const res = await realFetch(url, init);
       if (io.rejectPutAfterEcho) {
         io.rejectPutAfterEcho = false;
         await until("the save's echo", () => io.pushedVersions.length > pushesBefore);
         throw new TypeError("connection lost");
+      }
+      if (io.replyProxy502) {
+        io.replyProxy502 = false;
+        return new Response("bad gateway", { status: 502 });
       }
       if (io.rejectPutAfterLanding) {
         io.rejectPutAfterLanding = false;
@@ -136,6 +149,10 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
       const after = io.afterPutAnswered;
       io.afterPutAnswered = null;
       await after?.();
+      if (io.rejectPutAfterHold) {
+        io.rejectPutAfterHold = false;
+        throw new TypeError("connection lost");
+      }
       if (io.stripAuditFromReply) {
         io.stripAuditFromReply = false;
         const { audit: _audit, ...reply } = (await res.json()) as Record<string, unknown>;
@@ -148,12 +165,21 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
   };
 
   globals.WebSocket = class extends RealWebSocket {
+    #handler: ((ev: MessageEvent) => void) | null = null;
+    override set onmessage(handler: ((ev: MessageEvent) => void) | null) {
+      this.#handler = handler;
+    }
+    override get onmessage(): ((ev: MessageEvent) => void) | null {
+      return this.#handler;
+    }
     constructor(url: string) {
       super(io.refuseSockets ? "ws://127.0.0.1:1/ws" : url);
       io.socket = this;
       this.addEventListener("message", (ev) => {
         const msg = JSON.parse(String(ev.data)) as { type: string; version: number };
         if (msg.type === "update") io.pushedVersions.push(msg.version);
+        if (io.holdPushes) io.heldPushes.push(() => this.#handler?.(ev));
+        else this.#handler?.(ev);
       });
     }
   };
@@ -416,10 +442,37 @@ describe("reconnect audit (#21)", () => {
       expect(editor.remote).toEqual([adopted, restoredAndTyped]);
     }, 15000);
 
-    test("after a later save was confirmed by its echo", async () => {
+    test("after a newer push arrived before its reply failed", async () => {
+      const editor = await openEditor(SEED);
+      const adopted = answered.replace("Last paragraph.", "Last paragraph agent.");
+      const reply = deferred();
+      editor.io.afterPutAnswered = () => reply.held;
+      editor.io.rejectPutAfterHold = true;
+
+      editor.sync().save(answered);
+      await until("the save's echo", () => editor.io.pushedVersions.includes(1));
+      await editor.agentWrite(answered, adopted);
+      await until("the newer push to be adopted", () => editor.remote.includes(adopted));
+      reply.release();
+      await until("the reply to fail", () => !editor.sync().connected && editor.io.inFlight === 0);
+      await until("the reconnect", () => editor.sync().connected && editor.sync().saveState === "saved", 6000);
+      await restartOntoRestoredDocument(editor, typedOn(adopted));
+
+      expect(editor.onDisk()).toBe(restoredAndTyped);
+      expect(editor.remote).toEqual([adopted, restoredAndTyped]);
+    }, 15000);
+
+    test("after its late echo confirmed it and a later save followed", async () => {
       const editor = await openEditor(SEED);
       const later = answered.replace("Last paragraph.", "Last paragraph later.");
-      await loseReplyTo(editor, answered);
+      editor.io.holdPushes = true;
+      editor.io.replyProxy502 = true;
+      editor.sync().save(answered);
+      await until("the failed reply", () => editor.puts.length === 1 && editor.io.inFlight === 0 && editor.sync().saveState === "unsaved");
+      await until("the echo to be waiting", () => editor.io.heldPushes.length === 1);
+      editor.io.holdPushes = false;
+      for (const deliver of editor.io.heldPushes.splice(0)) deliver();
+      await until("the late echo to confirm it", () => editor.sync().saveState === "saved");
       await loseReplyTo(editor, later);
 
       await restartOntoRestoredDocument(editor, typedOn(later));
@@ -428,20 +481,34 @@ describe("reconnect audit (#21)", () => {
       expect(editor.remote).toEqual([restoredAndTyped]);
     }, 15000);
 
-    test("after an earlier restart rebaselined the editor", async () => {
+    test("after an earlier restart merged the buffer onto a new snapshot", async () => {
       const editor = await openEditor(SEED);
-      const rebaselined = answered.replace("Last paragraph.", "Last paragraph on disk.");
-      await loseReplyTo(editor, answered);
+      const buffer = typedOn(answered);
+      const snapshot = SEED.replace("Last paragraph.", "Last paragraph on disk.");
+      const merged = typedOn(opening(snapshot, " once"));
+      editor.io.refuseSockets = true;
+      editor.io.rejectPutAfterLanding = true;
+      editor.io.beforePutLeaves = () => editor.sync().save(buffer);
+      editor.sync().save(answered);
+      await until("the reply to be lost", () => !editor.sync().connected && editor.io.inFlight === 0);
       editor.stopServer();
-      await until("the editor to go offline", () => !editor.sync().connected);
-      await Bun.write(editor.docPath, rebaselined);
-      editor.startAgain();
-      await until("the rebaseline", () => editor.remote.includes(rebaselined) && editor.sync().connected, 6000);
+      await Bun.write(editor.docPath, snapshot);
 
-      await restartOntoRestoredDocument(editor, typedOn(rebaselined));
+      // The merged buffer never lands: the server dies under the PUT carrying it.
+      editor.io.rejectPutBeforeLanding = true;
+      editor.io.beforePutLeaves = () => editor.stopServer();
+      editor.startAgain();
+      editor.io.refuseSockets = false;
+      await until("the merged buffer to leave", () => editor.puts.length === 2 && editor.io.inFlight === 0, 6000);
+      await until("the editor to go offline", () => !editor.sync().connected);
+      await Bun.write(editor.docPath, answered);
+      editor.startAgain();
+      await until("the merge to reach disk", () => editor.onDisk() === restoredAndTyped, 6000);
+      await editor.settled();
 
       expect(editor.onDisk()).toBe(restoredAndTyped);
-      expect(editor.remote).toEqual([rebaselined, restoredAndTyped]);
+      expect(editor.puts.map((put) => put.content)).toEqual([answered, merged, restoredAndTyped]);
+      expect(editor.remote).toEqual([merged, restoredAndTyped]);
     }, 15000);
   });
 });
