@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Annotation, Compartment, EditorState, StateEffect, Transaction } from "@codemirror/state";
+import type { ChangeDesc } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
 import { history, invertedEffects, isolateHistory } from "@codemirror/commands";
 import { keymap } from "@codemirror/view";
@@ -21,7 +22,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
 import { acmFormattingKeymap } from "./formatting";
 import { listIndentKeymap } from "./listIndent";
-import { listRenumber } from "./listRenumber";
+import { decisionRelabel, listRenumber } from "./listRenumber";
 import { CriticMarkup } from "./criticMarkupParser";
 import { critCallbacksFacet, setCritHighlights } from "./criticMarkupView";
 import type { CritCallbacks } from "./criticMarkupView";
@@ -82,6 +83,18 @@ const decisionHistoryEffect = StateEffect.define<{
   events: DecisionEvent[];
 }>();
 
+/** A decision's relabelling, kept in its history event: the event's result range
+ * is written before it, and redo restores the document after it. */
+const decisionRelabelEffect = StateEffect.define<ChangeDesc>();
+
+function afterRelabel(event: DecisionEvent, relabel: ChangeDesc): DecisionEvent {
+  const { afterFrom, afterTo } = event.target;
+  if (afterFrom === undefined || afterTo === undefined) return event;
+  const from = relabel.mapPos(afterFrom, 1);
+  const to = Math.max(from, relabel.mapPos(afterTo, -1));
+  return { ...event, target: { ...event.target, afterFrom: from, afterTo: to } };
+}
+
 /** Keep one review action isolated in CodeMirror history and carry its audit
  * identity through undo/redo without inventing a second decision event. */
 export function decisionAnnotations(events: DecisionEvent[]) {
@@ -96,12 +109,18 @@ export const decisionHistoryExtension = invertedEffects.of((transaction) => {
   if (annotated.length > 0) {
     inverse.push(decisionHistoryEffect.of({ kind: "cancel", events: annotated }));
   }
+  if (transaction.annotation(decisionRelabel)) {
+    inverse.push(decisionRelabelEffect.of(transaction.changes.desc));
+  }
+  const relabel = transaction.effects.find((effect) => effect.is(decisionRelabelEffect))?.value;
   for (const effect of transaction.effects) {
     if (!effect.is(decisionHistoryEffect)) continue;
     inverse.push(
       decisionHistoryEffect.of({
         kind: effect.value.kind === "enqueue" ? "cancel" : "enqueue",
-        events: effect.value.events,
+        events: relabel
+          ? effect.value.events.map((event) => afterRelabel(event, relabel))
+          : effect.value.events,
       }),
     );
   }

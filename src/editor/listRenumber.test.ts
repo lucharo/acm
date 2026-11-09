@@ -1,11 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { history, undo, moveLineUp } from "@codemirror/commands";
+import { history, undo, redo, moveLineUp } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorSelection, EditorState, Transaction } from "@codemirror/state";
 import type { TransactionSpec } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import type { ViewUpdate } from "@codemirror/view";
 
 import { Annotation } from "@codemirror/state";
 import { listRenumber } from "./listRenumber";
+import {
+  decisionAnnotation,
+  decisionAnnotations,
+  decisionHistoryExtension,
+  decisionQueueUpdateFromTransactions,
+} from "./useCodeMirror";
+import { inlineSuggestionDecision } from "../lib/decision";
+import { applySuggestion, scanTokens } from "../lib/criticmarkup";
+import type { SuggestionToken } from "../lib/criticmarkup";
 
 const decision = Annotation.define<boolean>();
 const isDecision = (tr: Transaction) => tr.annotation(decision) === true;
@@ -27,6 +38,49 @@ function deleteLine(doc: string, text: string): string {
   const state = editor(doc);
   const { from, to } = lineRange(doc, text);
   return state.update({ changes: { from, to }, userEvent: "delete.selection" }).state.doc.toString();
+}
+
+/** The editor's real history, decision and renumber wiring. EditorView needs a
+ * DOM, so a stub holds the state and feeds each transaction to the real update
+ * listeners, as the view does. */
+function reviewEditor(doc: string) {
+  const view = {
+    transactions: [] as Transaction[],
+    state: EditorState.create({
+      doc,
+      extensions: [
+        history(),
+        decisionHistoryExtension,
+        listRenumber((tr) => tr.annotation(decisionAnnotation) !== undefined),
+      ],
+    }),
+    dispatch(spec: Transaction | TransactionSpec) {
+      const tr = spec instanceof Transaction ? spec : view.state.update(spec);
+      view.state = tr.state;
+      view.transactions.push(tr);
+      const update = {
+        view,
+        state: tr.state,
+        startState: tr.startState,
+        changes: tr.changes,
+        docChanged: tr.docChanged,
+        transactions: [tr],
+      } as unknown as ViewUpdate;
+      for (const listener of tr.state.facet(EditorView.updateListener)) listener(update);
+    },
+  };
+  return view;
+}
+
+/** Accept the suggestion through the path App.tsx uses, then let the queued
+ * relabelling run. */
+async function acceptInsertion(view: ReturnType<typeof reviewEditor>, raw: string, insert: string) {
+  const from = view.state.doc.toString().indexOf(raw);
+  view.dispatch({
+    changes: { from, to: from + raw.length, insert },
+    annotations: decisionAnnotations([]),
+  });
+  await Promise.resolve();
 }
 
 describe("ordered list renumbering (#80)", () => {
@@ -291,6 +345,157 @@ describe("ordered list renumbering (#80)", () => {
 
     // The renumbering follows in its own transaction, dispatched by the view.
     expect(accepted.state.doc.toString()).toBe("1. one\n3. three\n");
+  });
+
+  test("one undo of an accepted item restores the suggestion and every label", async () => {
+    const doc = "1. one\n{++2. new++}\n2. two";
+    const view = reviewEditor(doc);
+    await acceptInsertion(view, "{++2. new++}", "2. new");
+    expect(view.state.doc.toString()).toBe("1. one\n2. new\n3. two");
+
+    undo(view);
+
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  /** Accept the document's substitution with a real audit event, then let the
+   * queued relabelling run. */
+  async function acceptWithAudit(doc: string) {
+    const view = reviewEditor(doc);
+    const token = scanTokens(doc)[0] as SuggestionToken;
+    const event = inlineSuggestionDecision(token, "accept", "Luis", "gui");
+    view.dispatch({
+      changes: { from: token.from, to: token.to, insert: applySuggestion(doc.slice(token.from, token.to), "accept") },
+      annotations: decisionAnnotations([event]),
+    });
+    await Promise.resolve();
+    return { view, event };
+  }
+
+  test("accepting the deletion of a nested first item renumbers its siblings from that start", async () => {
+    const { view } = await acceptWithAudit("1. parent\n   {--\n   1. a\n   --}\n   2. b\n   3. c");
+
+    expect(view.state.doc.toString()).toBe("1. parent\n   \n   1. b\n   2. c");
+  });
+
+  test("redo requeues a decision at the range the relabelling moved it to", async () => {
+    const { view, event } = await acceptWithAudit("9. nine\n9. ten\n11. {~~old~>new~~}");
+    undo(view);
+
+    redo(view);
+
+    expect(view.state.doc.toString()).toBe("9. nine\n10. ten\n11. new");
+    expect(decisionQueueUpdateFromTransactions([view.transactions.at(-1)!])).toEqual({
+      enqueue: [{ ...event, target: { ...event.target, afterFrom: 20, afterTo: 23 } }],
+      cancel: [],
+    });
+  });
+
+  test("redo keeps a decision's range when the relabelled lines repeat each other", async () => {
+    const { view, event } = await acceptWithAudit("1. x\n1. x\n2. {~~a~>x~~}\nend");
+    undo(view);
+
+    redo(view);
+
+    expect(view.state.doc.toString()).toBe("1. x\n2. x\n3. x\nend");
+    expect(decisionQueueUpdateFromTransactions([view.transactions.at(-1)!])).toEqual({
+      enqueue: [event],
+      cancel: [],
+    });
+  });
+
+  test("a second undo and redo does not move the requeued decision again", async () => {
+    const { view, event } = await acceptWithAudit("9. nine\n9. ten\n11. {~~old~>new~~}");
+    undo(view);
+    redo(view);
+    undo(view);
+
+    redo(view);
+
+    expect(decisionQueueUpdateFromTransactions([view.transactions.at(-1)!])).toEqual({
+      enqueue: [{ ...event, target: { ...event.target, afterFrom: 20, afterTo: 23 } }],
+      cancel: [],
+    });
+  });
+
+  test("redo after undoing an accepted item brings back the renumbered list", async () => {
+    const view = reviewEditor("1. one\n{++2. new++}\n2. two");
+    await acceptInsertion(view, "{++2. new++}", "2. new");
+    undo(view);
+
+    redo(view);
+
+    expect(view.state.doc.toString()).toBe("1. one\n2. new\n3. two");
+  });
+
+  test("an edit straight after the relabelling is its own undo step", async () => {
+    const doc = "1. one\n{++2. new++}\n2. two";
+    const view = reviewEditor(doc);
+    await acceptInsertion(view, "{++2. new++}", "2. new");
+    // Right after the relabelled "3", so it would group with that change if it could.
+    view.dispatch({ changes: { from: view.state.doc.toString().indexOf("3") + 1, insert: "x" } });
+
+    undo(view);
+
+    expect(view.state.doc.toString()).toBe("1. one\n2. new\n3. two");
+  });
+
+  test("adjacent typing still groups into one undo step", () => {
+    const view = reviewEditor("start");
+    view.dispatch({ changes: { from: 5, insert: "a" }, userEvent: "input.type" });
+    view.dispatch({ changes: { from: 6, insert: "b" }, userEvent: "input.type" });
+
+    undo(view);
+
+    expect(view.state.doc.toString()).toBe("start");
+  });
+
+  test("a comment at the very start of an item's line holds the list", () => {
+    const doc = "1. one\n{>>note<<}2. two\n3. three";
+
+    expect(deleteLine(doc, "1. one")).toBe("{>>note<<}2. two\n3. three");
+  });
+
+  test("a thread of comments at the very start of an item's line holds the list", () => {
+    const doc = "1. one\n{>>note<<}{>>reply<<}2. two\n3. three";
+
+    expect(deleteLine(doc, "1. one")).toBe("{>>note<<}{>>reply<<}2. two\n3. three");
+  });
+
+  test("a thread of comments separated by a space at the start of an item's line holds the list", () => {
+    const doc = "1. one\n{>>note<<} {>>reply<<}2. two\n3. three";
+
+    expect(deleteLine(doc, "1. one")).toBe("{>>note<<} {>>reply<<}2. two\n3. three");
+  });
+
+  test("markup after a highlight containing a tracked change still counts as leading its line", () => {
+    const doc = "{==a {++x++} b==}{++y++}{>>n\nm<<}\n2. two\n3. three";
+
+    expect(deleteLine(doc, "2. two")).toBe("{==a {++x++} b==}{++y++}{>>n\nm<<}\n3. three");
+  });
+
+  test("a highlighted first item whose comment sits after a space and spans lines holds the list", () => {
+    const doc = "{==1. one==} {>>note\nmore<<}\n2. two\n3. three";
+
+    expect(deleteLine(doc, "2. two")).toBe("{==1. one==} {>>note\nmore<<}\n3. three");
+  });
+
+  test("a multi-line thread before an item's marker holds the list that ends above it", () => {
+    const doc = "1. one\n2. two\n{>>note\nmore<<}{>>reply<<}3. three";
+
+    expect(deleteLine(doc, "1. one")).toBe("2. two\n{>>note\nmore<<}{>>reply<<}3. three");
+  });
+
+  test("a comment at the start of a line with no marker after it does not hold the list", () => {
+    const doc = "1. one\n2. two\n{>>note<<} prose\n3. three";
+
+    expect(deleteLine(doc, "1. one")).toBe("1. two\n{>>note<<} prose\n2. three");
+  });
+
+  test("a highlighted first item whose comment spans lines holds the list", () => {
+    const doc = "{==1. one==}{>>@A: why?\nmore\n<<}\n2. two\n3. three";
+
+    expect(deleteLine(doc, "2. two")).toBe("{==1. one==}{>>@A: why?\nmore\n<<}\n3. three");
   });
 
   test("a long list renumbers to its end", () => {
