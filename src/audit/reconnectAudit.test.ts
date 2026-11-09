@@ -85,7 +85,7 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
   const origin = `127.0.0.1:${port}`;
   globals.location = { protocol: "http:", host: origin };
 
-  const puts: Array<{ baseVersion: number; content: string; serverEpoch: string }> = [];
+  const puts: Array<{ baseVersion: number; content: string; decisionEventIds: string[] }> = [];
   const remote: string[] = [];
   const io = {
     socket: null as WebSocket | null,
@@ -97,12 +97,14 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
     rejectPutAfterLanding: false, // once
     rejectPutAfterEcho: false, // once, the echo delivered before the failure
     stripAuditFromReply: false, // once
+    failAuditInReply: false, // once, the server's "committed but not audited" 500
     rejectPutBeforeLanding: false, // once
     rejectPutAfterHold: false, // once, after afterPutAnswered has run
     replyProxy502: false, // once, the save having landed
     holdPushes: false, // delivery to the hook waits, as on a slow socket
     heldPushes: [] as Array<() => void>,
     failDecisionPosts: false,
+    failedDecisionPosts: 0,
     decisionReadsHeld: 0,
     pushedVersions: [] as number[],
     inFlight: 0,
@@ -112,7 +114,10 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
     const url = String(input).startsWith("/") ? `http://${origin}${input}` : String(input);
     if (url.endsWith("/api/decisions") || url.endsWith("/api/decision-recovery")) {
       if (io.failDecisionReads && init?.method !== "POST") return new Response("down", { status: 503 });
-      if (io.failDecisionPosts && init?.method === "POST") return new Response("down", { status: 503 });
+      if (io.failDecisionPosts && init?.method === "POST") {
+        io.failedDecisionPosts++;
+        return new Response("down", { status: 503 });
+      }
       if (io.holdDecisionReads && init?.method !== "POST") {
         io.decisionReadsHeld++;
         await io.holdDecisionReads;
@@ -120,8 +125,16 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
       return realFetch(url, init);
     }
     if (init?.method !== "PUT" || !url.endsWith("/api/doc")) return realFetch(url, init);
-    const body = JSON.parse(init.body as string) as { baseVersion: number; content: string; serverEpoch: string };
-    puts.push({ baseVersion: body.baseVersion, content: body.content, serverEpoch: body.serverEpoch });
+    const body = JSON.parse(init.body as string) as {
+      baseVersion: number;
+      content: string;
+      decisionEvents: Array<{ id: string }>;
+    };
+    puts.push({
+      baseVersion: body.baseVersion,
+      content: body.content,
+      decisionEventIds: body.decisionEvents.map((event) => event.id),
+    });
     io.inFlight++;
     try {
       const before = io.beforePutLeaves;
@@ -152,6 +165,12 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
       if (io.rejectPutAfterHold) {
         io.rejectPutAfterHold = false;
         throw new TypeError("connection lost");
+      }
+      if (io.failAuditInReply) {
+        io.failAuditInReply = false;
+        const reply = (await res.json()) as Record<string, unknown>;
+        const audit = { status: "failed", code: "decision-persistence", retryable: true };
+        return Response.json({ ...reply, audit }, { status: 500 });
       }
       if (io.stripAuditFromReply) {
         io.stripAuditFromReply = false;
@@ -404,6 +423,43 @@ describe("reconnect audit (#21)", () => {
 
     expect(editor.onDisk()).toBe(typed);
     expect(editor.puts.map((put) => put.baseVersion)).toEqual([0, 2]);
+  }, 15000);
+
+  for (const [kind, fault] of [
+    ["a 500", "failAuditInReply"],
+    ["no audit", "stripAuditFromReply"],
+  ] as const) test(`a merged decision save answered with ${kind} whose audit retry fails keeps the agent's edit`, async () => {
+    const editor = await openEditor(SEED);
+    const sent = opening(SEED, " mine");
+    const theirs = SEED.replace("Last paragraph.", "Last paragraph theirs.");
+    const merged = opening(theirs, " mine");
+    const typed = merged.replace("Middle paragraph.", "Middle paragraph typed.");
+    const reply = deferred();
+    editor.io.beforePutLeaves = async () => {
+      await editor.agentWrite(SEED, theirs);
+      editor.io.failDecisionPosts = true;
+    };
+    editor.io.afterPutAnswered = () => reply.held;
+    editor.io[fault] = true;
+
+    editor.sync().save(sent, { enqueue: [DECISION], cancel: [] });
+    await until("the merged save's push", () => editor.io.pushedVersions.includes(2));
+    reply.release();
+    await until(
+      "the queued flush to finish",
+      () => editor.io.inFlight === 0 && (editor.puts.length === 2 || editor.io.failedDecisionPosts >= 2),
+    );
+
+    expect(editor.onDisk()).toBe(merged);
+    expect(editor.remote).toEqual([merged]);
+    expect(editor.puts.map((put) => put.content)).toEqual([sent]);
+    expect(editor.sync().saveState).toBe("audit-error");
+
+    editor.io.failDecisionPosts = false;
+    editor.sync().save(typed);
+    editor.sync().flushNow();
+    await until("the next save", () => editor.puts.length === 2 && editor.io.inFlight === 0);
+    expect(editor.puts[1]).toEqual({ baseVersion: 2, content: typed, decisionEventIds: [DECISION.id] });
   }, 15000);
 
   describe("a restart ignores an unanswered save the buffer no longer descends from", () => {

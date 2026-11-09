@@ -761,8 +761,11 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     }
     setSaveState("saving");
 
+    // The document write landed but its audit did not: reconcile the document as
+    // usual and keep these events queued as committed, for an audit-only retry.
+    let auditRetryOwed = false;
     const confirmDecisionEvents = () => {
-      if (sentDecisionEvents.length === 0) return;
+      if (auditRetryOwed || sentDecisionEvents.length === 0) return;
       pendingDecisionEntries.current = removeDecisionOutboxEvents(
         pendingDecisionEntries.current,
         sentDecisionEvents,
@@ -910,11 +913,9 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
     };
-    // This reply can arrive after a newer push or reconnect snapshot was adopted.
-    const confirmServerState = (version: number, content: string | undefined) => {
-      if (version < currentVersion.current) return;
+    const confirmServerState = (version: number, content: string) => {
       currentVersion.current = version;
-      if (content !== undefined) lastConfirmedContent.current = content;
+      lastConfirmedContent.current = content;
     };
     if (!saveResponseMatchesCurrentEpoch(requestEpoch, currentServerEpoch.current)) {
       // A response from a previous server lifetime cannot advance the new epoch's
@@ -974,10 +975,10 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
         return;
       }
       if (!auditResult.persisted) {
-        if (typeof data.version === "number") confirmServerState(data.version, data.content);
         setSaveState("audit-error");
-        if (typeof data.version === "number") setLastSavedAt(Date.now());
-        return;
+        if (typeof data.version !== "number") return;
+        setLastSavedAt(Date.now());
+        auditRetryOwed = true;
       }
       if (auditFailed) reconcileStatus = 200;
     }
