@@ -172,8 +172,14 @@ export function planServerEpochReconnect(args: {
   pendingContent: string | null;
   lastConfirmedContent: string | null;
   snapshotContent: string;
+  unansweredSaves?: readonly string[];
 }): { kind: "rebaseline" } | { kind: "flush"; content: string } | { kind: "conflict" } {
   if (args.pendingContent === null) return { kind: "rebaseline" };
+  // A save whose reply was lost landed before the restart: the buffer already
+  // descends from the snapshot, so there is nothing to merge.
+  if (args.unansweredSaves?.includes(args.snapshotContent)) {
+    return { kind: "flush", content: args.pendingContent };
+  }
   if (args.lastConfirmedContent === null) return { kind: "conflict" };
   const merged = merge3(
     args.pendingContent,
@@ -390,7 +396,11 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   const contentOnTheWire = useRef<string | null>(null);
   // Saves that got no answer but may still have landed. The next PUT names them so
   // the server merges from the newest that did, whatever else has changed since.
-  const unansweredSaveIds = useRef<string[]>([]);
+  const unansweredSaves = useRef<Array<{ id: string; content: string }>>([]);
+  // The newest push adoptRemote could not apply because a save was on the wire.
+  // A save that then settles with nothing typed since leaves the editor on an
+  // older version than the one this push already delivered.
+  const droppedPush = useRef<{ content: string; version: number } | null>(null);
 
   // Presence: a throttled caret push so agent writes can steer clear of where the
   // human is editing. Advisory only — the server-side merge is the real guarantee.
@@ -459,6 +469,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     // second remote write could interleave. User wins either way; the 'conflict'
     // status is the visible signal.
     if (pendingContent.current !== null) {
+      if (flushRunning.current) droppedPush.current = { content, version };
       setSaveState("conflict");
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
@@ -487,11 +498,9 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       return { content, version, path, serverEpoch };
     };
 
-    const retryDecisionBootstrap = async (
-      path: string,
-      serverEpoch: string,
-    ): Promise<boolean> => {
+    const retryDecisionBootstrap = async (path: string): Promise<boolean> => {
       if (!decisionBootstrapRetryNeeded.current) return true;
+      const serverEpoch = currentServerEpoch.current;
       const [historyRead, recoveryRead] = await Promise.all([
         fetchPersistedDecisionEventIds(),
         fetchDecisionRecoveryEvents(),
@@ -557,6 +566,10 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
               retryConnection("conflict");
               return;
             }
+            // Awaited while still offline, before anything below reads the buffer: a
+            // save made meanwhile is held, and the plan sees it instead of replacing it.
+            if (!(await retryDecisionBootstrap(path))) return;
+            if (!mounted.current || closed) return;
             if (queuedMessage && queuedMessage.serverEpoch !== serverEpoch) {
               retryConnection("conflict");
               return;
@@ -588,6 +601,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
                 pendingContent: pendingContent.current,
                 lastConfirmedContent: lastConfirmedContent.current,
                 snapshotContent: reconnectContent,
+                unansweredSaves: unansweredSaves.current.map((save) => save.content),
               });
               if (epochPlan.kind === "conflict") {
                 retryConnection("conflict");
@@ -596,7 +610,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
               currentServerEpoch.current = serverEpoch;
               currentVersion.current = reconnectVersion;
               lastConfirmedContent.current = reconnectContent;
-              if (!(await retryDecisionBootstrap(path, serverEpoch))) return;
+              droppedPush.current = null; // from the previous server lifetime
               if (epochPlan.kind === "flush") {
                 pendingContent.current = epochPlan.content;
                 onRemoteUpdate.current(epochPlan.content, reconnectVersion);
@@ -611,7 +625,6 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
               }
               return;
             }
-            if (!(await retryDecisionBootstrap(path, serverEpoch))) return;
             if (pendingContent.current !== null || hasCommittedDecisionRetry()) {
               // Edits or audit events made while offline: persist them only after the
               // reconnecting server proves it still owns the same document.
@@ -844,7 +857,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     contentOnTheWire.current = sent;
     const saveId = globalThis.crypto.randomUUID();
     const noteUnanswered = () => {
-      unansweredSaveIds.current = [...unansweredSaveIds.current, saveId].slice(-KEEP_VERSIONS);
+      unansweredSaves.current = [...unansweredSaves.current, { id: saveId, content: sent }].slice(-KEEP_VERSIONS);
     };
     let res: Response;
     let responseText: string;
@@ -860,7 +873,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
           author: author.current,
           decisionEvents: sentDecisionEvents,
           saveId,
-          unansweredSaveIds: unansweredSaveIds.current,
+          unansweredSaveIds: unansweredSaves.current.map((save) => save.id),
         }),
       });
       responseText = await res.text(); // a dropped connection can fail here too
@@ -972,9 +985,17 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       serverContent: data.content,
       sent,
       buffer: pendingContent.current,
+      conflict: data.conflict,
+      base: lastConfirmedContent.current,
     });
     if (d.kind === "failed") noteUnanswered();
-    else if (d.kind !== "conflict") unansweredSaveIds.current = [];
+    else if (d.kind !== "conflict") unansweredSaves.current = [];
+    // This reply can arrive after a newer push or reconnect snapshot was adopted.
+    const confirmServerState = (version: number, content: string) => {
+      if (version < currentVersion.current) return;
+      currentVersion.current = version;
+      lastConfirmedContent.current = content;
+    };
     switch (d.kind) {
       case "failed":
         setSaveState(connectedRef.current ? "unsaved" : "offline"); // keep pending; retry on next edit/reconnect
@@ -982,31 +1003,38 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       case "conflict":
         setSaveState("conflict"); // buffer kept; currentVersion deliberately unchanged
         return;
-      case "saved":
+      case "stale":
+        confirmServerState(d.version, data.content ?? sent);
+        onRemoteUpdate.current(d.pending, d.version);
+        pendingContent.current = d.pending;
+        reflush();
+        return;
+      case "saved": {
         confirmDecisionEvents();
-        currentVersion.current = d.version;
-        lastConfirmedContent.current = data.content ?? sent;
+        confirmServerState(d.version, data.content ?? sent);
         if (d.adopt !== undefined) onRemoteUpdate.current(d.adopt, d.version);
         pendingContent.current = null; // confirmed written
         setSaveState(settledSaveState());
         setLastSavedAt(Date.now());
+        const dropped = droppedPush.current;
+        droppedPush.current = null;
+        if (dropped) adoptRemote(dropped.content, dropped.version);
         return;
+      }
       case "reflush":
         confirmDecisionEvents();
-        currentVersion.current = d.version;
-        lastConfirmedContent.current = data.content ?? sent;
+        confirmServerState(d.version, data.content ?? sent);
         reflush(); // server stored exactly what we sent; persist the newer keystrokes
         return;
       case "rebased":
         confirmDecisionEvents();
-        currentVersion.current = d.version;
-        lastConfirmedContent.current = data.content ?? sent;
+        confirmServerState(d.version, data.content ?? sent);
         onRemoteUpdate.current(d.pending, d.version); // editor now shows keystrokes + the merged-in card
         pendingContent.current = d.pending;
         reflush(); // persist the rebased buffer
         return;
     }
-  }, []);
+  }, [adoptRemote]);
 
   const flush = useCallback(async () => {
     if (flushRunning.current) {

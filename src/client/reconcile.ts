@@ -20,6 +20,9 @@ export type SaveDecision =
   /** A genuine conflict (server 409, or a same-line clash with keystrokes typed mid-save).
    *  Keep the buffer, do NOT advance the version — the next save re-merges server-side. */
   | { kind: "conflict" }
+  /** The server no longer holds the version we sent against, so it cannot merge and
+   *  never will on that base. The editor merged the buffer onto the server's snapshot. */
+  | { kind: "stale"; version: number; pending: string }
   /** Buffer matches what the server now holds. Clear pending; adopt server content if it merged. */
   | { kind: "saved"; version: number; adopt?: string }
   /** Server stored exactly what we sent but the user kept typing — persist the newer buffer. */
@@ -34,6 +37,8 @@ export function reconcileSave(args: {
   serverContent: string | undefined; // data.content — the bytes the server now holds
   sent: string; // the content this PUT carried
   buffer: string | null; // pendingContent at response time (null once a save is confirmed)
+  conflict?: unknown; // data.conflict as received
+  base?: string | null; // the last server state this buffer is known to descend from
 }): SaveDecision {
   const { status, serverContent, sent, buffer } = args;
   // Only 200 (saved/merged) and 409 (conflict) are protocol responses. Treat anything
@@ -47,7 +52,12 @@ export function reconcileSave(args: {
   // no longer 409s a human save, the server keeps both sides, #88). The server
   // wrote nothing; our buffer still descends from the version we sent against, so DON'T
   // advance — let the next save re-merge against disk rather than fast-path over it.
-  if (status === 409) return { kind: "conflict" };
+  if (status === 409) {
+    if (args.conflict === "stale" && serverContent !== undefined && buffer !== null && args.base != null) {
+      return { kind: "stale", version, pending: mergeKeepingBoth(buffer, args.base, serverContent) };
+    }
+    return { kind: "conflict" };
+  }
 
   const merged = serverContent !== undefined && serverContent !== sent;
 
