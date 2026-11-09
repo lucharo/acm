@@ -35,12 +35,14 @@ ACM has no separate lint command.
 | `src/editor/` | CodeMirror 6: the CriticMarkup parser, decorations, live Markdown preview |
 | `src/components/`, `src/App.tsx` | The card margin, header, table of contents and the integration around them |
 | `src/client/useDocSync.ts` | WebSocket pushes and debounced, version-checked saves |
-| `skills/acm-review/SKILL.md` | The agent skill that setup installs |
+| `skills/acm-review/SKILL.md` | The agent skill that the installer and setup install |
+| `install.sh` | The `curl \| sh` installer for released binaries |
 | `scripts/` | Setup, the binary build, embed generators, the check runner, docs captures |
 
 ## Shipping
 
-- There is no published package. Users run `bun run setup` from a clone; updating is `git pull` and setup again ([Getting started](getting-started.md#update)).
+- Users install with `install.sh`, which downloads a GitHub release; updating is running it again ([Getting started](getting-started.md#update)). Contributors run `bun run setup` from a clone.
+- To release, bump `version` in `package.json`, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`. `.github/workflows/release.yml` builds and smoke-tests the macOS arm64, macOS x64 and Linux x64 binaries on their own runners, then publishes them with the skill archive and `SHA256SUMS`. A tag with a suffix (`v0.2.0-rc.1`) publishes a prerelease, which the installer ignores unless `ACM_VERSION` names it.
 - CI (`.github/workflows/ci.yml`) runs `bun run check` on Node 22.20 and the pinned Bun for every pull request and push to `main`, plus a strict docs build.
 - Bun is pinned exactly in `package.json` (`packageManager`), and setup refuses any other version.
 

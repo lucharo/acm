@@ -214,7 +214,7 @@ Converts a Google Doc or Word file into a CriticMarkup document: `acm import <Go
 | `ACM_DOC` | review commands, `bun run start` | The document, when `--doc` is not given (`bun run start` refuses to start without it) |
 | `ACM_AUTHOR` | review commands | The default `--author` |
 | `ACM_PORT` | `bun run start` | Port for the source-mode server |
-| `ACM_INSTALL_DIR` | `bun run setup` | Where to install the `acm` binary |
+| `ACM_INSTALL_DIR` | `install.sh`, `bun run setup` | Where to install the `acm` binary |
 | `ACM_NO_OPEN` | `acm edit`, `bun run dev` | `1` skips opening a browser tab |
 | `ACM_ALLOWED_HOSTS` | `acm edit`, `bun run start` | Extra host names to accept, comma or space separated; set it empty to turn off the Tailscale default |
 | `ACM_ASSET_ROOT` | `acm edit`, `bun run start` | The folder images may load from |

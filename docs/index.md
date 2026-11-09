@@ -11,9 +11,7 @@
 ## Try it
 
 ```bash
-git clone https://github.com/lucharo/acm.git
-cd acm
-bun run setup
+curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh
 cd ~/writing        # any folder: acm works from anywhere
 acm edit notes.md
 ```

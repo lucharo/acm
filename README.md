@@ -13,17 +13,15 @@
 
 ## Try it
 
-Needs [Bun](https://bun.sh) 1.3.14 exactly and Node 22.20 or newer.
+On macOS or Linux x64, with no Bun or Node needed:
 
 ```bash
-git clone https://github.com/lucharo/acm.git
-cd acm
-bun run setup
+curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh
 cd ~/writing        # any folder: acm works from anywhere
 acm edit notes.md
 ```
 
-Setup installs the `acm` binary on your `PATH` and the `acm-review` skill for Claude Code and Codex. Then ask your agent to review `notes.md`.
+The installer puts `acm` in `~/.local/bin` and the `acm-review` skill where Claude Code and Codex find it. Then ask your agent to review `notes.md`.
 
 ## Docs
 

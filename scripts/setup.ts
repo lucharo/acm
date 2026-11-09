@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { directoryDigest } from "./skill-digest";
 
 const ROOT = resolve(import.meta.dir, "..");
 const HOME = homedir();
@@ -134,35 +135,6 @@ function managedMarker(target: string): string {
 
 function fileDigest(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
-function directoryDigest(directory: string): string {
-  const hash = createHash("sha256");
-
-  function visit(current: string, relative: string) {
-    const entries = readdirSync(current, { withFileTypes: true }).sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-    );
-    for (const entry of entries) {
-      if (relative === "" && entry.name === ".acm-managed") continue;
-      const path = join(current, entry.name);
-      const child = relative ? join(relative, entry.name) : entry.name;
-      hash.update(`${child}\0`);
-      if (entry.isDirectory()) {
-        hash.update("directory\0");
-        visit(path, child);
-      } else if (entry.isSymbolicLink()) {
-        hash.update(`symlink\0${readlinkSync(path)}\0`);
-      } else {
-        hash.update("file\0");
-        hash.update(readFileSync(path));
-        hash.update("\0");
-      }
-    }
-  }
-
-  visit(directory, "");
-  return hash.digest("hex");
 }
 
 function directoryContainsCanonicalFiles(installedDir: string, bundledDir: string): boolean {

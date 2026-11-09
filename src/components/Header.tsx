@@ -363,8 +363,7 @@ export default function Header(props: HeaderProps) {
                   Agent-review skill
                 </div>
                 <p className="text-[11px] leading-snug text-[var(--muted)]">
-                  Run <code className="rounded bg-[var(--line)] px-1 text-[var(--ink)]">bun run setup</code> from
-                  the ACM repository to install or refresh it through the standard skills manager.
+                  Run the ACM install command again to install or refresh it.
                 </p>
               </div>
               </>

@@ -10,7 +10,7 @@ Any agent that can read and write a text file can review in ACM. This page cover
 
 ## The acm-review skill
 
-`bun run setup` installs the `acm-review` skill for Claude Code and Codex. It teaches the agent:
+The [installer](getting-started.md#install) adds the `acm-review` skill for Claude Code and Codex. It teaches the agent:
 
 - which markup to write where: inline suggestions in free prose, SUGGEST cards on text that already has a comment on it;
 - to sign every comment with `@name:` so you can tell voices apart;

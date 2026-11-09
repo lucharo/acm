@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            asset: acm-darwin-arm64
+          - runner: macos-15-intel
+            asset: acm-darwin-x64
+          - runner: ubuntu-24.04
+            asset: acm-linux-x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run build:bin
+      - run: bun run test:bin
+      - run: mv dist/acm "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Package the skill and checksums
+        run: |
+          # The marker lets `bun run setup` replace an untouched installed skill.
+          digest=$(bun run scripts/skill-digest.ts skills/acm-review)
+          echo "$digest" > skills/acm-review/.acm-managed
+          tar -czf release/acm-review-skill.tar.gz -C skills acm-review
+          cd release
+          sha256sum acm-darwin-arm64 acm-darwin-x64 acm-linux-x64 acm-review-skill.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # A tag with a suffix (v1.2.0-rc.1) must never become the release the installer picks.
+          flags=()
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --generate-notes "${flags[@]}" release/*

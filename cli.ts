@@ -65,9 +65,9 @@ if (invocation.kind === "error") {
   process.exit(2);
 }
 if (invocation.kind === "legacy-skill") {
-  console.error("`acm skill` has been replaced by the standard skills manager.");
-  console.error("From the ACM repository, run `bun run setup` to install or refresh acm-review.");
-  console.error("That setup delegates agent paths and symlinks to `npx skills add`.");
+  console.error("`acm skill` has been removed.");
+  console.error("Run the ACM install command again to install or refresh acm-review:");
+  console.error("  curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh");
   process.exit(2);
 }
 if (invocation.kind === "agent") {

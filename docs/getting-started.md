@@ -6,37 +6,55 @@ By the end of this page you have `acm` on your `PATH`, a document open in the ed
 
 | You need | Why |
 | --- | --- |
-| [Bun](https://bun.sh) 1.3.14 exactly | Setup checks the version pinned in `package.json` and stops on any other. With a different Bun, or none, run `npx --yes bun@1.3.14 run setup` instead. The installed `acm` needs no Bun to run. |
-| Node 22.20 or newer | Setup installs the agent skill with `npx skills add`, which needs it. |
-| A user-local bin directory on `PATH` | Setup installs the binary there, normally `~/.local/bin`. |
+| macOS (Apple silicon or Intel) or Linux x64 with glibc | The platforms ACM publishes a binary for. |
+| `curl` and `tar` | The installer uses them. You do not need Bun or Node. |
 | Claude Code, Codex or another agent | Optional. Without one you can still edit and review by hand. |
 
 ## Install
 
-From a clone of the repository:
+```bash
+curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh
+```
+
+The installer does three things, in order:
+
+1. Downloads the latest release for your platform and verifies its SHA-256 checksum.
+2. Installs the standalone `acm` executable, with the editor embedded, into `~/.local/bin`.
+3. Installs the `acm-review` skill for Codex and Claude Code (`~/.agents/skills/` and `~/.claude/skills/`).
+
+It ends with:
+
+```text
+ACM installed: /Users/you/.local/bin/acm
+The acm-review skill is installed for Codex and Claude Code.
+
+Open a document:
+  acm edit notes.md
+```
+
+If `~/.local/bin` is not on your `PATH`, it prints the line to add to your shell profile.
+
+Set these before `sh` to change what it does:
+
+| Variable | Effect |
+| --- | --- |
+| `ACM_INSTALL_DIR` | Install `acm` somewhere else, for example `"$HOME/bin"` |
+| `ACM_VERSION` | Install a specific release, for example `v0.1.0` |
+| `ACM_FORCE=1` | Replace an existing `acm` that ACM did not install |
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | ACM_INSTALL_DIR="$HOME/bin" sh
+```
+
+### From source
+
+To build ACM yourself or work on it, you need [Bun](https://bun.sh) 1.3.14 exactly (setup checks the version pinned in `package.json`; with any other, or none, run `npx --yes bun@1.3.14 run setup` instead) and Node 22.20 or newer for `npx skills add`. From a clone:
 
 ```bash
 bun run setup
 ```
 
-Setup does four things, in order:
-
-1. Checks the Bun and Node versions and installs the locked dependencies.
-2. Builds one standalone `acm` executable with the editor embedded.
-3. Installs it into a bin directory already on your `PATH` (normally `~/.local/bin`).
-4. Installs the `acm-review` skill for Codex and Claude Code (`~/.agents/skills/` and `~/.claude/skills/`) through the standard `skills` CLI, then checks that `acm` and the skill are both found.
-
-It ends with:
-
-```text
-✓ ACM setup complete: /Users/you/.local/bin/acm
-```
-
-To install into a different directory, set `ACM_INSTALL_DIR`:
-
-```bash
-ACM_INSTALL_DIR="$HOME/bin" bun run setup
-```
+Setup installs the locked dependencies, builds the binary, and installs it and the skill as above, into a bin directory already on your `PATH`. `ACM_INSTALL_DIR` works here too.
 
 ## Open a document
 
@@ -58,7 +76,7 @@ Stop the editor with `Ctrl+C` in its terminal once the header shows **Saved**; A
 
 ## Run your first agent review
 
-Setup installed the `acm-review` skill, so your agent already knows the markup and the `acm` commands. Leave the editor running, start your agent in a second terminal (any folder) and ask it in plain words:
+The installer added the `acm-review` skill, so your agent already knows the markup and the `acm` commands. Leave the editor running, start your agent in a second terminal (any folder) and ask it in plain words:
 
 ```text
 Review notes.md in ACM. Comment on anything unclear and suggest tighter wording.
@@ -66,7 +84,7 @@ Review notes.md in ACM. Comment on anything unclear and suggest tighter wording.
 
 The agent writes comments and suggestions into the file, through the running editor so nothing you are typing gets overwritten. They appear as cards beside the prose within about a second.
 
-- An agent session started before setup needs a restart to see the skill.
+- An agent session started before the install needs a restart to see the skill.
 - Claude Code asks before each `acm` command it runs. Choose "don't ask again" at the first prompt, or add `Bash(acm:*)` to `permissions.allow` in its settings.
 
 ![A suggestion group card with its Apply all popover open](assets/suggestion-group.webp)
@@ -93,16 +111,17 @@ Changes saved to the document by another editor show up in ACM within about a se
 
 ## Update
 
-Pull the latest code and run setup again:
+Run the install command again:
 
 ```bash
-git pull
-bun run setup
+curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | sh
 ```
 
-Setup replaces the installed binary and the skill in place. An editor that is already running keeps the old version until you stop it and run `acm edit` again.
+It replaces the installed binary and the skill in place. An editor that is already running keeps the old version until you stop it and run `acm edit` again.
 
-If you edited the installed skill by hand, setup stops before changing anything. `bun run setup --force` first copies your edited skill to a timestamped folder under `~/.agents/skill-backups/`, then replaces it.
+When the skill has changed, the previous copy moves to a timestamped folder under `~/.agents/skill-backups/`, so any edits you made by hand are kept.
+
+From a clone, run `git pull` and `bun run setup` instead. If you edited the installed skill, setup stops before changing anything; `bun run setup --force` backs it up the same way, then replaces it.
 
 ## Import a Google Doc
 

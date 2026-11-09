@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { directoryDigest } from "./skill-digest";
 
 const ROOT = resolve(import.meta.dir, "..");
 
@@ -62,7 +63,7 @@ test("bun run setup installs a working standalone CLI and managed skill", () => 
 
     const legacySkill = Bun.spawnSync([binary, "skill"], { cwd: home, env: { ...process.env, HOME: home } });
     expect(legacySkill.exitCode).toBe(2);
-    expect(legacySkill.stderr.toString()).toContain("npx skills add");
+    expect(legacySkill.stderr.toString()).toContain("install.sh | sh");
     expect(existsSync(join(home, "skill"))).toBe(false);
 
     const customAuxiliary = join(home, ".agents", "skills", "acm-review", "local-notes.md");
@@ -93,6 +94,38 @@ test("bun run setup installs a working standalone CLI and managed skill", () => 
     rmSync(home, { recursive: true, force: true });
   }
 }, 400_000);
+
+test("setup replaces an untouched skill that came from a release", () => {
+  const home = mkdtempSync(join(tmpdir(), "acm-setup-release-skill-"));
+  const binDir = join(home, ".local", "bin");
+  const skillDir = join(home, ".agents", "skills", "acm-review");
+
+  try {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "name: acm-review\nolder release\n");
+    writeFileSync(join(skillDir, ".acm-managed"), `${directoryDigest(skillDir)}\n`);
+
+    const setup = Bun.spawnSync(["bun", "run", "setup"], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        HOME: home,
+        ACM_INSTALL_DIR: binDir,
+        CLAUDE_CONFIG_DIR: join(home, ".claude"),
+        XDG_CONFIG_HOME: join(home, ".config"),
+        XDG_DATA_HOME: join(home, ".local", "share"),
+        PATH: `${binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
+      },
+      timeout: 180_000,
+    });
+
+    expect(setup.exitCode, `${setup.stdout}\n${setup.stderr}`).toBe(0);
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).not.toContain("older release");
+    expect(existsSync(join(home, ".agents", "skill-backups"))).toBe(false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}, 200_000);
 
 test("setup refuses an unrelated acm executable before installing or building", () => {
   const home = mkdtempSync(join(tmpdir(), "acm-setup-conflict-"));
