@@ -47,7 +47,7 @@ function dictionaryRaw(): Plugin {
 // the document never triggers a full-page reload — and a root-level ACM_DOC (e.g.
 // README.md) can't accidentally ignore the whole project and break HMR. seed/** is
 // also ignored (the default doc lives there, and it's a dedicated data dir).
-const docFile = resolve(process.cwd(), process.env.ACM_DOC ?? "seed/sample-essay.md");
+const docFile = resolve(process.cwd(), process.env.ACM_DOC ?? "seed/docs-demo.md");
 // API/WS server port — the Bun server dev.ts spawns (both read ACM_PORT). Production
 // defaults to 12000; dev.ts assigns a free API port well above the dev range.
 const apiPort = Number(process.env.ACM_PORT ?? 12000);

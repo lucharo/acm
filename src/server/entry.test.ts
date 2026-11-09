@@ -45,7 +45,7 @@ describe("server.ts direct entry — no silent seed fallback (#33)", () => {
     expect(run.timedOut).toBe(false);
     expect(run.code).toBe(2);
     expect(run.stderr).toContain("no document");
-    expect(run.stdout).not.toContain("sample");
+    expect(run.stdout).not.toContain("seed/");
   });
 
   test("an explicit ACM_DOC starts and prints the resolved absolute path", async () => {

@@ -37,8 +37,8 @@ function pickDevPort(): number {
  * subsequent runs keep your working copy. An explicit ACM_DOC always wins.
  */
 function defaultDevDoc(): string {
-  const seed = "seed/sample-essay.md";
-  const work = ".acm-data/sample-essay.md";
+  const seed = "seed/docs-demo.md";
+  const work = ".acm-data/docs-demo.md";
   mkdirSync(".acm-data", { recursive: true });
   if (!existsSync(work)) copyFileSync(seed, work);
   return work;

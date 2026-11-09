@@ -2,7 +2,7 @@
 #   :12000        = PRODUCTION — the instance actually editing your doc (`just prod`).
 #   12001–12499   = DEVELOPMENT — `just dev` picks a RANDOM one each run, so a
 #                   throwaway dev server never collides with prod on :12000.
-# `dev` takes an optional doc path (default: a working copy of the Sample seed);
+# `dev` takes an optional doc path (default: a working copy of the demo seed);
 # `prod` REQUIRES one, so the real editor never silently serves the seed stub (#33):
 #   just dev ~/notes.md      just prod ~/notes.md
 
