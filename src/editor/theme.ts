@@ -4,10 +4,9 @@
 // leaves room for the comment sidebar. All CriticMarkup colours come from the
 // CSS variables already defined in src/index.css (single palette, no drift).
 //
-// No line numbers, no active-line gutter, line wrapping on. Hidden markdown
-// markers (handled by markdownPreview.ts) and hidden comment markup
-// (criticMarkupView.ts) leave no visual gap — these `cm-crit-*` rules only style
-// what stays visible.
+// Line wrapping on. Hidden markdown markers (handled by markdownPreview.ts) and
+// hidden comment markup (criticMarkupView.ts) leave no visual gap — these
+// `cm-crit-*` rules only style what stays visible.
 
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
@@ -41,23 +40,6 @@ export const acmTheme: Extension = EditorView.theme(
     },
     ".cm-line": {
       padding: "0",
-    },
-    // Line-number gutter (optional, toggled in settings) — subtle, muted, tabular;
-    // NOT the editor's serif. Transparent, no border, so it reads as a quiet margin.
-    ".cm-gutters": {
-      backgroundColor: "transparent",
-      border: "none",
-      color: "var(--faint)",
-    },
-    ".cm-lineNumbers .cm-gutterElement": {
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      fontSize: "0.7em",
-      padding: "0 0.6em 0 1em",
-      color: "var(--faint)",
-    },
-    ".cm-activeLineGutter": {
-      backgroundColor: "transparent",
-      color: "var(--muted)",
     },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--ink)",
@@ -113,8 +95,8 @@ export const acmTheme: Extension = EditorView.theme(
     },
     // Block widgets carry their vertical spacing as PADDING, never margin:
     // CodeMirror measures a block's height with getBoundingClientRect, which
-    // leaves margins out, so a margin desyncs the height map and the line-number
-    // gutter drifts by it under every block (#70).
+    // leaves margins out, so a margin desyncs the height map and everything
+    // placed from it drifts under every block (#70).
     ".cm-math-widget .katex-display": {
       margin: "0",
       padding: "0.55em 0",
@@ -129,6 +111,7 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-md-quote-line": {
       borderLeft: "3px solid var(--line-strong)",
       paddingLeft: "1rem",
+      "--cm-ln-inset": "calc(1rem + 3px)", // keeps line numbers in their column
     },
     // Rendered list bullet (replaces a `-`/`*`/`+` marker). A touch of right space so
     // "• item" reads as a list, slightly muted so the prose stays the focus.

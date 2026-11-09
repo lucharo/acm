@@ -12,7 +12,6 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { EditorView, placeholder } from "@codemirror/view";
-import { lineNumbers } from "@codemirror/view";
 import { Annotation, Compartment, EditorState, StateEffect, Transaction } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
 import { history, invertedEffects, isolateHistory } from "@codemirror/commands";
@@ -30,6 +29,7 @@ import { documentPreviewExtension } from "./previewMode";
 import { imageInsert } from "./imageInsert";
 import type { ToastFn } from "./imageInsert";
 import { footnotes } from "./footnotes";
+import { documentLineNumbers } from "./lineNumbers";
 import { bionicReading } from "./bionicView";
 import { pageBreaks } from "./pageBreaks";
 import { spellcheck } from "./spellcheck";
@@ -162,7 +162,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
   // Compartment lets us reconfigure the callbacks facet in place when callbacks
   // change identity, so widget clicks always invoke the freshest handlers.
   const callbacksCompartment = useRef(new Compartment());
-  // Compartment for the optional line-number gutter (toggled from settings).
+  // Compartment for the optional line numbers (toggled from settings).
   const lineNumbersCompartment = useRef(new Compartment());
   // Compartment for Page view: the page's edges, page-break markers and the
   // page tally (CONTEXT.md "Page view").
@@ -240,7 +240,7 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
           critCallbacksFacet.of(optsRef.current.callbacks),
         ),
         lineNumbersCompartment.current.of(
-          optsRef.current.lineNumbers ? lineNumbers() : [],
+          optsRef.current.lineNumbers ? documentLineNumbers : [],
         ),
         pageCompartment.current.of(optsRef.current.page ? [pageTheme, pageBreaks] : []),
         bionicCompartment.current.of(optsRef.current.bionic ? bionicReading : []),
@@ -274,13 +274,13 @@ export function useCodeMirror(opts: UseCodeMirrorOptions): UseCodeMirrorResult {
     });
   }, [opts.callbacks]);
 
-  // Toggle the line-number gutter in place when the setting changes.
+  // Toggle the line numbers in place when the setting changes.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: lineNumbersCompartment.current.reconfigure(
-        opts.lineNumbers ? lineNumbers() : [],
+        opts.lineNumbers ? documentLineNumbers : [],
       ),
     });
   }, [opts.lineNumbers]);
