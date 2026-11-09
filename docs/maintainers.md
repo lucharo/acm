@@ -17,6 +17,8 @@ How ACM is built, tested and shipped, and the rules a change must not break. Age
 
 ACM has no separate lint command.
 
+The history tests run real git. A document's history is a bare git repository at `.acm/history.git` beside it (`src/server/history.ts`): recording one version runs `git add`, `status`, `commit` and `rev-parse`, and a restore reads the version back with `git show`, so a single test spawns about a dozen git processes.
+
 ## Rules a change must not break
 
 - **The plain-text buffer is the file.** The editor's CodeMirror buffer mirrors the `.md` byte for byte; there is no second document model. Anything new must be expressible as CriticMarkup text ([ADR-0004](adr/0004-the-file-is-the-api.md)).
