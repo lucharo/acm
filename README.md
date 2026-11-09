@@ -7,6 +7,7 @@
 - **Agents comment and suggest edits; you accept, reject or resolve them** in a rendered page with cards beside the prose.
 - **The file is the API.** Everything lives in one [CriticMarkup](https://github.com/CriticMarkup/CriticMarkup-toolkit) `.md` file on disk. Claude Code, Codex or a shell script can read and write it with no integration, and the page updates within about a second.
 - **Local only.** No account, no cloud, no database.
+- **Works on your phone.** Open the same document on another device over [Tailscale](docs/getting-started.md#open-it-from-another-device); on a phone, the cards move into a bottom sheet.
 
 ![The ACM editor: a short essay with inline suggestions, a comment thread between Sam and claude, and suggestion cards in the right margin](docs/assets/editor-desktop.webp)
 
