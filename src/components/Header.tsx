@@ -2,7 +2,7 @@
 // Purely presentational — every action and all state arrive as props from the
 // Workspace; the only local state is whether the settings menu is open.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { CodeXml, Eye, FileText, ListTree, MessageSquare, PanelRight, Settings } from "lucide-react";
 import { MOD } from "../lib/platform";
@@ -10,6 +10,7 @@ import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
 import type { Font, Theme, SpellVariant, PrintStyle, ViewSettings } from "../lib/viewSettings";
 import { documentFileName } from "../lib/documentTitle";
+import { canOpenReviewSkill, openReviewSkill, reviewSkillExists } from "../client/reviewSkill";
 
 export interface HeaderProps {
   /** Absolute path of the served document, shown as its file name (#33). */
@@ -106,6 +107,20 @@ export default function Header(props: HeaderProps) {
   // settingsOpen is lifted to the Workspace (prop) so ⌘, can toggle it; only the
   // Display|Review|Spelling tab choice is local.
   const [settingsTab, setSettingsTab] = useState<"display" | "review" | "spelling">("display");
+  const [reviewSkillError, setReviewSkillError] = useState<string | null>(null);
+  const [hasReviewSkill, setHasReviewSkill] = useState(false);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    let current = true;
+    void reviewSkillExists()
+      .then((exists) => {
+        if (current) setHasReviewSkill(exists);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [settingsOpen]);
 
   return (
     <header className="relative flex min-h-14 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--line)] bg-[var(--panel)] px-3 py-1.5">
@@ -362,6 +377,35 @@ export default function Header(props: HeaderProps) {
                 <div className="mb-1 text-[10px] font-medium text-[var(--faint)]">
                   Agent-review skill
                 </div>
+                {canOpenReviewSkill() ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReviewSkillError(null);
+                      void openReviewSkill(!hasReviewSkill)
+                        .then(() => setHasReviewSkill(true))
+                        .catch((error: Error) => setReviewSkillError(error.message));
+                    }}
+                    title="Your acm-user-preferences skill, in a new tab. Agents load it alongside acm-review, and ACM updates leave it alone."
+                    className="mb-1 w-full rounded-md border border-[var(--line)] px-2 py-1 text-left text-[12px] text-[var(--ink)] hover:bg-[var(--line)]"
+                  >
+                    {hasReviewSkill ? "Edit your preferences" : "Create your preferences"}
+                  </button>
+                ) : (
+                  <p className="mb-1 text-[11px] leading-snug text-[var(--muted)]">
+                    Run <code>acm skill</code> on the computer running ACM to edit your preferences.
+                  </p>
+                )}
+                {!hasReviewSkill ? (
+                  <p className="mb-1 text-[11px] leading-snug text-[var(--muted)]">
+                    Or tell your agent how you like reviews done, or ask it to interview you.
+                  </p>
+                ) : null}
+                {reviewSkillError ? (
+                  <p role="alert" className="mb-1 text-[11px] leading-snug text-[var(--crit-del)]">
+                    {reviewSkillError}
+                  </p>
+                ) : null}
                 <p className="text-[11px] leading-snug text-[var(--muted)]">
                   Run the ACM install command again to install or refresh it.
                 </p>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -14,15 +14,21 @@ afterEach(() => {
 
 /** Run the CLI until it exits or prints `readyMarker`, whichever comes first. The cap
  *  only bounds a hang: a slow start on a loaded machine must not read as "stayed open". */
-async function runBriefly(args: string[], configHomeIsFile = false, readyMarker = "ACM ready") {
+async function runBriefly(
+  args: string[],
+  configHomeIsFile = false,
+  readyMarker = "ACM ready",
+  arrange: (home: string) => void = () => undefined,
+) {
   const cwd = mkdtempSync(join(tmpdir(), "acm-cli-contract-"));
   scratch.push(cwd);
+  arrange(cwd);
   const configHome = join(cwd, ".config");
   if (configHomeIsFile) writeFileSync(configHome, "blocked\n");
   const proc = Bun.spawn([process.execPath, cli, ...args], {
     cwd,
     // ACM_ALLOWED_HOSTS="" skips Tailscale discovery at startup.
-    env: { ...process.env, XDG_CONFIG_HOME: configHome, ACM_ALLOWED_HOSTS: "" },
+    env: { ...process.env, HOME: cwd, CLAUDE_CONFIG_DIR: "", XDG_CONFIG_HOME: configHome, ACM_ALLOWED_HOSTS: "" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -62,6 +68,26 @@ describe("explicit edit command", () => {
     expect(run.code).toBe(2);
     expect(run.stderr).toContain("acm edit");
     expect(existsSync(join(run.cwd, "untitled.md"))).toBe(false);
+  });
+
+  test("acm skill opens the user's preferences skill when it exists", async () => {
+    const result = await runBriefly(["skill", "--no-open", "--port", "0"], false, "ACM ready", (home) => {
+      const folder = join(home, ".agents", "skills", "acm-user-preferences");
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "SKILL.md"), "Never suggest em dashes.\n");
+    });
+
+    expect(result.stillRunning).toBe(true);
+    expect(result.stdout).toContain(join(".agents", "skills", "acm-user-preferences", "SKILL.md"));
+  });
+
+  test("acm skill says how to start when there is no skill yet, and starts nothing", async () => {
+    const result = await runBriefly(["skill", "--no-open", "--port", "0"]);
+
+    expect(result.stillRunning).toBe(false);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("No review preferences yet.");
+    expect(existsSync(join(result.cwd, ".agents"))).toBe(false);
   });
 
   test("a bare filename is rejected rather than treated as a compatibility alias", async () => {

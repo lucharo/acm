@@ -1,6 +1,8 @@
 export interface EditInvocation {
   kind: "edit";
   file?: string;
+  /** `acm skill`: open the user's review preferences. */
+  reviewSkill?: boolean;
   port?: number;
   /** Folder relative images may reach (default: the doc's git repo, else its folder). */
   assetRoot?: string;
@@ -14,7 +16,6 @@ export type Invocation =
   | { kind: "help" }
   | { kind: "agent"; verb: string; args: string[] }
   | { kind: "verb-help"; text: string }
-  | { kind: "legacy-skill" }
   | EditInvocation
   | { kind: "error"; message: string };
 
@@ -37,6 +38,7 @@ Usage:
   acm                         Explain ACM and list the main commands
   acm edit                    Open the New / Open / Recent Documents launcher
   acm edit <file.md>          Open the file, creating it if missing
+  acm skill                   Open your acm-user-preferences skill
 
 Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
 running ACM editor; snapshot before every write):
@@ -101,14 +103,13 @@ export function parseInvocation(
   const first = argv[0];
   if (first === undefined) return { kind: "overview" };
   if (first === "-h" || first === "--help") return { kind: "help" };
-  if (first === "skill") return { kind: "legacy-skill" };
   if (isAgentVerb(first)) {
     const args = argv.slice(1);
     const flags = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
     if (flags.includes("--help") || flags.includes("-h")) return { kind: "verb-help", text: verbHelp(first) };
     return { kind: "agent", verb: first, args };
   }
-  if (first !== "edit") {
+  if (first !== "edit" && first !== "skill") {
     if (!first.startsWith("-")) {
       return {
         kind: "error",
@@ -122,6 +123,7 @@ export function parseInvocation(
   }
 
   const edit: EditInvocation = { kind: "edit", open: true };
+  if (first === "skill") edit.reviewSkill = true;
   for (let index = 1; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "-h" || value === "--help") return { kind: "help" };
@@ -159,6 +161,9 @@ export function parseInvocation(
     }
     if (value.startsWith("-")) {
       return { kind: "error", message: `acm edit: unknown option ${value}` };
+    }
+    if (edit.reviewSkill) {
+      return { kind: "error", message: "acm skill: takes no document; it opens your review preferences" };
     }
     if (edit.file !== undefined) {
       return { kind: "error", message: "acm edit: pass one Markdown document at a time" };

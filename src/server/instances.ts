@@ -13,6 +13,9 @@ export interface InstanceEntry {
   doc: string; // absolute path of the served document
   pid: number;
   startedAt: string;
+  /** Opened by the editor for itself (review preferences), not by the user for a
+   *  document: never the implicit target of an `acm` verb. `--doc` still finds it. */
+  auxiliary?: boolean;
 }
 
 const FILE = "instances.json";
@@ -27,7 +30,7 @@ function isAlive(pid: number): boolean {
 }
 
 /** Record this process as the ACM serving `doc` on `port` (prunes dead entries). */
-export async function registerInstance(port: number, doc: string): Promise<void> {
+export async function registerInstance(port: number, doc: string, auxiliary = false): Promise<void> {
   await updateConfig<Record<string, InstanceEntry>>(FILE, {}, (current) => {
     const all = { ...current };
     for (const [key, e] of Object.entries(all)) {
@@ -38,6 +41,7 @@ export async function registerInstance(port: number, doc: string): Promise<void>
       doc: resolve(doc),
       pid: process.pid,
       startedAt: new Date().toISOString(),
+      ...(auxiliary ? { auxiliary } : {}),
     };
     return all;
   });

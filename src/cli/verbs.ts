@@ -116,7 +116,7 @@ async function docPathFrom(f: Flags): Promise<string> {
   // server, but it won't answer /api/doc. An UNREACHABLE candidate (probe timed
   // out — possibly alive but slow) makes resolution ambiguous the same way a
   // second live editor does: dropping it could pick the WRONG document.
-  const registered = await liveInstances();
+  const registered = (await liveInstances()).filter((entry) => !entry.auxiliary);
   const states = await Promise.all(registered.map(probeInstanceState));
   const unreachable = registered.filter((_, i) => states[i] === "unreachable");
   if (unreachable.length > 0) {
