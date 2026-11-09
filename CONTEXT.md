@@ -88,14 +88,17 @@ or authentication.
 _Avoid_: user, account.
 
 **Applicable**:
-The property of a SUGGEST card whose anchor still resolves in the document, so
-accepting it is a real action. A non-applicable card still shows its proposal
+The property of a SUGGEST card whose anchor still resolves in the document and
+whose replacement can be spliced in without breaking the markup, so accepting it
+is a real action. A non-applicable card still shows its proposal
 but offers no verdict.
 _Avoid_: valid, actionable.
 
 **Heal**:
 Mechanically repair markup that renders raw (broken or mis-nested constructs)
-so it renders as intended again.
+so it renders as intended again, and balanced markup whose review meaning is
+broken (a comment typed inside an anchor's span, a comment that lost its body)
+so its thread anchors and its SUGGEST card applies again.
 _Avoid_: fix (reserved for spelling), repair.
 
 **Prose**:
