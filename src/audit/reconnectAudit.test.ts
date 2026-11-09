@@ -49,12 +49,17 @@ afterEach(async () => {
   await act(async () => renderer?.unmount());
   globals.IS_REACT_ACT_ENVIRONMENT = false;
   renderer = undefined;
-  if (srv) {
-    srv.stop();
-    srv.server.stop(true);
-  }
-  srv = undefined;
+  killServer();
 });
+
+/** Drop every connection, as a dying process does. Force first: on Bun 1.3.14 a
+ * forced stop after AcmServer.stop's graceful one does nothing, and the old server
+ * keeps answering its open sockets. */
+function killServer(): void {
+  srv?.server.stop(true);
+  srv?.stop();
+  srv = undefined;
+}
 
 async function until(what: string, ready: () => boolean | Promise<boolean>, ms = 4000): Promise<void> {
   const deadline = Date.now() + ms;
@@ -180,11 +185,7 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
     });
     expect(res.status).toBe(200);
   };
-  const stopServer = () => {
-    srv?.stop();
-    srv?.server.stop(true);
-    srv = undefined;
-  };
+  const stopServer = killServer;
   const startAgain = () => {
     srv = startServer({ docPath, port, staticDir: "./dist" });
   };
