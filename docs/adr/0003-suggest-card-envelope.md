@@ -20,3 +20,6 @@ envelope is invisible to the human reviewer.
   highlighted span with a comment, not broken markup.
 - The document is the only channel — a SUGGEST card needs no server, no API,
   and no ACM instance to be authored.
+- The envelope's separator is exactly one space after `SUGGEST:` (or
+  `SUGGEST[g:id]:`); everything after it, leading whitespace included, is the
+  replacement, so Apply swaps the span for it byte for byte.
