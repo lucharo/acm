@@ -17,6 +17,7 @@ import { canQuerySelectionProvenance, useDocSync } from "./client/useDocSync";
 import type { SaveState } from "./client/useDocSync";
 import { fetchAcmSession } from "./client/session";
 import type { AcmSession } from "./client/session";
+import { runSuggestionDecision } from "./editor/suggestionApply";
 import { decisionAnnotations, useCodeMirror } from "./editor/useCodeMirror";
 import type { CritCallbacks } from "./editor/criticMarkupView";
 import CommentSidebar, { MOD } from "./components/CommentSidebar";
@@ -75,7 +76,6 @@ import {
   healOneNestedComment,
   nestedCommentIssues,
   validateMarkup,
-  suggestionThreadEdit,
   hardWrap,
   acceptedMarkdown,
   suggestionGroupEdits,
@@ -95,7 +95,6 @@ import {
 import {
   commentResolveDecision,
   inlineSuggestionDecision,
-  structuredSuggestionDecision,
   structuredSuggestionGroupDecisions,
   threadResolveDecision,
   type DecisionEvent,
@@ -747,28 +746,12 @@ function Workspace({
     ) => {
       const v = editor.viewRef.current;
       if (!v) return;
-      const content = v.state.doc.toString();
-      const effectiveDiscussion = mode === "accept" ? discussion : "keep-discussion";
-      const edit = suggestionThreadEdit(content, comment, mode, effectiveDiscussion);
-      if (edit) {
-        const event = structuredSuggestionDecision(
-          content,
-          comment,
-          mode,
-          mode === "accept"
-            ? effectiveDiscussion === "resolve-thread"
-              ? "apply-resolve"
-              : "apply"
-            : "reject",
-          settings.author,
-          "gui",
-        );
-        if (!event) return;
-        v.dispatch({ changes: edit, annotations: decisionAnnotations([event]) });
-        setActiveId(null);
-      }
+      const changed = runSuggestionDecision(v, comment, mode, discussion, settings.author, (message) =>
+        pushToast(message, "error"),
+      );
+      if (changed) setActiveId(null);
     },
-    [editor.viewRef, settings.author],
+    [editor.viewRef, pushToast, settings.author],
   );
 
   // Accept / reject EVERY member of a suggestion group (#21) as ONE transaction

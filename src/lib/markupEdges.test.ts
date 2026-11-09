@@ -55,7 +55,10 @@ describe("#116 code detection", () => {
     const doc = "A {==one==}{>>@a: note `<<}{>>@b: SUGGEST: two`<<}.";
 
     expect(applicableSuggestionIds(doc).size).toBe(1);
-    expect(resolveSuggestion(doc, "two", "accept")).toBe("A {==two`==}{>>@a: note `<<}.");
+    // Keeping @a's comment would pair its backtick with the replacement's (#9).
+    expect(() => resolveSuggestion(doc, "two", "accept")).toThrow(
+      '"two": its replacement contains CriticMarkup delimiters, so accepting it would break the markup',
+    );
   });
 });
 
