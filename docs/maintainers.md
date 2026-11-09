@@ -43,12 +43,12 @@ ACM has no separate lint command.
 
 - Users install with `install.sh`, which downloads a GitHub release; updating is running it again ([Getting started](getting-started.md#update)). Contributors run `bun run setup` from a clone.
 - To release, bump `version` in `package.json`, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`. `.github/workflows/release.yml` builds and smoke-tests the macOS arm64, macOS x64 and Linux x64 binaries on their own runners, then publishes them with the skill archive and `SHA256SUMS`. A tag with a suffix (`v0.2.0-rc.1`) publishes a prerelease, which the installer ignores unless `ACM_VERSION` names it.
-- CI (`.github/workflows/ci.yml`) runs `bun run check` on Node 22.20 and the pinned Bun for every pull request and push to `main`, plus a strict docs build.
+- CI (`.github/workflows/ci.yml`) runs `bun run check` on Node 22.20 and the pinned Bun for every pull request and push to `main`.
 - Bun is pinned exactly in `package.json` (`packageManager`), and setup refuses any other version.
 
 ## Docs
 
-- Pages live in `docs/`, built with [Zensical](https://zensical.org) through `uvx`; the config is `zensical.toml`. Nothing is deployed while the repository is private.
+- Pages live in `docs/`, built with [Zensical](https://zensical.org) through `uvx`; the config is `zensical.toml`. `.github/workflows/docs.yml` runs a strict build on every pull request that touches them and publishes [acm.luischav.es](https://acm.luischav.es) on every push to `main`, through GitHub Pages. The deploy step is skipped while the repository is private.
 - CLI output and screenshots are real. `bash scripts/docs-capture.sh` (macOS: it uses `sips`) regenerates them from `seed/docs-demo.md` on a throwaway server: CLI output into `docs/snippets/`, screenshots into `docs/assets/`. Re-run it after a change to the CLI's output or the editor's look.
 - Architecture decisions are point-in-time records in `docs/adr/`; add a new one rather than rewriting an old one.
 

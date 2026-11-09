@@ -1,39 +1,90 @@
-/* ACM docs: the editor's own palette. White page, ink header, the comment purple for links. */
+/* ACM docs: the editor's look. Values are copied from the palette in src/index.css:
+   a white title bar with a hairline, a grey desk, and the content as a white sheet on it. */
 [data-md-color-scheme="default"] {
-  --md-default-bg-color: #ffffff;
-  --md-typeset-a-color: #6e40c9;          /* 6.5:1 on white */
-  --md-accent-fg-color: #5a32a8;
-  --md-accent-fg-color--transparent: rgba(110, 64, 201, 0.1);
+  --acm-desk: #f1f2f4;
+  --acm-panel: #ffffff;
+  --acm-ink: #1a1a18;
+  --acm-muted: #6b6b66;
+  --acm-line: #e8e7e2;
+  --acm-comment: #6e40c9;         /* the editor's comment purple, one step darker: 6.5:1 on white */
+  --acm-highlight: #fff3b0;
+  --acm-sheet-shadow: 0 1px 3px rgba(26, 26, 24, 0.08);
   --md-code-bg-color: #f6f6f4;
 }
 [data-md-color-scheme="slate"] {
-  --md-typeset-a-color: #c4a7ff;          /* 7.9:1 on the slate background */
-  --md-accent-fg-color: #d8c6ff;
+  --acm-desk: #0f0f11;
+  --acm-panel: #17171a;
+  --acm-ink: #e9e9e4;
+  --acm-muted: #9a9a93;
+  --acm-line: #34343b;
+  --acm-comment: #c4a7ff;         /* 8.8:1 on the dark sheet */
+  --acm-highlight: rgba(214, 162, 51, 0.32);
+  --acm-sheet-shadow: none;
+  --md-code-bg-color: #232328;
+  --md-hue: 240;
 }
-.md-header, .md-tabs { background-color: #1a1a18; }
+/* Two attributes: the theme sets link and text colours per scheme-and-primary pair. */
+[data-md-color-scheme][data-md-color-primary] {
+  --md-default-bg-color: var(--acm-desk);
+  --md-default-fg-color: var(--acm-ink);
+  --md-default-fg-color--light: var(--acm-muted);
+  --md-typeset-color: var(--acm-ink);
+  --md-typeset-a-color: var(--acm-comment);
+  --md-accent-fg-color: var(--acm-comment);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--acm-comment) 10%, transparent);
+  --md-footer-bg-color: var(--acm-panel);
+  --md-footer-bg-color--dark: var(--acm-panel);
+  --md-footer-fg-color: var(--acm-ink);
+  --md-footer-fg-color--light: var(--acm-muted);
+  --md-footer-fg-color--lighter: var(--acm-muted);
+}
+
+/* The editor's system stack, for the page and the code alike. */
+body, input { font-family: ui-sans-serif, -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+code, kbd, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* Title bar: white, hairline underneath, ink text, whatever the primary colour resolves to. */
+.md-header, .md-tabs {
+  --md-primary-bg-color: var(--acm-ink);
+  --md-primary-bg-color--light: var(--acm-muted);
+  background-color: var(--acm-panel);
+  color: var(--acm-ink);
+  box-shadow: none;
+  border-bottom: 1px solid var(--acm-line);
+}
 .md-header__title { font-weight: 600; }
-.md-typeset h1, .md-typeset h2 { letter-spacing: -0.01em; }
-/* Screenshots get a hairline so a white editor page does not melt into the white docs page. */
+.md-header .md-search__button { --md-default-fg-color--lightest: var(--acm-desk); }
+.md-footer { border-top: 1px solid var(--acm-line); }
+
+/* The content is a sheet on the desk, as a document is in the editor. */
+.md-main__inner { margin-top: 1.2rem; }
+@media screen and (min-width: 60em) {
+  .md-content {
+    background: var(--acm-panel);
+    border: 1px solid var(--acm-line);
+    border-radius: 2px;
+    box-shadow: var(--acm-sheet-shadow);
+    margin-bottom: 2rem;
+  }
+}
+@media screen and (max-width: 59.984375em) {
+  .md-content { background: var(--acm-panel); }
+}
+
+.md-typeset h1 { color: var(--acm-ink); font-weight: 700; letter-spacing: -0.015em; }
+.md-typeset h2 { font-weight: 600; letter-spacing: -0.01em; }
+::selection { background: var(--acm-highlight); }
+.md-typeset mark { background: var(--acm-highlight); }
+
+/* Screenshots get a hairline so a white editor page does not melt into the white sheet. */
 .md-typeset img[src*="editor-"], .md-typeset img[src*="suggestion-"] {
-  border: 1px solid #e8e7e2; border-radius: 8px;
+  border: 1px solid var(--acm-line); border-radius: 8px;
 }
 .md-typeset p > img:only-child { display: block; margin-left: auto; margin-right: auto; max-width: 100%; }
 .md-typeset p > img.phone:only-child, .md-typeset img.phone { max-width: min(320px, 100%); }
-/* Header text and icons stay light on the ink header whatever the primary colour resolves to. */
-.md-header, .md-tabs {
-  --md-primary-bg-color: #f4f4f1;
-  --md-primary-bg-color--light: #cfcfca;
-  color: #f4f4f1;
-}
-/* The search trigger takes its colours from the page scheme, so in light mode it drew
-   near-black on the ink header. Give it the light-on-dark tokens. */
-[data-md-color-scheme="default"] .md-header .md-search__button {
-  --md-default-fg-color: #f4f4f1;
-  --md-default-fg-color--lightest: rgba(244, 244, 241, 0.12);
-  --md-default-fg-color--lighter: rgba(244, 244, 241, 0.32);
-  --md-default-fg-color--light: rgba(244, 244, 241, 0.7);
-  --md-default-bg-color--light: rgba(26, 26, 24, 0.54);
-}
-.md-header .md-search__button:focus-visible { outline: 2px solid #f4f4f1; outline-offset: 2px; }
+
 /* Flags and option names in reference tables stay on one line. */
 .md-typeset td:first-child code { white-space: nowrap; }
+
+/* The "Last reviewed" line each page closes with is a footnote, not body text. */
+.md-typeset > p:last-of-type > em:only-child { color: var(--acm-muted); font-size: 0.85em; font-style: normal; }

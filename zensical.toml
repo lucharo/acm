@@ -4,7 +4,6 @@
 site_name = "ACM"
 site_description = "A local editor where people and agents review one Markdown document together."
 site_author = "Luis Chaves Rodriguez"
-# Planned address for when the repository is public; nothing is deployed yet.
 site_url = "https://acm.luischav.es/"
 repo_url = "https://github.com/lucharo/acm"
 repo_name = "lucharo/acm"
@@ -29,7 +28,10 @@ nav = [
 ]
 
 [project.theme]
+custom_dir = "overrides"
 language = "en"
+# The editor uses the system font stack (see extra.css), so load no web font.
+font = false
 logo = "assets/logo.png"
 favicon = "assets/favicon.png"
 features = [
@@ -63,10 +65,6 @@ primary = "black"
 accent = "deep purple"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to system preference"
-
-[project.theme.font]
-text = "Inter"
-code = "JetBrains Mono"
 
 [[project.extra.social]]
 icon = "fontawesome/brands/github"
