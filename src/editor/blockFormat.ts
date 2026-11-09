@@ -95,10 +95,14 @@ function setextHeadingOn(state: EditorState, tree: Tree, pos: number): SetextHea
   };
 }
 
+/** A bound on parsing the document up to the selection, spent once per region. The
+ *  50 ms default ran out on a busy machine, and a style choice then did nothing. */
+const PARSE_BUDGET_MS = 1000;
+
 /** The style of the line holding the main cursor. */
 export function currentBlockStyle(state: EditorState): BlockStyle {
   const line = state.doc.lineAt(state.selection.main.head);
-  const tree = ensureSyntaxTree(state, line.to);
+  const tree = ensureSyntaxTree(state, line.to, PARSE_BUDGET_MS);
   const setext = tree && setextHeadingOn(state, tree, line.from);
   if (setext) return setext.level;
   const level = HEADING.exec(line.text)?.[1].length ?? 0;
@@ -167,7 +171,7 @@ function setextChanges(state: EditorState, tree: Tree, heading: SetextHeading, s
 export function blockStyleChanges(state: EditorState, style: BlockStyle): ChangeSpec[] {
   const touched = touchedLines(state).filter(formattable);
   const last = touched.at(-1);
-  const tree = last ? ensureSyntaxTree(state, last.from + last.text.length) : null;
+  const tree = last ? ensureSyntaxTree(state, last.from + last.text.length, PARSE_BUDGET_MS) : null;
   if (!tree) return [];
   const handled = new Set<number>();
   return touched.flatMap(({ from, text }) => {
