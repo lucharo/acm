@@ -1252,13 +1252,14 @@ export function replacementLeaks(replacement: string): boolean {
   return delimiterDiagnostics(replacement).length > 0;
 }
 
-/** Whether accepting SUGGEST `comment` would leave raw delimiters, judged in
- *  the document where its replacement would land. */
+/** Whether accepting SUGGEST `comment` would leave raw delimiters, judged in the
+ *  document where its replacement would land, with the discussion that edit keeps. */
 export function unsafeSuggestion(
   content: string,
   comment: CommentToken,
   tokens?: CritToken[],
   threads?: CommentThread[],
+  discussion: SuggestionDiscussion = "keep-discussion",
 ): boolean {
   const repl = suggestionReplacement(comment.body);
   if (repl === null) return false;
@@ -1280,7 +1281,8 @@ export function unsafeSuggestion(
   })();
   const paraEnd = paragraphEnd(content, end);
   const before = content.slice(paraStart, paraEnd);
-  const after = content.slice(paraStart, start) + repl + content.slice(end, paraEnd);
+  const insert = thread ? suggestionRunInsert(comment, thread, repl, "accept", discussion) : repl;
+  const after = content.slice(paraStart, start) + insert + content.slice(end, paraEnd);
   return delimiterDiagnostics(after).length > delimiterDiagnostics(before).length;
 }
 
@@ -1356,7 +1358,7 @@ function reviewIntegrityDiagnostics(text: string): MarkupDiagnostic[] {
  * Malformed CriticMarkup is refused rather than leaking review delimiters into a
  * published artifact. */
 export function acceptedMarkdown(text: string): AcceptedMarkdownResult {
-  const literalRanges = markdownLiteralRanges(text);
+  const literalRanges = criticAwareLiteralRanges(text);
   const diagnostics = validateMarkup(text).filter(
     (diagnostic) =>
       LEAKING_KINDS.has(diagnostic.kind) && !positionInRanges(diagnostic.from, literalRanges),
@@ -1364,7 +1366,7 @@ export function acceptedMarkdown(text: string): AcceptedMarkdownResult {
   if (diagnostics.length > 0) return { ok: false, diagnostics };
 
   const acceptRange = (source: string, top = false): string => {
-    const protectedRanges = markdownLiteralRanges(source);
+    const protectedRanges = criticAwareLiteralRanges(source);
     const tokens = [...scanTokens(source)]
       .filter((token) => !positionInRanges(token.from, protectedRanges))
       .sort(
@@ -1583,21 +1585,32 @@ let literalCache: { content: string; ranges: SourceRange[] } | null = null;
  *  newlines kept), so a backtick inside one comment can't pair with a backtick
  *  in another and turn the markup between them into a code span (#116). */
 function criticAwareLiteralRanges(text: string, options: { wholeLinks?: boolean } = {}): SourceRange[] {
-  let masked = "";
-  let cursor = 0;
+  const comments = scanTokens(text).filter((t): t is CommentToken => t.type === "comment");
+  const genuine = new Set<CommentToken>();
+  let source = text;
   // A comment-shaped run that starts inside real code (`{>>` quoted in one code
-  // span, `<<}` in another) is an example, not a comment: it stays unmasked.
-  const raw = markdownLiteralRanges(text);
-  for (const t of scanTokens(text)) {
-    if (t.type !== "comment" || t.from < cursor || positionInRanges(t.from, raw)) continue;
-    // Keep the `{>>` and `<<}` delimiters and blank only the body: no leading
-    // indent (an indented code block), a bare URL still ends at `{>>`, and no
-    // `<` can open an HTML tag with the prose after it.
-    masked +=
-      text.slice(cursor, t.from) + t.raw.slice(0, 3) + t.raw.slice(3, -3).replace(/[^\n]/g, " ") + t.raw.slice(-3);
-    cursor = t.to;
+  // span, `<<}` in another) is an example, not a comment: it stays unmasked. But
+  // masking one comment can dissolve the false code span another started in, so
+  // re-read the spans until no further comment turns out to be genuine.
+  while (genuine.size < comments.length) {
+    const literals = markdownLiteralRanges(source);
+    const found = comments.filter((t) => !genuine.has(t) && !positionInRanges(t.from, literals));
+    if (found.length === 0) break;
+    for (const t of found) genuine.add(t);
+    let masked = "";
+    let cursor = 0;
+    for (const t of comments) {
+      if (!genuine.has(t) || t.from < cursor) continue;
+      // Keep the `{>>` and `<<}` delimiters and blank only the body: no leading
+      // indent (an indented code block), a bare URL still ends at `{>>`, and no
+      // `<` can open an HTML tag with the prose after it.
+      masked +=
+        text.slice(cursor, t.from) + t.raw.slice(0, 3) + t.raw.slice(3, -3).replace(/[^\n]/g, " ") + t.raw.slice(-3);
+      cursor = t.to;
+    }
+    source = masked + text.slice(cursor);
   }
-  return markdownLiteralRanges(masked + text.slice(cursor), options);
+  return markdownLiteralRanges(source, options);
 }
 
 function cachedLiteralRanges(content: string): SourceRange[] {
@@ -2169,7 +2182,7 @@ export function suggestionThreadEdit(
   discussion: SuggestionDiscussion = "keep-discussion",
 ): { from: number; to: number; insert: string } | null {
   const repl = suggestionReplacement(comment.body);
-  if (repl === null || (mode === "accept" && unsafeSuggestion(content, comment))) return null;
+  if (repl === null) return null;
   const tokens = scanTokens(content);
   const threads = groupThreads(
     tokens.filter((t): t is CommentToken => t.type === "comment"),
@@ -2179,11 +2192,26 @@ export function suggestionThreadEdit(
   if (!hl || hl.type !== "highlight") return null;
   const thread = threads.find((th) => th.comments.some((c) => c.from === comment.from));
   if (!thread) return null;
+  if (mode === "accept" && unsafeSuggestion(content, comment, tokens, threads, discussion)) return null;
 
   const newSpan = mode === "accept" ? repl : hl.inner;
-  if (discussion === "resolve-thread") {
-    return { from: suggestionAnchorStart(content, hl), to: thread.to, insert: newSpan };
-  }
+  return {
+    from: suggestionAnchorStart(content, hl),
+    to: thread.to,
+    insert: suggestionRunInsert(comment, thread, newSpan, mode, discussion),
+  };
+}
+
+/** What replaces the anchor run [anchorStart, thread.to) for this decision: the
+ *  safety check judges this same text, so it sees exactly what the edit keeps. */
+function suggestionRunInsert(
+  comment: CommentToken,
+  thread: CommentThread,
+  newSpan: string,
+  mode: "accept" | "reject",
+  discussion: SuggestionDiscussion,
+): string {
+  if (discussion === "resolve-thread") return newSpan;
   // Applying a SUGGEST fulfils the edit requests posted before it: drop them with
   // the SUGGEST, or the thread would read as waiting on an edit that has landed
   // (#76). A request posted after it asks for something newer and stays.
@@ -2198,15 +2226,13 @@ export function suggestionThreadEdit(
       !(deleting && suggestionReplacement(c.body) !== null),
   );
   const keptMarkup = remaining.map((c) => c.raw).join("");
-  const insert =
-    remaining.length === 0
-      ? newSpan // sole comment → collapse wrapper to plain prose (today's behaviour)
-      : newSpan.length === 0
-        ? keptMarkup // delete + discussion → keep comments as point comments, no {====}
-        : wrapsCleanly(newSpan)
-          ? `{==${newSpan}==}${keptMarkup}` // edit span, keep the thread anchored
-          : newSpan + keptMarkup; // can't be one highlight (a blank line, an edge `{`): point comments (#94)
-  return { from: suggestionAnchorStart(content, hl), to: thread.to, insert };
+  return remaining.length === 0
+    ? newSpan // sole comment → collapse wrapper to plain prose (today's behaviour)
+    : newSpan.length === 0
+      ? keptMarkup // delete + discussion → keep comments as point comments, no {====}
+      : wrapsCleanly(newSpan)
+        ? `{==${newSpan}==}${keptMarkup}` // edit span, keep the thread anchored
+        : newSpan + keptMarkup; // can't be one highlight (a blank line, an edge `{`): point comments (#94)
 }
 
 /** Accept a structured-suggestion comment (keep the replacement). Thin wrapper over
@@ -2254,8 +2280,12 @@ export interface SuggestCard {
 export function suggestCards(
   content: string,
   tokens?: CritToken[],
-  options: { includeUnsafe?: boolean } = {},
+  options: { includeUnsafe?: boolean; discussion?: SuggestionDiscussion } = {},
 ): SuggestCard[] {
+  // With no chosen mode, a card stays while either way of applying it is safe.
+  const modes: SuggestionDiscussion[] = options.discussion
+    ? [options.discussion]
+    : ["keep-discussion", "resolve-thread"];
   const toks = tokens ?? scanTokens(content);
   // A SUGGEST example inside code is text, never a card.
   const comments = toks.filter((t): t is CommentToken => t.type === "comment" && !inLiteral(content, t.from));
@@ -2266,7 +2296,12 @@ export function suggestCards(
     const repl = suggestionReplacement(t.body);
     // An unsafe replacement can be rejected but never applied, so it is left out
     // unless the caller is rejecting (the group planner).
-    if (repl === null || (!options.includeUnsafe && unsafeSuggestion(content, t, toks, threads))) continue;
+    if (
+      repl === null ||
+      (!options.includeUnsafe && modes.every((m) => unsafeSuggestion(content, t, toks, threads, m)))
+    ) {
+      continue;
+    }
     // Resolve the span even for a reply deeper in the thread (inherits the root's).
     // Pass the prebuilt threads so the reply path stays O(comments), not O(comments²).
     const hl = threadAnchorHighlightFor(content, t, toks, threads);
@@ -2322,7 +2357,7 @@ export function suggestionGroupEdits(
 ): { edits: { from: number; to: number; insert: string }[]; skipped: number; unanchored: number } {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
-  const members = suggestCards(content, tokens, { includeUnsafe: mode === "reject" }).filter(
+  const members = suggestCards(content, tokens, { includeUnsafe: mode === "reject", discussion }).filter(
     (s) => s.groupId === groupId,
   );
   const tagged = comments.filter((c) => suggestionGroupId(c.body) === groupId && !inLiteral(content, c.from)).length;

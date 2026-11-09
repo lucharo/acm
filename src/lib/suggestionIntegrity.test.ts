@@ -6,10 +6,85 @@ import {
   healDocument,
   resolveAnchorEdit,
   scanTokens,
+  suggestionGroupEdits,
+  suggestionThreadEdit,
   validateMarkup,
 } from "./criticmarkup";
+import type { CommentToken } from "./criticmarkup";
 
 const kinds = (doc: string) => validateMarkup(doc).map((d) => d.kind);
+
+const suggestionIn = (doc: string): CommentToken => {
+  const found = scanTokens(doc).find(
+    (t): t is CommentToken => t.type === "comment" && t.body.includes("SUGGEST"),
+  );
+  if (!found) throw new Error(`no SUGGEST comment in: ${doc}`);
+  return found;
+};
+
+describe("a backtick in a replacement is judged against the exact edit (#9)", () => {
+  // Kept discussion stays after the replacement, so its backtick can pair with
+  // one in the prose and turn the kept highlight's close into inline code.
+  const swallowsKeptClose = "A {==old==}{>>@a: SUGGEST: `<<}{>>@b: note<<} rest ` end.";
+
+  test("a keep-discussion accept that would swallow the kept highlight's close is refused", () => {
+    const comment = suggestionIn(swallowsKeptClose);
+
+    const edit = suggestionThreadEdit(swallowsKeptClose, comment, "accept", "keep-discussion");
+
+    expect(edit).toBeNull();
+  });
+
+  test("a keep-discussion accept whose backtick would pair with one in a kept comment is refused", () => {
+    const doc = "A {==one==}{>>@a: note `<<}{>>@b: SUGGEST: two`<<}.";
+    const comment = suggestionIn(doc);
+
+    const edit = suggestionThreadEdit(doc, comment, "accept", "keep-discussion");
+
+    expect(edit).toBeNull();
+  });
+
+  test("the same suggestion still applies when the discussion is dropped", () => {
+    const comment = suggestionIn(swallowsKeptClose);
+
+    const edit = suggestionThreadEdit(swallowsKeptClose, comment, "accept", "resolve-thread");
+
+    expect(edit).toEqual({ from: 2, to: 45, insert: "`" });
+  });
+
+  test("a keep-discussion accept with a self-contained code span is still allowed", () => {
+    const doc = "A {==old==}{>>@a: SUGGEST: `x`<<}{>>@b: note<<} rest end.";
+    const comment = suggestionIn(doc);
+
+    const edit = suggestionThreadEdit(doc, comment, "accept", "keep-discussion");
+
+    expect(edit).toEqual({ from: 2, to: 47, insert: "{==`x`==}{>>@b: note<<}" });
+  });
+
+  test("the card stays applicable while dropping the discussion can still apply it", () => {
+    const comment = suggestionIn(swallowsKeptClose);
+
+    const applicable = applicableSuggestionIds(swallowsKeptClose);
+
+    expect(applicable).toEqual(new Set([comment.id]));
+  });
+
+  test("a group refuses a keep-discussion accept with a member that would break the markup", () => {
+    const doc = "A {==old==}{>>@a: SUGGEST[g:g1]: `<<}{>>@b: note<<} rest ` end.";
+
+    const result = suggestionGroupEdits(doc, "g1", "accept", "keep-discussion");
+
+    expect(result).toEqual({ edits: [], skipped: 1, unanchored: 1 });
+  });
+
+  test("a group still applies that member when the discussion is dropped", () => {
+    const doc = "A {==old==}{>>@a: SUGGEST[g:g1]: `<<}{>>@b: note<<} rest ` end.";
+
+    const result = suggestionGroupEdits(doc, "g1", "accept", "resolve-thread");
+
+    expect(result).toEqual({ edits: [{ from: 2, to: 51, insert: "`" }], skipped: 0, unanchored: 0 });
+  });
+});
 
 describe("SUGGEST integrity diagnostics (#65, #28, #72)", () => {
   test("a SUGGEST behind an anchor that wraps another thread is flagged, not silently dead (#65 repro a)", () => {
@@ -218,6 +293,40 @@ describe("accepted Markdown never leaks anchor delimiters", () => {
     const doc = "use `{==x==}` here {==real==}{>>@a: c<<}";
 
     expect(acceptedMarkdown(doc)).toEqual({ ok: true, markdown: "use `{==x==}` here real" });
+  });
+
+  test("backticks in two comments do not expose the second comment as code (#9)", () => {
+    const doc = "A {==one==}{>>@a: note `<<}{>>@b: SUGGEST: two`<<}.";
+
+    expect(acceptedMarkdown(doc)).toEqual({ ok: true, markdown: "A one." });
+  });
+
+  test("markup that leaks between two backticked comments is refused, not read as code (#9)", () => {
+    const doc = "A {==x==}{>>@a: tick `<<} {==bad {>>@b: tick `<<} end";
+
+    expect(acceptedMarkdown(doc)).toEqual({
+      ok: false,
+      diagnostics: [
+        {
+          from: 26,
+          to: 29,
+          kind: "dangling-open",
+          message: "highlight doesn't close in this paragraph — its {== renders raw",
+        },
+      ],
+    });
+  });
+
+  test("a false code span opened by one comment's backtick cannot protect later markup (#9)", () => {
+    const doc = "A {>>@a: tick `<<}{>>@b: tick `<<} {==x==}{>>@c: note<<} tail `";
+
+    expect(acceptedMarkdown(doc)).toEqual({ ok: true, markdown: "A  x tail `" });
+  });
+
+  test("a real code example stays literal beside those false code spans (#9)", () => {
+    const doc = "`{>>@ex: note<<}` and {>>@a: tick `<<}{>>@b: tick `<<} {==x==}{>>@c: note<<} tail `";
+
+    expect(acceptedMarkdown(doc)).toEqual({ ok: true, markdown: "`{>>@ex: note<<}` and  x tail `" });
   });
 });
 
