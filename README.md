@@ -25,6 +25,8 @@ The installer puts `acm` in `~/.local/bin` and the `acm-review` skill where Clau
 
 ## Docs
 
+Full documentation: https://acm.luischav.es
+
 | You want to | Read |
 | --- | --- |
 | Install, open a document, run a first agent review | [Getting started](docs/getting-started.md) |
@@ -35,7 +37,7 @@ The installer puts `acm` in `~/.local/bin` and the `acm-review` skill where Clau
 | Get past an error message | [Troubleshooting](docs/troubleshooting.md) |
 | Build, test or change ACM | [Maintainers](docs/maintainers.md) |
 
-Run `just docs` to read them as a site, with the real command output that GitHub shows only as `--8<--` include lines.
+The site shows the real command output that GitHub shows only as `--8<--` include lines. Run `just docs` to read it locally.
 
 ## What ACM is not
 

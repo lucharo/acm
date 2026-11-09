@@ -1,0 +1,51 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "overrides/**", "zensical.toml", ".github/workflows/docs.yml"]
+  pull_request:
+    paths: ["docs/**", "overrides/**", "zensical.toml", ".github/workflows/docs.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Always runs: --strict fails on a broken link or a missing nav page, so the
+  # docs are checked on every PR that touches them, even before they are published.
+  build:
+    runs-on: ubuntu-latest
+    # Superseded builds of the same ref are cancellable; deployments are not (see deploy).
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uvx --from zensical==0.1.0 zensical build --clean --strict
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  # GitHub Pages needs a public repository on this account's plan, and configure-pages
+  # fails outright when Pages is not enabled. Gating on visibility keeps main green
+  # while the repository is private, with no workflow edit needed when it goes public.
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.event.repository.visibility == 'public'
+    # Pages allows one deployment at a time; queue rather than cancel.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/configure-pages@v6
+      - uses: actions/deploy-pages@v5
+        id: deployment
