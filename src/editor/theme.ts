@@ -533,7 +533,8 @@ export const acmTheme: Extension = EditorView.theme(
     ".cm-crit-controls": {
       display: "inline-flex",
       position: "absolute",
-      transform: "translate(-0.6em, -1.05em)",
+      // The shift is measured on hover, so adjacent pairs never cover each other.
+      transform: "translate(calc(-0.6em + var(--crit-controls-shift, 0px)), -1.05em)",
       gap: "2px",
       padding: "1px",
       borderRadius: "999px",

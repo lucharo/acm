@@ -176,6 +176,59 @@ export function standaloneInsertionPresentation() {
 }
 
 /** ✓ / ✗ controls rendered after a suggestion. Carries the node [from,to). */
+/** The rendered ✓/✗ pairs of one line, in document order, at their unshifted positions. */
+interface ControlsBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+function sameRow(a: ControlsBox | undefined, b: ControlsBox | undefined): boolean {
+  return !!a && !!b && a.top < b.top + b.height && b.top < a.top + a.height;
+}
+
+/** How far each pair must move so that no pair covers another on its visual row:
+ *  rightward first, then back from the line's right edge when the row runs past it.
+ *  A row too long for the line stays inside `minLeft`, overlapping where it must. */
+export function controlsShifts(pairs: readonly ControlsBox[], minLeft: number, maxRight: number, gap = 2): number[] {
+  const placed: number[] = [];
+  let rowRight = -Infinity;
+  pairs.forEach((pair, index) => {
+    if (!sameRow(pair, pairs[index - 1])) rowRight = -Infinity;
+    placed[index] = Math.max(pair.left, minLeft, rowRight + gap);
+    rowRight = placed[index] + pair.width;
+  });
+  let rowLimit = maxRight;
+  for (let index = pairs.length - 1; index >= 0; index -= 1) {
+    if (!sameRow(pairs[index], pairs[index + 1])) rowLimit = maxRight;
+    placed[index] = Math.max(minLeft, Math.min(placed[index], rowLimit - pairs[index].width));
+    rowLimit = placed[index] - gap;
+  }
+  return placed.map((position, index) => position - pairs[index].left);
+}
+
+const CONTROLS_SHIFT = "--crit-controls-shift";
+
+/** Spread a hovered line's floating pairs apart, measured, so short adjacent
+ *  suggestions stay clickable at any font or viewport width. */
+function spreadLineControls(line: Element) {
+  const controls = [...line.querySelectorAll<HTMLElement>(".cm-crit-controls")];
+  if (controls.length === 0) return;
+  const unshifted = (element: HTMLElement) => Number.parseFloat(element.style.getPropertyValue(CONTROLS_SHIFT)) || 0;
+  const boxes = controls.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left - unshifted(element), top: rect.top, width: rect.width, height: rect.height };
+  });
+  const { left, right } = line.getBoundingClientRect();
+  // A pair at the very start of a line naturally sits a little left of it; only a
+  // row that has to move back is held at the edge.
+  const minLeft = Math.min(left, ...boxes.map((box) => box.left));
+  controlsShifts(boxes, minLeft, right).forEach((shift, index) => {
+    controls[index].style.setProperty(CONTROLS_SHIFT, `${shift}px`);
+  });
+}
+
 class AcceptRejectWidget extends WidgetType {
   constructor(
     readonly from: number,
@@ -637,6 +690,11 @@ const widgetPlugin = ViewPlugin.fromClass(
   {
     decorations: (v) => v.decorations,
     eventHandlers: {
+      mouseover(event) {
+        const line = (event.target as HTMLElement | null)?.closest?.(".cm-line");
+        if (line) spreadLineControls(line);
+        return false;
+      },
       mousedown(event, view) {
         const target = event.target as HTMLElement | null;
         if (!target) return false;
