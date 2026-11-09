@@ -11,6 +11,7 @@ import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { startServer, type AcmServer } from "../../server";
 import { useDocSync } from "../client/useDocSync";
+import type { DecisionEvent } from "../lib/decision";
 
 type Sync = ReturnType<typeof useDocSync>;
 
@@ -89,6 +90,9 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
     beforePutLeaves: null as null | (() => Promise<void> | void), // once
     afterPutAnswered: null as null | (() => Promise<void> | void), // once, held before the hook sees the reply
     rejectPutAfterLanding: false, // once
+    rejectPutAfterEcho: false, // once, the echo delivered before the failure
+    stripAuditFromReply: false, // once
+    failDecisionPosts: false,
     decisionReadsHeld: 0,
     pushedVersions: [] as number[],
     inFlight: 0,
@@ -98,6 +102,7 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
     const url = String(input).startsWith("/") ? `http://${origin}${input}` : String(input);
     if (url.endsWith("/api/decisions") || url.endsWith("/api/decision-recovery")) {
       if (io.failDecisionReads && init?.method !== "POST") return new Response("down", { status: 503 });
+      if (io.failDecisionPosts && init?.method === "POST") return new Response("down", { status: 503 });
       if (io.holdDecisionReads && init?.method !== "POST") {
         io.decisionReadsHeld++;
         await io.holdDecisionReads;
@@ -112,7 +117,13 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
       const before = io.beforePutLeaves;
       io.beforePutLeaves = null;
       await before?.();
+      const pushesBefore = io.pushedVersions.length;
       const res = await realFetch(url, init);
+      if (io.rejectPutAfterEcho) {
+        io.rejectPutAfterEcho = false;
+        await until("the save's echo", () => io.pushedVersions.length > pushesBefore);
+        throw new TypeError("connection lost");
+      }
       if (io.rejectPutAfterLanding) {
         io.rejectPutAfterLanding = false;
         throw new TypeError("connection lost");
@@ -120,6 +131,11 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
       const after = io.afterPutAnswered;
       io.afterPutAnswered = null;
       await after?.();
+      if (io.stripAuditFromReply) {
+        io.stripAuditFromReply = false;
+        const { audit: _audit, ...reply } = (await res.json()) as Record<string, unknown>;
+        return Response.json(reply, { status: res.status });
+      }
       return res;
     } finally {
       io.inFlight--;
@@ -177,6 +193,18 @@ async function openEditor(seed: string, opts: { failDecisionReads?: boolean } = 
 
 const SEED = "# Post\n\nOpening paragraph.\n\nMiddle paragraph.\n\nLast paragraph.\n";
 const opening = (doc: string, text: string) => doc.replace("Opening paragraph.", `Opening paragraph.${text}`);
+const DECISION: DecisionEvent = {
+  id: "reconnect-audit-1",
+  timestamp: "2026-11-09T12:00:00.000Z",
+  action: "resolve",
+  actor: "You",
+  source: "gui",
+  target: { kind: "thread", id: "thread-1", threadId: "thread-1" },
+  anchor: "wording",
+  originalText: "wording and discussion",
+  proposedText: null,
+  resultingText: "wording",
+};
 
 describe("reconnect audit (#21)", () => {
   test("a server restart after a save whose reply was lost resumes saving the newer typing", async () => {
@@ -299,4 +327,120 @@ describe("reconnect audit (#21)", () => {
     expect(editor.onDisk()).toBe(newest);
     expect(editor.remote).toEqual([merged, newest]);
   }, 15000);
+
+  test("a delayed merged reply does not put its older content over a newer adopted push", async () => {
+    const editor = await openEditor(SEED);
+    const sent = opening(SEED, " mine");
+    const theirs = SEED.replace("Last paragraph.", "Last paragraph theirs.");
+    const merged = opening(theirs, " mine");
+    const newest = merged.replace("Middle paragraph.", "Middle paragraph agent.");
+    const reply = deferred();
+    editor.io.afterPutAnswered = () => reply.held;
+    editor.io.beforePutLeaves = async () => {
+      await editor.agentWrite(SEED, theirs);
+      editor.sync().save(merged); // the buffer reaches what the merge will produce
+    };
+
+    editor.sync().save(sent);
+    await until("the merged save's echo", () => editor.io.pushedVersions.includes(2));
+    await editor.agentWrite(merged, newest);
+    await until("the newer push to be adopted", () => editor.remote.includes(newest));
+    reply.release();
+    await until("the delayed reply", () => editor.io.inFlight === 0);
+    await editor.settled();
+
+    expect(editor.onDisk()).toBe(newest);
+    expect(editor.remote).toEqual([newest]);
+  }, 15000);
+
+  test("a late reply whose audit retry fails does not regress the base past a newer push", async () => {
+    const editor = await openEditor(SEED);
+    const mine = opening(SEED, " mine");
+    const agents = opening(SEED, " mine agent");
+    const typed = opening(SEED, " mine agent typed");
+    const reply = deferred();
+    editor.io.afterPutAnswered = () => reply.held;
+    editor.io.stripAuditFromReply = true;
+
+    editor.sync().save(mine, { enqueue: [DECISION], cancel: [] });
+    await until("the save's echo", () => editor.io.pushedVersions.includes(1));
+    await editor.agentWrite(mine, agents);
+    await until("the push to be adopted", () => editor.remote.includes(agents));
+    editor.io.failDecisionPosts = true;
+    reply.release();
+    await until("the late reply", () => editor.io.inFlight === 0 && editor.sync().saveState === "audit-error");
+    editor.io.failDecisionPosts = false;
+    editor.sync().save(typed);
+    editor.sync().flushNow();
+    await until("the next save", () => editor.puts.length === 2 && editor.io.inFlight === 0);
+    await until("the next save to land", () => editor.onDisk() !== agents);
+
+    expect(editor.onDisk()).toBe(typed);
+    expect(editor.puts.map((put) => put.baseVersion)).toEqual([0, 2]);
+  }, 15000);
+
+  describe("a restart ignores an unanswered save the buffer no longer descends from", () => {
+    const answered = opening(SEED, " once");
+    const typedOn = (doc: string) => doc.replace("Middle paragraph.", "Middle paragraph typed.");
+    const restoredAndTyped = typedOn(answered);
+
+    async function loseReplyTo(editor: Awaited<ReturnType<typeof openEditor>>, content: string) {
+      editor.io.rejectPutAfterEcho = true;
+      editor.sync().save(content);
+      await until("the reply to be lost", () => !editor.sync().connected && editor.io.inFlight === 0);
+      await until("the reconnect", () => editor.sync().connected && editor.sync().saveState === "saved", 6000);
+    }
+
+    /** Type `typed` offline, restore the unanswered save on disk, then restart. */
+    async function restartOntoRestoredDocument(editor: Awaited<ReturnType<typeof openEditor>>, typed: string) {
+      editor.stopServer();
+      await until("the editor to go offline", () => !editor.sync().connected);
+      editor.sync().save(typed);
+      await Bun.write(editor.docPath, answered);
+      editor.startAgain();
+      await until("the merge to reach disk", () => editor.onDisk() === restoredAndTyped, 6000);
+      await editor.settled();
+    }
+
+    test("after a newer push was adopted", async () => {
+      const editor = await openEditor(SEED);
+      const adopted = answered.replace("Last paragraph.", "Last paragraph agent.");
+      await loseReplyTo(editor, answered);
+      await editor.agentWrite(answered, adopted);
+      await until("the newer push to be adopted", () => editor.remote.includes(adopted));
+
+      await restartOntoRestoredDocument(editor, typedOn(adopted));
+
+      expect(editor.onDisk()).toBe(restoredAndTyped);
+      expect(editor.remote).toEqual([adopted, restoredAndTyped]);
+    }, 15000);
+
+    test("after a later save was confirmed by its echo", async () => {
+      const editor = await openEditor(SEED);
+      const later = answered.replace("Last paragraph.", "Last paragraph later.");
+      await loseReplyTo(editor, answered);
+      await loseReplyTo(editor, later);
+
+      await restartOntoRestoredDocument(editor, typedOn(later));
+
+      expect(editor.onDisk()).toBe(restoredAndTyped);
+      expect(editor.remote).toEqual([restoredAndTyped]);
+    }, 15000);
+
+    test("after an earlier restart rebaselined the editor", async () => {
+      const editor = await openEditor(SEED);
+      const rebaselined = answered.replace("Last paragraph.", "Last paragraph on disk.");
+      await loseReplyTo(editor, answered);
+      editor.stopServer();
+      await until("the editor to go offline", () => !editor.sync().connected);
+      await Bun.write(editor.docPath, rebaselined);
+      editor.startAgain();
+      await until("the rebaseline", () => editor.remote.includes(rebaselined) && editor.sync().connected, 6000);
+
+      await restartOntoRestoredDocument(editor, typedOn(rebaselined));
+
+      expect(editor.onDisk()).toBe(restoredAndTyped);
+      expect(editor.remote).toEqual([rebaselined, restoredAndTyped]);
+    }, 15000);
+  });
 });

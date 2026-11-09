@@ -445,6 +445,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     if (content === pendingContent.current) {
       currentVersion.current = version;
       lastConfirmedContent.current = content;
+      unansweredSaves.current = []; // the buffer now descends from this state
       pendingContent.current = null;
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
@@ -480,6 +481,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     }
     currentVersion.current = version;
     lastConfirmedContent.current = content;
+    unansweredSaves.current = []; // the buffer now descends from this state
     onRemoteUpdate.current(content, version);
     setSaveState(settledSaveState());
     setLastSavedAt(Date.now());
@@ -611,6 +613,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
               currentVersion.current = reconnectVersion;
               lastConfirmedContent.current = reconnectContent;
               droppedPush.current = null; // from the previous server lifetime
+              unansweredSaves.current = [];
               if (epochPlan.kind === "flush") {
                 pendingContent.current = epochPlan.content;
                 onRemoteUpdate.current(epochPlan.content, reconnectVersion);
@@ -906,6 +909,12 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
     };
+    // This reply can arrive after a newer push or reconnect snapshot was adopted.
+    const confirmServerState = (version: number, content: string | undefined) => {
+      if (version < currentVersion.current) return;
+      currentVersion.current = version;
+      if (content !== undefined) lastConfirmedContent.current = content;
+    };
     if (!saveResponseMatchesCurrentEpoch(requestEpoch, currentServerEpoch.current)) {
       // A response from a previous server lifetime cannot advance the new epoch's
       // version, clear its pending content, or overwrite its reconnect state.
@@ -964,10 +973,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
         return;
       }
       if (!auditResult.persisted) {
-        if (typeof data.version === "number") {
-          currentVersion.current = data.version;
-          if (typeof data.content === "string") lastConfirmedContent.current = data.content;
-        }
+        if (typeof data.version === "number") confirmServerState(data.version, data.content);
         setSaveState("audit-error");
         if (typeof data.version === "number") setLastSavedAt(Date.now());
         return;
@@ -990,12 +996,17 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     });
     if (d.kind === "failed") noteUnanswered();
     else if (d.kind !== "conflict") unansweredSaves.current = [];
-    // This reply can arrive after a newer push or reconnect snapshot was adopted.
-    const confirmServerState = (version: number, content: string) => {
-      if (version < currentVersion.current) return;
-      currentVersion.current = version;
-      lastConfirmedContent.current = content;
-    };
+    if (d.kind !== "failed" && d.kind !== "conflict" && d.version < currentVersion.current) {
+      // A newer push or snapshot was adopted while this reply travelled: the write it
+      // reports stands for the audit trail, but its document state is out of date.
+      if (d.kind !== "stale") confirmDecisionEvents();
+      if (pendingContent.current !== null) reflush();
+      else {
+        setSaveState(settledSaveState());
+        setLastSavedAt(Date.now());
+      }
+      return;
+    }
     switch (d.kind) {
       case "failed":
         setSaveState(connectedRef.current ? "unsaved" : "offline"); // keep pending; retry on next edit/reconnect
