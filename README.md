@@ -42,7 +42,3 @@ The site shows the real command output that GitHub shows only as `--8<--` includ
 ## What ACM is not
 
 One document per editor window: no workspace or file browser. No accounts, cloud or multiplayer cursors. Import from Google Docs is a one-shot conversion; ACM keeps no connection to Google.
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

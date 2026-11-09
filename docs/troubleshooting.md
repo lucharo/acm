@@ -178,7 +178,3 @@ Use: acm edit notes.md
 ```
 
 Opening a document needs `edit`: `acm edit notes.md`.
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

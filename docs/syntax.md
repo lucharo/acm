@@ -77,7 +77,3 @@ A reply reading `please suggest an edit` (any case; a trailing `.` or `!` is all
 ## Markup that renders raw
 
 Braces showing as plain text usually mean a construct is nested or split across paragraphs. Run `acm heal` to heal it; see [Troubleshooting](troubleshooting.md#braces-show-as-raw-text).
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

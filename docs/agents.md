@@ -68,7 +68,3 @@ A running editor also answers on its port. The skill documents the request bodie
 | `POST /api/agent-write` | Merges a whole new content against the file, with the cursor guard |
 
 Every write request must carry the exact `path` from `GET /api/doc` as `documentPath`, or ACM rejects it before writing.
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

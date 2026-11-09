@@ -219,7 +219,3 @@ Converts a Google Doc or Word file into a CriticMarkup document: `acm import <Go
 | `ACM_ALLOWED_HOSTS` | `acm edit`, `bun run start` | Extra host names to accept, comma or space separated; set it empty to turn off the Tailscale default |
 | `ACM_ASSET_ROOT` | `acm edit`, `bun run start` | The folder images may load from |
 | `XDG_CONFIG_HOME` | everything | Settings, personal dictionary and the list of running editors live in `$XDG_CONFIG_HOME/acm/` (default `~/.config/acm/`) |
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

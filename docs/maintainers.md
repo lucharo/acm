@@ -60,7 +60,3 @@ ACM has no separate lint command.
 | [0004](adr/0004-the-file-is-the-api.md) | The file is the API |
 | [0005](adr/0005-server-side-merge-authority.md) | Server-side merge authority |
 | [0006](adr/0006-local-only-no-accounts.md) | Local only, no accounts |
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

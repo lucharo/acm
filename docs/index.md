@@ -31,7 +31,3 @@ Then ask your agent to review `notes.md`. [Getting started](getting-started.md) 
 | Write the markup by hand | [CriticMarkup syntax](syntax.md) |
 | Get past an error message | [Troubleshooting](troubleshooting.md) |
 | Build, test or change ACM | [Maintainers](maintainers.md) |
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

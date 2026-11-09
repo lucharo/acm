@@ -89,7 +89,3 @@ On a phone the margin cards move into a bottom sheet behind the "4 open" pill, a
 ## Print
 
 `Cmd+P` prints the document with inline suggestions accepted and without markup or cards; SUGGEST cards print the original text. If broken markup would leak braces into the PDF, ACM asks you to fix it first; `acm heal` repairs most cases. Settings offers a **Simple** layout with endnotes and a **Tufte** layout with notes in the margin.
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._

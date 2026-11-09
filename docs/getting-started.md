@@ -134,7 +134,3 @@ acm import review-draft.docx review.md
 ```
 
 The result keeps prose, headings, bullet lists, comments with their authors, and tracked insertions and deletions. A link only works for a Doc anyone with the link can view; for a private Doc, download it as `.docx` first. ACM keeps no connection to Google after the import. The output file is written directly and replaced if it exists, with no snapshot, so give it a new name.
-
----
-<!-- doc-audit:last-reviewed -->
-_Last reviewed: 2026-11-06 · commit `c0379f7` · verified against code._
