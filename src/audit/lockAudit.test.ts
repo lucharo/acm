@@ -121,6 +121,73 @@ describe("audit: a crash mid-takeover does not wedge the lock", () => {
   });
 });
 
+describe("audit: an abandoned higher takeover slot stays recoverable", () => {
+  const higherSlot = "takeover.1.json";
+
+  test("a claimant that yielded to a successor which then crashed still recovers the lock", async () => {
+    const path = lockPath();
+    mkdirSync(path);
+    writeFileSync(join(path, "owner.json"), ownerJson("dead-owner", deadPid()));
+    let claims = 0;
+    let yields = 0;
+    let resumeClaimant!: () => void;
+    const claimantMayResume = new Promise<void>((resolve) => {
+      resumeClaimant = resolve;
+    });
+    let claimCreated!: () => void;
+    const claimWasCreated = new Promise<void>((resolve) => {
+      claimCreated = resolve;
+    });
+
+    const claimant = attempt(path, {
+      timeoutMs: 2_000,
+      pollMs: 2,
+      staleMs: 60_000,
+      onTakeoverStep: async (step) => {
+        if (step === "yielded") yields += 1;
+        if (step === "claim-created" && ++claims === 1) {
+          claimCreated();
+          await claimantMayResume;
+        }
+      },
+    });
+    await claimWasCreated;
+    // The successor superseded this paused claim and died before it could move the lock.
+    writeFileSync(join(path, higherSlot), ownerJson("crashed-successor", deadPid()));
+    resumeClaimant();
+    const result = await claimant;
+
+    expect({ result, yields, lockExists: existsSync(path) }).toEqual({
+      result: "entered",
+      yields: 1,
+      lockExists: false,
+    });
+  });
+
+  test("a higher slot with no slots below it blocks contenders only while its claimer lives", async () => {
+    const path = lockPath();
+    const slot = join(path, higherSlot);
+    const seed = (claim: string) => {
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, "owner.json"), ownerJson("dead-owner", deadPid()));
+      writeFileSync(slot, claim);
+    };
+    seed(ownerJson("live-successor", process.pid));
+
+    const whileClaimerLives = await attempt(path, { timeoutMs: 50, pollMs: 2 });
+    const claimWhileLive = existsSync(slot) ? readFileSync(slot, "utf8") : null;
+    seed(ownerJson("crashed-successor", deadPid()));
+    const afterCrash = await attempt(path, { timeoutMs: 2_000, pollMs: 2 });
+
+    expect({ whileClaimerLives, claimWhileLive, afterCrash, lockExists: existsSync(path) }).toEqual({
+      whileClaimerLives: "timed out",
+      claimWhileLive: ownerJson("live-successor", process.pid),
+      afterCrash: "entered",
+      lockExists: false,
+    });
+  });
+});
+
 describe("audit: a paused takeover claimant cannot coexist with its successor", () => {
   function gate() {
     let open!: () => void;

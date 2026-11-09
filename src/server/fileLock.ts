@@ -170,6 +170,19 @@ function slotGeneration(file: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/** Where a new claim starts. Lower slots can be missing below an abandoned higher one,
+ * and a claim under that slot would only ever yield to it. */
+async function highestSlot(lockPath: string): Promise<number> {
+  let files: string[];
+  try {
+    files = await readdir(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+  return Math.max(0, ...files.map((file) => slotGeneration(file) ?? 0));
+}
+
 /** Run after the claim is written and before the lock is validated. A claimant only
  * looks abandoned while its claim is unwritten, so it may yet resume: it writes and
  * then looks for a successor, while a successor creates its slot and then re-reads
@@ -205,7 +218,7 @@ async function tryTakeOverDeadLock(
     createdAt: Date.now(),
   };
   let claimFile = TAKEOVER_FILE;
-  let generation = 0;
+  let generation = await highestSlot(lockPath);
   for (; ; generation += 1) {
     claimFile = takeoverSlot(generation);
     const claimPath = join(lockPath, claimFile);
