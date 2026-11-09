@@ -1,5 +1,14 @@
 {% extends "base.html" %}
 
+{#- The home page's nav label is the site name, so the theme's tab title read "ACM - ACM". -#}
+{% block htmltitle %}
+  {% if page.title == config.site_name %}
+    <title>{{ config.site_name }}</title>
+  {% else %}
+    {{ super() }}
+  {% endif %}
+{% endblock %}
+
 {#- Link previews (Open Graph and Twitter cards) for LinkedIn, Slack, X.
     Crawlers need absolute URLs, so the image is joined to site_url
     rather than passed through the relative `url` filter. -#}
