@@ -69,8 +69,16 @@ function parseOwner(value: unknown): FileLockOwner | null {
 }
 
 async function readOwner(lockPath: string, file = OWNER_FILE): Promise<FileLockOwner | null> {
+  let contents: string;
   try {
-    return parseOwner(JSON.parse(await readFile(join(lockPath, file), "utf8")) as unknown);
+    contents = await readFile(join(lockPath, file), "utf8");
+  } catch (error) {
+    // Only a missing file means "no owner": one we cannot read may name a live holder.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    return parseOwner(JSON.parse(contents) as unknown);
   } catch {
     return null;
   }
@@ -120,14 +128,35 @@ function legacyLockIsReclaimable(
   return Date.now() - identity.mtimeMs > staleMs || (pid !== null && !isProcessAlive(pid));
 }
 
-async function removeClaimIfOwned(lockPath: string, token: string): Promise<void> {
-  const claim = await readOwner(lockPath, TAKEOVER_FILE);
-  if (claim?.token !== token) return;
+async function removeFileIfOwned(lockPath: string, file: string, token: string): Promise<void> {
+  const entry = await readOwner(lockPath, file);
+  if (entry?.token !== token) return;
   try {
-    await unlink(join(lockPath, TAKEOVER_FILE));
+    await unlink(join(lockPath, file));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+/** A claimer that crashed never removes its claim. Its slot stays and the next
+ * contender exclusively creates the following one: deleting it instead would race
+ * with a rival's fresh claim, and every slot leaves with the lock directory. */
+function takeoverSlot(generation: number): string {
+  return generation === 0 ? TAKEOVER_FILE : `takeover.${generation}.json`;
+}
+
+async function claimIsAbandoned(
+  lockPath: string,
+  file: string,
+  staleMs: number,
+  isProcessAlive: (pid: number) => boolean,
+): Promise<boolean> {
+  const claim = await readOwner(lockPath, file);
+  if (claim) return !isProcessAlive(claim.pid);
+  // Unparseable: the claimer died between creating the file and writing it, or is
+  // about to write it, so only age can tell.
+  const identity = await lockIdentity(join(lockPath, file));
+  return identity !== null && Date.now() - identity.mtimeMs > staleMs;
 }
 
 async function tryTakeOverDeadLock(
@@ -144,31 +173,32 @@ async function tryTakeOverDeadLock(
     pid: process.pid,
     createdAt: Date.now(),
   };
-  const claimPath = join(lockPath, TAKEOVER_FILE);
-  let claimCreated = false;
-  try {
-    const handle = await open(claimPath, "wx");
-    claimCreated = true;
+  let claimFile = TAKEOVER_FILE;
+  for (let generation = 0; ; generation += 1) {
+    claimFile = takeoverSlot(generation);
+    const claimPath = join(lockPath, claimFile);
+    let claimCreated = false;
     try {
-      await handle.writeFile(JSON.stringify(claim));
-    } finally {
-      await handle.close();
-    }
-  } catch (error) {
-    if (claimCreated) {
+      const handle = await open(claimPath, "wx");
+      claimCreated = true;
       try {
-        await unlink(claimPath);
-      } catch (unlinkError) {
-        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+        await handle.writeFile(JSON.stringify(claim));
+      } finally {
+        await handle.close();
       }
+      break;
+    } catch (error) {
+      if (claimCreated) {
+        try {
+          await unlink(claimPath);
+        } catch (unlinkError) {
+          if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+        }
+      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (!(await claimIsAbandoned(lockPath, claimFile, staleMs, isProcessAlive))) return false;
     }
-    if (
-      (error as NodeJS.ErrnoException).code === "EEXIST" ||
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return false;
-    }
-    throw error;
   }
 
   let moved = false;
@@ -191,7 +221,7 @@ async function tryTakeOverDeadLock(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   } finally {
-    if (!moved) await removeClaimIfOwned(lockPath, token);
+    if (!moved) await removeFileIfOwned(lockPath, claimFile, token);
   }
 }
 
@@ -289,6 +319,7 @@ export async function withFileUpdateLock<T>(
         await writeOwnerFile(join(lockPath, OWNER_FILE), JSON.stringify(owner));
         const currentIdentity = await lockIdentity(lockPath);
         if (!currentIdentity || !sameIdentity(currentIdentity, setupIdentity)) {
+          await removeFileIfOwned(lockPath, OWNER_FILE, token);
           throw new Error(`ACM ${label} lock changed owner during setup`);
         }
         acquiredIdentity = currentIdentity;
