@@ -105,14 +105,21 @@ function isDecisionTarget(value: unknown): value is DecisionTarget {
   );
 }
 
+/** Exactly what createDecisionEvent stamps. Date.parse alone also takes "foo 12"
+ * and 31 February, neither of which any ACM producer can have written. */
+function isCanonicalTimestamp(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
 export function isDecisionEvent(value: unknown): value is DecisionEvent {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
   return (
     typeof event.id === "string" &&
-    event.id.length > 0 &&
-    typeof event.timestamp === "string" &&
-    Number.isFinite(Date.parse(event.timestamp)) &&
+    event.id.trim().length > 0 &&
+    isCanonicalTimestamp(event.timestamp) &&
     typeof event.action === "string" &&
     ACTIONS.has(event.action) &&
     typeof event.actor === "string" &&

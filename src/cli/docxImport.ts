@@ -6,7 +6,7 @@ import {
 } from "@xmldom/xmldom";
 import { strFromU8, unzipSync } from "fflate";
 import { resolve } from "node:path";
-import { formatComment as formatCriticComment } from "../lib/criticmarkup";
+import { formatComment as formatCriticComment, wrappableSpan } from "../lib/criticmarkup";
 
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -181,7 +181,9 @@ function parseComments(xml?: string): Map<string, ImportedComment> {
     const body = wordElements(comment, "p")
       .map(textWithin)
       .join("\n\n");
-    comments.set(wordAttribute(comment, "id"), {
+    const id = wordAttribute(comment, "id");
+    if (comments.has(id)) throw new Error(`word/comments.xml: duplicate comment id ${id}`);
+    comments.set(id, {
       author: wordAttribute(comment, "author"),
       body,
     });
@@ -189,8 +191,10 @@ function parseComments(xml?: string): Map<string, ImportedComment> {
   return comments;
 }
 
-function formatComment(comment: ImportedComment | undefined): string {
-  return formatCriticComment(comment?.author ?? "", comment?.body ?? "");
+function formatComment(comments: Map<string, ImportedComment>, id: string): string {
+  const comment = comments.get(id);
+  if (!comment) throw new Error(`comment ${id} has no entry in word/comments.xml`);
+  return formatCriticComment(comment.author, comment.body);
 }
 
 function directWordChild(element: XmlElement, name: string): XmlElement | undefined {
@@ -213,11 +217,12 @@ function paragraphPrefix(paragraph: XmlElement): string {
   return `${"  ".repeat(depth)}- `;
 }
 
+type TrackedMarker = readonly [open: string, close: string];
+const INSERTION: TrackedMarker = ["{++", "++}"];
+const DELETION: TrackedMarker = ["{--", "--}"];
+
 function balancedTrackedChanges(span: string): boolean {
-  for (const [open, close] of [
-    ["{++", "++}"],
-    ["{--", "--}"],
-  ] as const) {
+  for (const [open, close] of [INSERTION, DELETION]) {
     let depth = 0;
     for (let i = 0; i < span.length - 2; ) {
       if (span.startsWith(open, i)) {
@@ -258,12 +263,65 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
   const unsafeComments = new Set<string>();
   let commentCount = 0;
   let highlightCount = 0;
-  let trackedChangeDepth = 0;
+  const placedComments = new Set<string>();
+  const tracked: TrackedMarker[] = [];
+  let openingIndex = -1;
   const deferredNotes: string[] = [];
 
   const flushDeferredNotes = (): void => {
-    if (trackedChangeDepth !== 0) return;
+    if (tracked.length !== 0) return;
     for (const note of deferredNotes.splice(0)) tokens.push({ kind: "text", value: note });
+  };
+
+  const openTracked = (): void => {
+    const marker = tracked.at(-1);
+    if (!marker) return;
+    openingIndex = tokens.length;
+    tokens.push({ kind: "text", value: marker[0] });
+  };
+
+  // A suggestion can hold neither a paragraph break nor another suggestion, and
+  // a revision marker with nothing inside it (a tracked paragraph mark or table
+  // row) is not a suggestion at all.
+  const closeTracked = (): void => {
+    const marker = tracked.at(-1);
+    if (!marker) return;
+    if (tokens.length - 1 === openingIndex) tokens.pop();
+    else tokens.push({ kind: "text", value: marker[1] });
+  };
+
+  // Line breaks can make a blank line mid-suggestion, which the grammar rejects
+  // just as it rejects a paragraph break, so the suggestion splits around it.
+  const pushText = (value: string): void => {
+    tokens.push({ kind: "text", value });
+    if (tracked.length === 0 || !value.includes("\n")) return;
+    const text = tokens
+      .slice(openingIndex + 1)
+      .map((token) => (token.kind === "text" ? token.value : ""))
+      .join("");
+    const blankLine = /[ \t\r]*\n(?:[ \t\r]*\n)+/.exec(text);
+    if (!blankLine) return;
+    // The collapse below moves every token after the opener, so a range that
+    // starts there has lost its position and can only be a point comment.
+    for (const [id, start] of openComments) if (start > openingIndex) unsafeComments.add(id);
+    tokens.length = openingIndex + 1;
+    if (blankLine.index > 0) tokens.push({ kind: "text", value: text.slice(0, blankLine.index) });
+    closeTracked();
+    tokens.push({ kind: "text", value: blankLine[0] });
+    openTracked();
+    const rest = text.slice(blankLine.index + blankLine[0].length);
+    if (rest) pushText(rest);
+  };
+
+  const walkTracked = (element: XmlElement, marker: TrackedMarker): void => {
+    closeTracked();
+    tracked.push(marker);
+    openTracked();
+    walk(element);
+    closeTracked();
+    tracked.pop();
+    openTracked();
+    flushDeferredNotes();
   };
 
   const walk = (node: XmlNode): void => {
@@ -273,24 +331,24 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
       switch (element.localName) {
         case "p":
           walk(element);
+          closeTracked();
           tokens.push({ kind: "paragraph", prefix: paragraphPrefix(element) });
+          openTracked();
           break;
         case "ins":
-          tokens.push({ kind: "text", value: "{++" });
-          trackedChangeDepth++;
-          walk(element);
-          trackedChangeDepth--;
-          tokens.push({ kind: "text", value: "++}" });
-          flushDeferredNotes();
+        case "moveTo":
+          walkTracked(element, INSERTION);
           break;
         case "del":
-          tokens.push({ kind: "text", value: "{--" });
-          trackedChangeDepth++;
-          walk(element);
-          trackedChangeDepth--;
-          tokens.push({ kind: "text", value: "--}" });
-          flushDeferredNotes();
+        case "moveFrom":
+          walkTracked(element, DELETION);
           break;
+        case "AlternateContent": {
+          // These are alternative renderings of one thing: a renderer shows only one.
+          const rendering = directWordChild(element, "Choice") ?? directWordChild(element, "Fallback");
+          if (rendering) walk(rendering);
+          break;
+        }
         case "commentRangeStart":
           if (!openComments.has(wordAttribute(element, "id"))) {
             const id = wordAttribute(element, "id");
@@ -303,16 +361,16 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
           break;
         case "commentRangeEnd": {
           const id = wordAttribute(element, "id");
+          if (placedComments.has(id)) break;
+          placedComments.add(id);
           const start = openComments.get(id);
-          const note = formatComment(comments.get(id));
-          if (start === undefined) {
-            tokens.push({ kind: "text", value: note });
-          } else if (unsafeComments.has(id)) {
+          const note = formatComment(comments, id);
+          if (start === undefined || unsafeComments.has(id)) {
             openComments.delete(id);
             unsafeComments.delete(id);
-            if (trackedChangeDepth > 0) deferredNotes.push(note);
+            if (tracked.length > 0) deferredNotes.push(note);
             else tokens.push({ kind: "text", value: note });
-          } else if (trackedChangeDepth > 0) {
+          } else if (tracked.length > 0) {
             openComments.delete(id);
             deferredNotes.push(note);
           } else {
@@ -327,10 +385,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
             const span = anchor
               .map((token) => (token.kind === "text" ? token.value : "\n\n"))
               .join("");
-            const anchored = Boolean(span.trim())
-              && balancedTrackedChanges(span)
-              && !span.includes("{==")
-              && !span.includes("{>>");
+            const anchored = balancedTrackedChanges(span) && wrappableSpan(span, 0, span.length);
             tokens.splice(start, tokens.length - start, ...kept, {
               kind: "text",
               value: anchored ? `{==${span}==}${note}` : `${span}${note}`,
@@ -342,14 +397,17 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
         }
         case "t":
         case "delText":
-          tokens.push({ kind: "text", value: element.textContent ?? "" });
+          pushText(element.textContent ?? "");
           break;
         case "tab":
           tokens.push({ kind: "text", value: "\t" });
           break;
+        case "noBreakHyphen":
+          tokens.push({ kind: "text", value: "\u2011" });
+          break;
         case "br":
         case "cr":
-          tokens.push({ kind: "text", value: "\n" });
+          pushText("\n");
           break;
         default:
           walk(element);
@@ -360,9 +418,11 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
 
   // Malformed exports occasionally omit a range end. Keep the prose untouched
   // and preserve the comment as an unanchored point at EOF instead of allowing
-  // an open range to consume the rest of the document.
-  for (const id of openComments.keys()) {
-    tokens.push({ kind: "text", value: formatComment(comments.get(id)) });
+  // an open range to consume the rest of the document. A comment with no range
+  // at all (a bare w:commentReference, or nothing) lands there too.
+  for (const id of new Set([...openComments.keys(), ...comments.keys()])) {
+    if (placedComments.has(id)) continue;
+    tokens.push({ kind: "text", value: formatComment(comments, id) });
     commentCount++;
   }
 
@@ -376,6 +436,7 @@ export function convertDocx(bytes: Uint8Array): DocxImportResult {
     }
   }
   if (current.trim()) paragraphs.push(current.trimEnd());
+  if (paragraphs.length === 0) throw new Error("document has no text to import");
 
   return {
     markdown: `${paragraphs.join("\n\n")}\n`,
