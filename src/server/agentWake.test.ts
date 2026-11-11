@@ -150,6 +150,20 @@ describe("roborev round 1 (#34)", () => {
     ]);
   });
 
+  test("identical opening comments on two spans: resolve one, ask the other, one look (roborev round 4)", () => {
+    const two = "A {==first span==}{>>@claude: tighten?<<} and {==second span==}{>>@claude: tighten?<<}.\n";
+    const askA = two.replace("tighten?<<} and", "tighten?<<}{>>@Luis: please suggest an edit<<} and");
+    const wake = new AgentWake(summary(two));
+    expect(wake.detect(summary(askA), false)).toHaveLength(1);
+    const swapped = two
+      .replace("{==first span==}{>>@claude: tighten?<<}", "first span")
+      .replace("tighten?<<}.", "tighten?<<}{>>@Luis: please suggest an edit<<}.");
+    const [thread] = summary(swapped).filter((t) => t.anchor === "second span");
+    expect(wake.detect(summary(swapped), false)).toEqual([
+      { event: "ask", threadId: thread.id, author: "Luis", anchor: "second span" },
+    ]);
+  });
+
   test("a line without an author name still reads", () => {
     expect(formatWakeLine({ event: "comment", threadId: "ab", author: "", anchor: "x" })).toBe('acm: comment #ab (no name) "x"');
   });
