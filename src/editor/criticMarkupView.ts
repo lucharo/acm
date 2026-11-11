@@ -8,8 +8,9 @@
 //   • inline ✓ / ✗ AcceptRejectWidget after each suggestion (ins/del/sub).
 //   • a clickable 💬 CommentAnchorWidget that REPLACES (hides) the raw comment
 //     markup — stacked comments produce several adjacent bubbles in a row.
-//   • atomicRanges over the hidden comment markup so the cursor skips it and
-//     backspace removes the whole construct, not half a delimiter.
+//   • atomicRanges over the hidden markup so the cursor skips it, and
+//     criticEditing (keymap + guard) so Backspace/Delete there edit the visible
+//     text instead of removing a comment or half a construct.
 //
 // Overlap rule (CRITICAL): MARK decorations and REPLACE/WIDGET decorations over
 // the same/adjacent ranges must live in SEPARATE RangeSetBuilders or they crash.
@@ -36,6 +37,7 @@ import type { CommentToken } from "../lib/types";
 import type { SuggestCard } from "../lib/criticmarkup";
 import { appendRichBlocks } from "./richMarkdown";
 import { standaloneInsertionTokens } from "./standaloneInsertion";
+import { criticEditing, hiddenCriticSpans } from "./criticEditing";
 
 // ── Active / seen highlight state (App → editor bridge) ───────────────────────
 // App tells the editor which comment-anchor highlights are ACTIVE (selected) or
@@ -767,55 +769,20 @@ const standaloneInsertionPreviewField = StateField.define<DecorationSet>({
 });
 
 // ── Atomic ranges over hidden markup ──────────────────────────────────────────
-// Goal: the cursor never lands inside HIDDEN markup, and Backspace/Delete never
-// leaves a half-deleted construct — WITHOUT preventing you from selecting or
-// double-clicking the visible inner text (full-construct atomicity broke that).
-//
-// So: comments (replaced by the 💬 dot, no editable interior) are atomic as a
-// whole; suggestion/highlight DELIMITERS are atomic (cursor skips the hidden
-// braces, inner text stays selectable/editable). The remaining hole — Backspace at
-// the inner edge deleting a lone delimiter — is closed by criticEditKeymap below,
-// which removes the WHOLE construct at a delimiter boundary instead.
-
-const HIDDEN_DELIM_NODES = new Set<string>([
-  "CMInsertOpen",
-  "CMInsertClose",
-  "CMDeleteOpen",
-  "CMDeleteClose",
-  // Single nesting-aware highlight delimiter (both `{==` and `==}`).
-  "CMHighlightMark",
-  "CMSubOpen",
-  "CMSubClose",
-  "CMSubArrow",
-]);
+// The caret never lands inside HIDDEN markup, while the visible inner text of a
+// suggestion or highlight stays selectable (full-construct atomicity broke
+// double-click). Comments (replaced by the marker, no editable interior) are
+// atomic whole; suggestion/highlight DELIMITERS are atomic; adjacent pieces merge
+// (hiddenCriticSpans). What Backspace/Delete and other edits do at those
+// boundaries is criticEditing.ts: they edit the visible text, never half a
+// construct and never a comment by accident.
 
 const criticAtomicRanges = EditorView.atomicRanges.of((view): RangeSet<Decoration> => {
-  const ranges: Range<Decoration>[] = [];
   const filler = Decoration.replace({});
-  const standaloneInsertions = new Set(
-    standaloneInsertionTokens(view.state).map((token) => token.from),
-  );
-  for (const { from: vFrom, to: vTo } of view.visibleRanges) {
-    syntaxTree(view.state).iterate({
-      from: vFrom,
-      to: vTo,
-      enter: (node) => {
-        if (node.name === "CMInsert" && standaloneInsertions.has(node.from)) return false;
-        if (node.name === "CMComment") {
-          ranges.push(filler.range(node.from, node.to));
-          return false; // whole comment is atomic (no editable interior)
-        }
-        if (HIDDEN_DELIM_NODES.has(node.name)) {
-          ranges.push(filler.range(node.from, node.to)); // hidden delimiter — skip over
-          return false;
-        }
-        return;
-      },
-    });
-  }
-  ranges.sort((a, b) => a.from - b.from);
   const builder = new RangeSetBuilder<Decoration>();
-  for (const r of ranges) builder.add(r.from, r.to, r.value);
+  for (const { from, to } of view.visibleRanges) {
+    for (const span of hiddenCriticSpans(view.state, from, to)) builder.add(span.from, span.to, filler);
+  }
   return builder.finish();
 });
 
@@ -838,5 +805,6 @@ export function criticMarkupExtension(): Extension {
     markPlugin,
     widgetPlugin,
     criticAtomicRanges,
+    criticEditing(),
   ];
 }
