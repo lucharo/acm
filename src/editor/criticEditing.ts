@@ -5,15 +5,18 @@
 // at the visible end of a commented word removed the comment, and Backspace just
 // inside a delimiter removed that delimiter alone, breaking the markup (#43).
 //
-// Two rules fix that:
-//   • criticDeleteKeymap: Backspace / Delete (and the word and line variants)
-//     at the edge of a hidden run hop over the run first, then delete as usual,
-//     so they edit the visible text. Deleting a comment stays explicit: Resolve
-//     on its card, or a selection that covers its marker.
+// Three rules fix that:
+//   • criticDeleteKeymap: Backspace / Delete and the word deletes at the edge of
+//     a hidden run hop over the run first, then delete as usual, so they edit
+//     the visible text. Line deletes take everything visible to the line edge,
+//     markers included. Otherwise deleting a comment stays explicit: Resolve on
+//     its card, or a selection that covers its marker.
 //   • criticEditGuard: a user edit that covers PART of a construct keeps the
-//     construct's delimiters (and a highlight's comments), deleting only the
-//     visible text it covers; a construct whose text it empties goes, except
-//     that a highlight's comments stay behind as point comments.
+//     construct's delimiters (and a highlight's comments, when it touches the
+//     highlighted text), deleting only the visible text it covers; a construct
+//     left with no visible text goes, its comments staying as point comments.
+//   • criticClipboardFilter: copy, cut and drag carry the same visible text, so
+//     pasting or dropping it never brings a stray `==}` or a duplicate comment.
 // Edits without a user event (accept/reject, remote writes) pass through.
 
 import { syntaxTree } from "@codemirror/language";
@@ -26,7 +29,11 @@ import {
   deleteGroupForward,
   deleteLineBoundaryBackward,
   deleteLineBoundaryForward,
+  deleteToLineEnd,
+  deleteToLineStart,
+  standardKeymap,
 } from "@codemirror/commands";
+import { deleteMarkupBackward } from "@codemirror/lang-markdown";
 import { EditorView, keymap } from "@codemirror/view";
 import type { Command } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
@@ -89,6 +96,13 @@ function hopHidden(state: EditorState, pos: number, forward: boolean): number {
   }
 }
 
+interface DeleteKind {
+  /** Which way to hop over the hidden run at the caret before deleting. */
+  hopForward: boolean;
+  /** Leave the caret where it was (Delete) rather than where the deletion was. */
+  keepCaret: boolean;
+}
+
 /**
  * Run a CodeMirror delete command as if the caret stood on the far side of the
  * hidden run it touches. The command sees a stand-in view (the real view's
@@ -96,13 +110,13 @@ function hopHidden(state: EditorState, pos: number, forward: boolean): number {
  * it keeps its own unit logic and atomic-range handling; its changes, which
  * refer to the same document, are then dispatched once on the real view.
  */
-function overHidden(command: Command, forward: boolean): Command {
+function overHidden(command: Command, kind: DeleteKind): Command {
   return (view) => {
     const { state } = view;
     if (state.readOnly || state.selection.ranges.length !== 1) return false;
     const main = state.selection.main;
     if (!main.empty) return false;
-    const hopped = hopHidden(state, main.head, forward);
+    const hopped = hopHidden(state, main.head, kind.hopForward);
     if (hopped === main.head) return false;
 
     let captured: Transaction | null = null;
@@ -117,8 +131,7 @@ function overHidden(command: Command, forward: boolean): Command {
     if (!tr) return true;
     view.dispatch({
       changes: tr.changes,
-      // Backspace leaves the caret where the letter was; Delete leaves it put.
-      selection: forward ? EditorSelection.cursor(tr.changes.mapPos(main.head, -1)) : tr.selection,
+      selection: kind.keepCaret ? EditorSelection.cursor(tr.changes.mapPos(main.head, -1)) : tr.selection,
       userEvent: tr.annotation(Transaction.userEvent),
       scrollIntoView: true,
     });
@@ -126,20 +139,43 @@ function overHidden(command: Command, forward: boolean): Command {
   };
 }
 
-// Highest precedence: markdown()'s own Backspace binding sits at Prec.high.
-const criticDeleteKeymap = Prec.highest(keymap.of([
-  { key: "Backspace", run: overHidden(deleteCharBackward, false), shift: overHidden(deleteCharBackward, false) },
-  { key: "Delete", run: overHidden(deleteCharForward, true) },
-  { key: "Mod-Backspace", mac: "Alt-Backspace", run: overHidden(deleteGroupBackward, false) },
-  { key: "Mod-Delete", mac: "Alt-Delete", run: overHidden(deleteGroupForward, true) },
-  { mac: "Mod-Backspace", run: overHidden(deleteLineBoundaryBackward, false) },
-  { mac: "Mod-Delete", run: overHidden(deleteLineBoundaryForward, true) },
-]));
+// At the start of a list item or quote whose text opens with hidden markup,
+// Backspace removes the list or quote marker, as markdown() does elsewhere.
+const backspace: Command = (view) => deleteMarkupBackward(view) || deleteCharBackward(view);
+
+const DELETES = new Map<Command, [Command, DeleteKind]>([
+  [deleteCharBackward, [backspace, { hopForward: false, keepCaret: false }]],
+  [deleteCharForward, [deleteCharForward, { hopForward: true, keepCaret: true }]],
+  [deleteGroupBackward, [deleteGroupBackward, { hopForward: false, keepCaret: false }]],
+  [deleteGroupForward, [deleteGroupForward, { hopForward: true, keepCaret: true }]],
+  // A line delete takes everything visible up to the line edge, so it hops the
+  // OTHER way: the run at the caret goes with the line, and a caret on either
+  // side of a hidden `{==` deletes the same thing.
+  [deleteLineBoundaryBackward, [deleteLineBoundaryBackward, { hopForward: true, keepCaret: false }]],
+  [deleteLineBoundaryForward, [deleteLineBoundaryForward, { hopForward: false, keepCaret: false }]],
+  [deleteToLineStart, [deleteToLineStart, { hopForward: true, keepCaret: false }]],
+  [deleteToLineEnd, [deleteToLineEnd, { hopForward: false, keepCaret: false }]],
+]);
+
+// Every delete binding CodeMirror ships (Backspace, Delete, the word and line
+// variants, the macOS Ctrl-H / Ctrl-D / Ctrl-K aliases), wrapped. Highest
+// precedence: markdown()'s own Backspace binding sits at Prec.high.
+const criticDeleteKeymap = Prec.highest(
+  keymap.of(
+    standardKeymap.flatMap((binding) => {
+      const entry = binding.run ? DELETES.get(binding.run) : undefined;
+      if (!entry) return [];
+      const run = overHidden(...entry);
+      return [{ ...binding, run, shift: binding.shift === binding.run ? run : binding.shift }];
+    }),
+  ),
+);
 
 // ── The guard ─────────────────────────────────────────────────────────────────
 
 const CONSTRUCT_NODES = new Set(["CMInsert", "CMDelete", "CMSubstitute", "CMHighlight", "CMComment"]);
-const GUARDED_EVENTS = ["delete", "input.type", "input.paste", "input.drop", "move.drop"];
+// "input" covers typing, paste, drop and Enter over a selection.
+const GUARDED_EVENTS = ["delete", "input", "move.drop"];
 
 interface Construct {
   /** The construct itself: `{==word==}`, `{++text++}`, `{>>note<<}`… */
@@ -196,7 +232,65 @@ function subtract(range: Span, holes: Span[]): Span[] {
       return out;
     });
   }
-  return pieces;
+  return pieces.filter((p) => p.to > p.from);
+}
+
+/**
+ * What deleting `deletions` (typing at `inserts`) really removes once no
+ * construct may lose part of its markup: `removed` is the visible text taken,
+ * `cleanup` the delimiters of constructs left empty.
+ */
+function planEdit(state: EditorState, deletions: Span[], inserts: number[]): { removed: Span[]; cleanup: Span[] } {
+  const constructs = new Map<string, Construct>();
+  const tree = syntaxTree(state);
+  for (const del of deletions) {
+    tree.iterate({
+      from: del.from,
+      to: del.to,
+      enter: (ref) => {
+        if (!CONSTRUCT_NODES.has(ref.name) || !overlaps(ref, del)) return;
+        const construct = constructOf(ref.node);
+        if (construct) constructs.set(`${construct.node.from}:${construct.node.to}`, construct);
+      },
+    });
+  }
+
+  // A construct is cut when an edit reaches into it without taking all of it
+  // (for a highlight: the highlight plus its comments). A cut construct keeps
+  // its delimiters; a highlight keeps its comments too when the edit touches its
+  // word, so a selection over only the marker still deletes the comment.
+  const cut = [...constructs.values()].filter((c) =>
+    deletions.some((d) => overlaps(d, c.node)) && !deletions.some((d) => contains(d, c.unit)),
+  );
+  const touchesText = (c: Construct) => deletions.some((d) => c.inner.some((part) => overlaps(d, part)));
+  const keep = cut.flatMap((c) => (touchesText(c) ? [...c.delims, ...c.comments] : c.delims));
+  const removed = deletions.flatMap((d) => subtract(d, keep));
+
+  // A cut construct left with no visible text, and nothing typed into it, goes
+  // too; comments inside or after it stay, as point comments. Innermost first,
+  // so an outer highlight whose only content was an emptied one goes as well.
+  const commentsIn = (part: Span): Span[] => {
+    const found: Span[] = [];
+    tree.iterate({
+      from: part.from,
+      to: part.to,
+      enter: (ref) => {
+        if (ref.name === "CMComment" && contains(part, ref)) found.push({ from: ref.from, to: ref.to });
+      },
+    });
+    return found;
+  };
+  const gone = [...removed];
+  const cleanup: Span[] = [];
+  for (const c of [...cut].sort((a, b) => a.node.to - a.node.from - (b.node.to - b.node.from))) {
+    if (!c.inner.length) continue;
+    if (inserts.some((pos) => c.inner.some((part) => part.from <= pos && pos <= part.to))) continue;
+    if (c.inner.every((part) => subtract(part, [...gone, ...commentsIn(part)]).length === 0)) {
+      gone.push(...c.delims);
+      cleanup.push(...c.delims);
+    }
+  }
+  return { removed, cleanup };
 }
 
 /**
@@ -214,57 +308,30 @@ export function guardCriticEdit(tr: Transaction): TransactionSpec | null {
   });
   const deletions = edits.map((e) => e.del).filter((d) => d.to > d.from);
   if (!deletions.length) return null;
-
-  const constructs = new Map<string, Construct>();
-  const tree = syntaxTree(start);
-  for (const del of deletions) {
-    tree.iterate({
-      from: del.from,
-      to: del.to,
-      enter: (ref) => {
-        if (!CONSTRUCT_NODES.has(ref.name) || !overlaps(ref, del)) return;
-        const construct = constructOf(ref.node);
-        if (construct) constructs.set(`${construct.node.from}:${construct.node.to}`, construct);
-      },
-    });
-  }
-
-  // A construct is cut when an edit reaches into it without taking all of it.
-  // A highlight counts as cut when its word is touched and its comments are not
-  // all taken with it; a selection over only its marker deletes just the comment.
-  const cut = [...constructs.values()].filter((c) =>
-    deletions.some((d) => overlaps(d, c.node)) && !deletions.some((d) => contains(d, c.unit)),
-  );
-  const keep = cut.flatMap((c) => [...c.delims, ...c.comments]);
-  const removed = deletions.flatMap((d) => subtract(d, keep));
-  const inserts = edits.filter((e) => e.insert).map((e) => e.del.from);
-
-  // A cut construct whose visible text is all gone, with nothing typed into it,
-  // goes too; a highlight's comments stay, as point comments.
-  const emptied = cut.filter(
-    (c) =>
-      c.inner.length > 0 &&
-      c.inner.every((part) => part.from === part.to || removed.some((r) => contains(r, part))) &&
-      !inserts.some((pos) => c.inner.some((part) => part.from <= pos && pos <= part.to)),
-  );
-  const cleanup = emptied.flatMap((c) => c.delims);
+  const inserted = edits.filter((e) => e.insert).map((e) => ({ from: e.del.from, insert: e.insert }));
+  const { removed, cleanup } = planEdit(start, deletions, inserted.map((e) => e.from));
 
   const changedShape = removed.length !== deletions.length ||
     removed.some((r, i) => r.from !== deletions[i]!.from || r.to !== deletions[i]!.to);
   if (!changedShape && !cleanup.length) return null;
 
-  const changes: ChangeSpec[] = [
-    ...[...removed, ...cleanup].map((r) => ({ from: r.from, to: r.to })),
-    ...edits.filter((e) => e.insert).map((e) => ({ from: e.del.from, insert: e.insert })),
-  ];
+  const changes: ChangeSpec[] = [...[...removed, ...cleanup].map((r) => ({ from: r.from, to: r.to })), ...inserted];
   const changeSet = start.changes(changes);
-  const main = start.selection.main;
-  // The caret ends where the edit began, after anything typed there.
-  const caret = Math.min(main.from, ...edits.map((e) => e.del.from));
-  const typed = edits.find((e) => e.insert && e.del.from === caret)?.insert.length ?? 0;
+  let selection: EditorSelection;
+  const drop = tr.isUserEvent("move.drop") ? inserted[0] : undefined;
+  if (drop) {
+    // The dropped text ends up selected, as CodeMirror leaves it.
+    const at = changeSet.mapPos(drop.from, -1);
+    selection = EditorSelection.single(at, at + drop.insert.length);
+  } else {
+    // The caret ends where the edit began, after anything typed there.
+    const caret = Math.min(start.selection.main.from, ...edits.map((e) => e.del.from));
+    const typed = edits.find((e) => e.insert && e.del.from === caret)?.insert.length ?? 0;
+    selection = EditorSelection.single(typed ? changeSet.mapPos(caret, -1) + typed : changeSet.mapPos(caret, 1));
+  }
   return {
     changes: changeSet,
-    selection: EditorSelection.cursor(typed ? changeSet.mapPos(caret, -1) + typed : changeSet.mapPos(caret, 1)),
+    selection,
     effects: tr.effects,
     userEvent: tr.annotation(Transaction.userEvent),
     scrollIntoView: tr.scrollIntoView,
@@ -273,7 +340,16 @@ export function guardCriticEdit(tr: Transaction): TransactionSpec | null {
 
 const criticEditGuard = EditorState.transactionFilter.of((tr) => guardCriticEdit(tr) ?? tr);
 
-/** Keymap + guard; part of the rich view only, so source mode edits raw text. */
+// Copy, cut and drag of a selection carry what a cut would remove: the visible
+// text, plus any construct the selection covers whole.
+const criticClipboardFilter = EditorView.clipboardOutputFilter.of((text, state) => {
+  const { main } = state.selection;
+  if (state.selection.ranges.length !== 1 || main.empty || state.sliceDoc(main.from, main.to) !== text) return text;
+  const { removed } = planEdit(state, [{ from: main.from, to: main.to }], []);
+  return removed.map((r) => state.sliceDoc(r.from, r.to)).join("");
+});
+
+/** Keymap, guard and clipboard filter; rich view only, so source mode edits raw text. */
 export function criticEditing(): Extension {
-  return [criticDeleteKeymap, criticEditGuard];
+  return [criticDeleteKeymap, criticEditGuard, criticClipboardFilter];
 }

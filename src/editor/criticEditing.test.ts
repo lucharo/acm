@@ -66,6 +66,14 @@ function type(view: FakeView, text: string): void {
   view.state = tr.state;
 }
 
+// The text CodeMirror puts on the clipboard or in a drag for the selection.
+function copied(view: FakeView): string {
+  const { from, to } = view.state.selection.main;
+  return view.state
+    .facet(EditorView.clipboardOutputFilter)
+    .reduce((text, filter) => filter(text, view.state), view.state.sliceDoc(from, to));
+}
+
 function after(doc: string, needle: string): number {
   const at = doc.indexOf(needle);
   if (at < 0) throw new Error(`fixture lacks ${needle}`);
@@ -115,6 +123,14 @@ describe("deleting at the visible edge of a commented word", () => {
     expect(view.state.selection.main.head).toBe(before(COMMENTED, "==}"));
   });
 
+  test("the macOS Ctrl-H alias behaves like Backspace", () => {
+    const view = editor(COMMENTED, after(COMMENTED, "<<}"));
+
+    press(view, "Ctrl-h");
+
+    expect(view.state.doc.toString()).toBe("See {==wor==}{>>@luis: note<<} here");
+  });
+
   test("Backspace at the start of the document leaves the markup alone", () => {
     const doc = "{==word==}{>>@luis: note<<}";
     const view = editor(doc, after(doc, "{=="));
@@ -160,6 +176,15 @@ describe("deleting at the visible edge of a commented word", () => {
     expect(view.state.doc.toString()).toBe("A  b");
   });
 
+  test("Backspace at the start of a list item that opens with a highlight removes the list marker", () => {
+    const doc = "- {==w==}{>>@a: x<<} z";
+    const view = editor(doc, after(doc, "{=="));
+
+    press(view, "Backspace");
+
+    expect(view.state.doc.toString()).toBe("{==w==}{>>@a: x<<} z");
+  });
+
   test("source mode keeps raw Backspace: the closing brace goes", () => {
     const view = editor(COMMENTED, after(COMMENTED, "<<}"), false);
 
@@ -193,6 +218,68 @@ describe("other edits that cross hidden markup", () => {
 
     expect(view.state.doc.toString()).toBe("SeX{==rd==}{>>@luis: note<<} here");
     expect(view.state.selection.main.head).toBe(3);
+  });
+
+  test("selecting the comment marker and pressing Backspace deletes the comment, keeping the highlight", () => {
+    const view = editor(COMMENTED, { anchor: before(COMMENTED, "==}"), head: after(COMMENTED, "<<}") });
+
+    press(view, "Backspace");
+
+    expect(view.state.doc.toString()).toBe("See {==word==} here");
+  });
+
+  test("dragging part of a commented word elsewhere moves only its visible text", () => {
+    const doc = COMMENTED + ". Tail";
+    const from = after(doc, "{==wo");
+    const to = after(doc, "<<} he");
+    const view = editor(doc, { anchor: from, head: to });
+
+    const dragged = copied(view);
+    view.state = view.state.update({
+      changes: [{ from, to }, { from: doc.length, insert: dragged }],
+      selection: EditorSelection.range(doc.length - (to - from), doc.length - (to - from) + dragged.length),
+      userEvent: "move.drop",
+    }).state;
+
+    const text = view.state.doc.toString();
+    expect(text).toBe("See {==wo==}{>>@luis: note<<}re. Tailrd he");
+    const { from: selFrom, to: selTo } = view.state.selection.main;
+    expect(text.slice(selFrom, selTo)).toBe("rd he");
+  });
+
+  test("emptying a nested commented word keeps both comments as point comments", () => {
+    const doc = "A {=={==x==}{>>@a: note<<}==}{>>@b: reply<<} b";
+    const view = editor(doc, after(doc, "{=={==x"));
+
+    press(view, "Backspace");
+
+    expect(view.state.doc.toString()).toBe("A {>>@a: note<<}{>>@b: reply<<} b");
+    expect(view.state.selection.main.head).toBe(2);
+  });
+
+  test("cutting part of a commented word puts only its visible text on the clipboard", () => {
+    const view = editor(COMMENTED, { anchor: after(COMMENTED, "{==wo"), head: after(COMMENTED, "<<} he") });
+
+    const clipboard = copied(view);
+    const { from, to } = view.state.selection.main;
+    view.state = view.state.update({ changes: { from, to }, userEvent: "delete.cut" }).state;
+
+    expect(clipboard).toBe("rd he");
+    expect(view.state.doc.toString()).toBe("See {==wo==}{>>@luis: note<<}re");
+  });
+
+  test("copying a whole commented word keeps its markup", () => {
+    const view = editor(COMMENTED, { anchor: before(COMMENTED, "{=="), head: after(COMMENTED, "<<}") });
+
+    expect(copied(view)).toBe("{==word==}{>>@luis: note<<}");
+  });
+
+  test("Enter over a selection that crosses the comment keeps the markup", () => {
+    const view = editor(COMMENTED, { anchor: after(COMMENTED, "{==wo"), head: after(COMMENTED, "<<} he") });
+
+    view.state = view.state.update(view.state.replaceSelection("\n"), { userEvent: "input" }).state;
+
+    expect(view.state.doc.toString()).toBe("See {==wo\n==}{>>@luis: note<<}re");
   });
 
   test("an edit with no user event (an accept, a remote write) passes through untouched", () => {
