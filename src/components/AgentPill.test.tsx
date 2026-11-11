@@ -12,15 +12,32 @@ const status = (listening: number, comments: number, editRequests: number): Agen
 
 describe("agentPillLabels", () => {
   test("before the first status read it claims nothing", () => {
-    expect(agentPillLabels(null)).toEqual({ listening: false, status: "Agent", send: "Nothing to send", canSend: false });
+    expect(agentPillLabels(null)).toEqual({
+      listening: false,
+      status: "Agent",
+      send: "Nothing to send",
+      canSend: false,
+      sendTitle: "No agent is listening: start one with acm edit <file.md> --notify",
+    });
   });
 
-  test("no listener, work waiting", () => {
+  test("no listener: Send is off and says how to start one, even with work waiting", () => {
     expect(agentPillLabels(status(0, 2, 1))).toEqual({
       listening: false,
       status: "No agent listening",
       send: "Send 3 to agent",
+      canSend: false,
+      sendTitle: "No agent is listening: start one with acm edit <file.md> --notify",
+    });
+  });
+
+  test("an agent listening with work waiting: Send is on", () => {
+    expect(agentPillLabels(status(1, 1, 0))).toEqual({
+      listening: true,
+      status: "Agent listening",
+      send: "Send 1 to agent",
       canSend: true,
+      sendTitle: "Send the comments waiting on the agent as one message",
     });
   });
 
@@ -30,6 +47,7 @@ describe("agentPillLabels", () => {
       status: "Agent listening",
       send: "Nothing to send",
       canSend: false,
+      sendTitle: "Nothing new to send to the agent",
     });
   });
 

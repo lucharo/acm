@@ -44,11 +44,11 @@ Comments can share a group too (an agent writes them with `acm comment --group <
 - **Reply** adds a comment to the thread. **Suggest edit** on a thread proposes new wording for its span.
 - **Mark seen** records that you have read a thread. Agents see the same seen state in `acm threads`.
 - **Resolve** removes the whole thread, comments and anchor markup, keeps the prose and moves to the next card. A resolved thread is gone from the file; [history](#undo-and-history) still has it.
-- **Ask agent to edit** on a comment thread with a highlighted span replies "please suggest an edit" and marks the thread seen. An agent running `acm threads` sees it marked `[edit requested]` and answers with a SUGGEST card. A listening agent is woken at once.
+- **Ask agent to edit** on a comment thread with a highlighted span replies "please suggest an edit" and marks the thread seen. An agent running `acm threads` sees it marked `[edit requested]` and answers with a SUGGEST card. A listening agent is woken at once. The button is on only while an agent is listening. With none, it is greyed out and its tooltip says how to start one. To leave a request for an agent that reads `acm threads` later, reply "please suggest an edit" yourself.
 
 ## Send your comments to the agent
 
-The pill in the header shows whether an agent is listening (a filled dot) and **Send N to agent**, the threads where you had the last word that the agent has not been sent yet. Press **Send** at the end of a review round to wake the agent once for all of them; a message confirms it, or says no agent is listening (the work then reaches the next agent that listens to this editor).
+The pill in the header shows whether an agent is listening (a filled dot) and **Send N to agent**, the threads where you had the last word that the agent has not been sent yet. Press **Send** at the end of a review round to wake the agent once for all of them, and a message confirms it. **Send** is on only while an agent is listening. An agent that uses `--wait` stops listening while it works on what it received, so for these buttons prefer `--notify`.
 
 Click the status side of the pill, or open **Settings > Review**, for **Notify agent on each comment**. Off (the default), your comments wait for **Send**; on, every comment you post wakes the agent. An agent listens with `acm edit <file.md> --notify`; see [Agents](agents.md#waking-the-agent-from-the-editor).
 

@@ -68,7 +68,7 @@ acm: pending #115bygy Luis "in the way it builds"
 
 A thread is the agent's turn when your name (the **Author** setting) wrote its latest comment. `acm threads` marks those threads `[your turn]`, so the agent's loop is one rule: on each line, run `acm threads`, answer the `[your turn]` threads, and wait for the next line. Every `[your turn]` thread needs a reply (or a resolve); one left unanswered keeps `--wait` returning at once.
 
-The header pill shows whether an agent is listening and how many threads **Send** would hand over; it counts only threads not sent yet, so it reads **Nothing to send** once the agent has them. If the editor is already open on the file, `--notify` attaches to it instead of starting a second editor, so your clicks in that page reach the agent.
+The header pill shows whether an agent is listening and how many threads **Send** would hand over; it counts only threads not sent yet, so it reads **Nothing to send** once the agent has them. **Send** and **Ask agent to edit** are on only while an agent listens, and greyed out otherwise. A `--wait` agent stops listening while it works on what it received, so an agent that the person drives from the page should use `--notify`. If the editor is already open on the file, `--notify` attaches to it instead of starting a second editor, so your clicks in that page reach the agent.
 
 In Claude Code, run the listener under the Monitor tool, which wakes the agent on each stdout line:
 

@@ -67,6 +67,8 @@ interface CommentSidebarProps {
   /** One click: append an edit request for the agent at the end of the thread and
    *  mark it seen (#76). */
   onAskAgent: (card: SidebarCard) => void;
+  /** An agent is listening (#31): Ask agent to edit is on only then. */
+  agentAvailable?: boolean;
   /** Comment cards anchored to a highlighted span; only these offer Ask agent to edit, as a
    *  SUGGEST reply on a point comment has no span to apply to. */
   anchoredCardIds?: Set<string>;
@@ -181,6 +183,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReplyAndSeen,
     onSuggestEdit,
     onAskAgent,
+    agentAvailable = false,
     anchoredCardIds,
     onApplySuggestion,
     onApplyAndResolveSuggestion,
@@ -1085,12 +1088,17 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                           ) : (
                             <button
                               type="button"
+                              disabled={!agentAvailable}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onAskAgent(card);
                               }}
-                              title={`Reply “${EDIT_REQUEST_TEXT}” at the end of this thread and mark it seen; agents find it with acm threads`}
-                              className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
+                              title={
+                                agentAvailable
+                                  ? `Adds a reply reading “${EDIT_REQUEST_TEXT}” to this thread and marks it seen; the listening agent is woken and answers with a SUGGEST`
+                                  : `No agent is listening: start one with acm edit <file.md> --notify. To leave a request for later, reply: ${EDIT_REQUEST_TEXT}`
+                              }
+                              className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-[var(--muted)]"
                             >
                               Ask agent to edit
                             </button>
