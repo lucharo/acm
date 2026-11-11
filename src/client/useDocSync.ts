@@ -10,7 +10,7 @@
 // dev (Vite proxies to :8787) and prod (Bun serves on one port).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DocState, ServerMessage } from "../lib/types";
+import type { AgentStatus, DocState, ServerMessage } from "../lib/types";
 import {
   decisionEventsAcknowledged,
   isDecisionEvent,
@@ -92,6 +92,10 @@ interface UseDocSyncResult {
   flushNow: () => void;
   /** Report the editor's live caret/selection so agent writes can avoid it. */
   reportSelection: (from: number, to: number) => void;
+  /** Is an agent listening, and what Send would hand it (#31); null until first read. */
+  agentStatus: AgentStatus | null;
+  /** The buffer holds edits the server has not confirmed (read at call time). */
+  hasUnsavedContent: () => boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -363,6 +367,9 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   const [initialVersion, setInitialVersion] = useState(0);
   const [activeDocumentPath, setActiveDocumentPath] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  // Is an agent listening, and what is waiting on it (#31): pushed over the socket,
+  // read once on each connect (the server pushes changes only).
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   // Read-only mirror of `connected` for callbacks that must not re-subscribe.
@@ -544,7 +551,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       wsRef.current = ws;
       let documentVerified = false;
       let closed = false;
-      let queuedMessage: ServerMessage | null = null;
+      let queuedMessage: Extract<ServerMessage, { type: "update" }> | null = null;
+      let agentPushed = false; // a pushed status is newer than the read on connect
 
       const retryConnection = (state: SaveState) => {
         if (!mounted.current || closed) return;
@@ -560,6 +568,14 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       };
 
       ws.onopen = () => {
+        void fetch("/api/agent")
+          .then((res) => (res.ok ? (res.json() as Promise<AgentStatus>) : null))
+          .then((status) => {
+            if (status && mounted.current && !closed && !agentPushed) {
+              setAgentStatus({ listening: status.listening, toSend: status.toSend });
+            }
+          })
+          .catch(() => undefined);
         void fetchSnapshot()
           .then(async ({ content, version, path, serverEpoch }) => {
             if (!mounted.current || closed) return;
@@ -648,6 +664,11 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
 
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
+        if (msg.type === "agent") {
+          agentPushed = true;
+          setAgentStatus({ listening: msg.listening, toSend: msg.toSend });
+          return;
+        }
         if (msg.type !== "update") return;
         if (!documentVerified) queuedMessage = msg;
         else if (msg.serverEpoch !== currentServerEpoch.current) {
@@ -1126,6 +1147,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   }, []);
 
   // Flush immediately (Cmd/Ctrl+S, blur, page hide) — cancel the debounce first.
+  const hasUnsavedContent = useCallback(() => pendingContent.current !== null, []);
+
   const flushNow = useCallback(() => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
@@ -1184,5 +1207,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     save,
     flushNow,
     reportSelection,
+    agentStatus,
+    hasUnsavedContent,
   };
 }

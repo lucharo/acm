@@ -15,6 +15,7 @@ import { prepareDocumentTarget } from "./src/server/documentTarget";
 import { startLauncherServer } from "./src/server/launcher";
 import { recordRecentDocument } from "./src/server/recent";
 import { findUserReviewSkill, NO_REVIEW_PREFERENCES } from "./src/server/reviewSkill";
+import { findEditorFor, listenToEditor, startDetachedEditor } from "./src/cli/agentListen";
 
 function isBusyPort(error: unknown): boolean {
   return (error as { code?: string })?.code === "EADDRINUSE";
@@ -109,13 +110,42 @@ try {
       console.error(`acm edit: ${target.message}`);
       process.exit(2);
     }
+    // --notify / --wait (#31): stdout is for wake lines only, so the rest goes to stderr.
+    const say = invocation.listen ? console.error : console.log;
+    if (invocation.listen) {
+      // Attach to an editor already open on this document, so the person's clicks in
+      // that page reach the agent; --wait starts one that outlives it if none is open.
+      let editor = await findEditorFor(target.path);
+      if (!editor && invocation.listen === "wait") {
+        const editArgs = [
+          ...(invocation.open ? [] : ["--no-open"]),
+          ...(invocation.port !== undefined ? ["--port", String(invocation.port)] : []),
+          ...(invocation.assetRoot ? ["--asset-root", invocation.assetRoot] : []),
+          ...(invocation.allowHosts ?? []).flatMap((host) => ["--allow-host", host]),
+        ];
+        editor = await startDetachedEditor(target.path, editArgs);
+      }
+      if (editor) {
+        say(`\n  ACM listening to the editor at http://localhost:${editor.port}\n  editing: ${target.path}\n`);
+        process.exit(await listenToEditor(editor.port, invocation.listen === "wait"));
+      }
+    }
     const acm = startOnFreePort(preferredPort, (port) =>
-      startServer({ docPath: target.path, port, assetRoot: assetRootArg, allowedHosts, ...assets }),
+      startServer({
+        docPath: target.path,
+        port,
+        assetRoot: assetRootArg,
+        allowedHosts,
+        ...assets,
+        ...(invocation.listen === "notify"
+          ? { onWakeLine: (line: string) => process.stdout.write(`${line}\n`), log: console.error }
+          : {}),
+      }),
     );
     await rememberRecentDocument(target.path);
     const url = `http://localhost:${acm.port}`;
-    if (target.created) console.log(`Created new document: ${target.path}`);
-    console.log(`\n  ACM ready → ${url}\n  editing: ${target.path}${remoteLine}\n`);
+    if (target.created) say(`Created new document: ${target.path}`);
+    say(`\n  ACM ready → ${url}\n  editing: ${target.path}${remoteLine}\n`);
     if (invocation.open) openBrowser(url);
   } else {
     let launcher: ReturnType<typeof startLauncherServer>;

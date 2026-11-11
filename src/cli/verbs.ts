@@ -63,6 +63,7 @@ import {
 } from "../lib/decision";
 import { merge3 } from "../lib/merge";
 import { recordProvenanceWrite } from "../server/provenance";
+import { wakeSettings } from "../server/agentWake";
 
 const VERBS = new Set(["reply", "apply", "comment", "suggest", "accept", "reject", "resolve", "threads", "wrap", "import", "heal", "history", "decisions", "restore", "spell"]);
 export function isAgentVerb(cmd?: string): boolean {
@@ -503,7 +504,7 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
     // the GUI marks seen.
     const cfg = await readConfig<Record<string, unknown>>("settings.json", {});
     const seenKeys = new Set(seenStateForDocument(cfg, docPath).keys);
-    const summary = threadsSummary(content, seenKeys);
+    const summary = threadsSummary(content, seenKeys, wakeSettings(cfg).humanAuthor);
     if (f.json) {
       console.log(JSON.stringify(summary, null, 2));
       return;
@@ -512,13 +513,14 @@ export async function runAgentVerb(cmd: string, argv: string[]): Promise<void> {
       const anchor = t.anchor ? `⟦${t.anchor.slice(0, 40)}⟧ ` : "";
       // seen: true → [seen]; null (suggestion-attached, no seen state) → [suggestion],
       // so an unmarked line always means genuinely unseen and matches the count below.
-      const marks = `${t.applicable ? " [SUGGEST]" : ""}${t.seen === true ? " [seen]" : t.seen === null ? " [suggestion]" : ""}${t.editRequested ? " [edit requested]" : ""}`;
+      const marks = `${t.applicable ? " [SUGGEST]" : ""}${t.seen === true ? " [seen]" : t.seen === null ? " [suggestion]" : ""}${t.editRequested ? " [edit requested]" : ""}${t.awaitingAgent ? " [your turn]" : ""}`;
       console.log(`#${t.id} (${t.count}) @${t.authors.join(" @")}${marks}  ${anchor}${t.preview}`);
     }
     // seen === null (suggestion-attached, no GUI seen state) stays out of the count,
     // matching the GUI's inbox counter.
     const unseen = summary.filter((t) => t.seen === false).length;
-    console.log(`\n${summary.length} threads, ${unseen} unseen`);
+    const yourTurn = summary.filter((t) => t.awaitingAgent).length;
+    console.log(`\n${summary.length} threads, ${unseen} unseen, ${yourTurn} your turn`);
     return;
   }
 

@@ -67,7 +67,7 @@ interface CommentSidebarProps {
   /** One click: append an edit request for the agent at the end of the thread and
    *  mark it seen (#76). */
   onAskAgent: (card: SidebarCard) => void;
-  /** Comment cards anchored to a highlighted span; only these offer Ask agent, as a
+  /** Comment cards anchored to a highlighted span; only these offer Ask agent to edit, as a
    *  SUGGEST reply on a point comment has no span to apply to. */
   anchoredCardIds?: Set<string>;
   /** Apply a structured `SUGGEST:` comment — replace its anchored span with the
@@ -1092,7 +1092,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                               title={`Reply “${EDIT_REQUEST_TEXT}” at the end of this thread and mark it seen; agents find it with acm threads`}
                               className="text-[12px] text-[var(--muted)] hover:text-[var(--ink)]"
                             >
-                              Ask agent
+                              Ask agent to edit
                             </button>
                           )
                         ) : null}

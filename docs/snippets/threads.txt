@@ -4,4 +4,4 @@ $ acm threads --doc morning-walk.md
 #pescro (1) @claude [SUGGEST]  ⟦the smell of bread at half past seven⟧ SUGGEST[g:time]: the smell of bread at seven
 #1st1xt0 (1) @claude [SUGGEST]  ⟦I work it out at half past seven anyway,⟧ SUGGEST[g:time]: I work it out anyway, just later and worse
 
-4 threads, 4 unseen
+4 threads, 4 unseen, 0 your turn

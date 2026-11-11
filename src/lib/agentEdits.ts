@@ -242,6 +242,9 @@ export interface ThreadSummary {
   applicable: boolean; // has an applyable SUGGEST
   seen: boolean | null; // human read every comment (GUI "seen"); null = no seen state (suggestion-attached)
   editRequested: boolean; // the human asked for an edit ("please suggest an edit") with no SUGGEST since
+  lastAuthor: string; // who wrote the thread's latest comment ("" when it has no author name)
+  lastCommentId: string; // the latest comment's id: changes when it is edited or a reply lands
+  awaitingAgent: boolean; // the person (the editor's author name) has the last word: the agent's turn (#31)
   preview: string; // first comment, trimmed
 }
 
@@ -252,8 +255,13 @@ export interface ThreadSummary {
  *  comment in it is — the same rule the GUI uses. Threads whose comments ride a
  *  raw `{++/--/~~}` suggestion card have NO seen affordance in the GUI (they're
  *  accept/reject, not inbox items) → `seen: null`, so the unseen count can't
- *  drift from the GUI's counter. */
-export function threadsSummary(content: string, seenKeys: Set<string> = new Set()): ThreadSummary[] {
+ *  drift from the GUI's counter. `humanAuthor` is the person's name (the editor's
+ *  `author` setting): a thread whose latest comment is theirs is the agent's turn. */
+export function threadsSummary(
+  content: string,
+  seenKeys: Set<string> = new Set(),
+  humanAuthor = "You",
+): ThreadSummary[] {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
   const applicable = applicableSuggestionIds(content, tokens);
@@ -269,6 +277,8 @@ export function threadsSummary(content: string, seenKeys: Set<string> = new Set(
     // between span and comment must not report `anchor: null` on an applyable
     // suggestion (they previously disagreed: strict equality here, ANCHOR_GAP there).
     const hl = anchorHighlightFor(content, th.comments[0], tokens);
+    const last = th.comments[th.comments.length - 1];
+    const lastAuthor = last?.author ?? "";
     return {
       id: th.id,
       from: th.from,
@@ -281,6 +291,9 @@ export function threadsSummary(content: string, seenKeys: Set<string> = new Set(
         ? null
         : th.comments.every((c) => seenKeys.has(commentKey(c))),
       editRequested: threadEditRequested(th),
+      lastAuthor,
+      lastCommentId: last?.id ?? th.id,
+      awaitingAgent: lastAuthor === humanAuthor,
       preview: (th.comments[0]?.body ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
     };
   });

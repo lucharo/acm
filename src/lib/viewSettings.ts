@@ -24,6 +24,7 @@ export interface ViewSettings {
   spellcheck: boolean; // wiggly-underline misspelled words (editor/spellcheck.ts)
   spellVariant: SpellVariant; // which dictionary spell check runs against
   author: string; // name stamped on comments YOU add through the UI
+  notifyEachComment: boolean; // wake a listening agent on every comment, not only Ask agent to edit / Send to agent (#31)
 }
 export const FONT_STACKS: Record<Font, string> = {
   serif: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS: ViewSettings = {
   spellcheck: true, // on by default — the Google-Docs expectation for a prose editor
   spellVariant: "uk", // British English by default
   author: "You",
+  notifyEachComment: false,
 };
 /** Keys a stored settings object may still carry from an older build. The
  * server file merges patches, so it never forgets them; reads drop them.

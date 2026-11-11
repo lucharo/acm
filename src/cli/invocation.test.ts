@@ -79,6 +79,31 @@ describe("parseInvocation", () => {
     });
   });
 
+  test("--notify and --wait listen for the agent on a named document (#31)", () => {
+    expect(parse(["edit", "notes.md", "--notify"])).toEqual({ kind: "edit", file: "notes.md", open: true, listen: "notify" });
+    expect(parse(["edit", "notes.md", "--wait", "--no-open"])).toEqual({
+      kind: "edit",
+      file: "notes.md",
+      open: false,
+      listen: "wait",
+    });
+  });
+
+  test("--notify and --wait need one document and exclude each other", () => {
+    expect(parse(["edit", "--notify"])).toEqual({
+      kind: "error",
+      message: "acm edit: --notify needs a document: acm edit <file.md> --notify",
+    });
+    expect(parse(["edit", "a.md", "--notify", "--wait"])).toEqual({
+      kind: "error",
+      message: "acm edit: use --notify or --wait, not both",
+    });
+    expect(parse(["skill", "--wait"])).toEqual({
+      kind: "error",
+      message: "acm skill: --wait needs a document: acm edit <file.md> --wait",
+    });
+  });
+
   test("invalid edit options fail before starting a server", () => {
     expect(parse(["edit", "--port", "nope"])).toEqual({
       kind: "error",

@@ -304,6 +304,19 @@ describe("threadsSummary", () => {
     expect(threadsSummary(doc).map((t) => t.editRequested)).toEqual([true, false]);
   });
 
+  test("awaitingAgent: the person (the editor's author name) has the last word (#31)", () => {
+    const doc =
+      "A {==one==}{>>@claude: tighten?<<}{>>@Luis: yes<<} b {==two==}{>>@Luis: why?<<}{>>@claude: because<<} " +
+      "c {==three==}{>>@claude: note<<}.";
+    expect(threadsSummary(doc, new Set(), "Luis").map((t) => [t.anchor, t.lastAuthor, t.awaitingAgent])).toEqual([
+      ["one", "Luis", true],
+      ["two", "claude", false],
+      ["three", "claude", false],
+    ]);
+    // The default person is the editor's default author name, "You".
+    expect(threadsSummary("A {==x==}{>>@You: hm<<}.").map((t) => t.awaitingAgent)).toEqual([true]);
+  });
+
   test("a comment riding a raw suggestion token has no seen state (null) — GUI parity", () => {
     // The GUI folds this comment into a suggestion card (accept/reject, no Mark-seen),
     // so it must not count as unseen forever in the CLI.

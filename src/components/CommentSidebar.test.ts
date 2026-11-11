@@ -677,7 +677,7 @@ describe("Ask agent (#76)", () => {
     });
 
     expect(html).toContain("Suggest edit");
-    expect(html).toContain(">Ask agent</button>");
+    expect(html).toContain(">Ask agent to edit</button>");
   });
 
   test("a point comment with no highlighted span does not offer Ask agent", () => {
@@ -704,7 +704,7 @@ describe("Ask agent (#76)", () => {
     ], true, new Set(), false, { anchoredCardIds: new Set(["c1"]) });
 
     expect(html).toContain("Edit requested");
-    expect(html).not.toContain(">Ask agent</button>");
+    expect(html).not.toContain(">Ask agent to edit</button>");
   });
 });
 

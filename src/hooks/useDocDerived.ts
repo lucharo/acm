@@ -91,7 +91,7 @@ export function useDocDerived(doc: string) {
 
 
   // Comment cards anchored to a highlighted span: the only threads where a SUGGEST
-  // reply can apply, so the only ones that offer Ask agent (#76).
+  // reply can apply, so the only ones that offer Ask agent to edit (#76).
   const anchoredCardIds = useMemo(
     () =>
       new Set(

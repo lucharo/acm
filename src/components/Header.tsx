@@ -47,6 +47,8 @@ export interface HeaderProps {
   toolbar?: ReactNode;
   /** Markup that cannot render (#79: a chip here instead of a floating banner). */
   issues?: { count: number; fixable: number; onReview: () => void };
+  /** Agent wake controls (#31), shown before the save badge. */
+  agentControl?: ReactNode;
 }
 
 export const headerIconButtonClass =
@@ -102,6 +104,7 @@ export default function Header(props: HeaderProps) {
     onOpenReview,
     toolbar,
     issues,
+    agentControl,
   } = props;
 
   // settingsOpen is lifted to the Workspace (prop) so ⌘, can toggle it; only the
@@ -195,6 +198,7 @@ export default function Header(props: HeaderProps) {
           </button>
         ) : null}
 
+        {agentControl}
         <SaveBadge state={saveState} lastSavedAt={lastSavedAt} connected={connected} wordCount={wordCount} />
 
         <button
@@ -552,6 +556,16 @@ function ReviewTab({
       <p className="px-2 pb-2 text-[11px] leading-snug text-[var(--muted)]">
         Off by default. When enabled, Apply updates the wording and closes its complete
         discussion in one undoable action.
+      </p>
+      <div className="my-1 border-t border-[var(--line)]" />
+      <SettingRow
+        label="Notify agent on each comment"
+        checked={settings.notifyEachComment}
+        onToggle={() => onChangeSettings({ notifyEachComment: !settings.notifyEachComment })}
+      />
+      <p className="px-2 pb-2 text-[11px] leading-snug text-[var(--muted)]">
+        Off by default: comments wait until you send them to the agent. Ask agent to edit always
+        notifies. An agent listens with <code>acm edit &lt;file.md&gt; --notify</code>.
       </p>
     </div>
   );

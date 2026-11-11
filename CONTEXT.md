@@ -77,7 +77,7 @@ _Avoid_: batch, changeset.
 
 **Edit request**:
 A reply asking an agent to write a SUGGEST card for a thread ("please suggest
-an edit", posted by the card's Ask agent action). It stands until a SUGGEST
+an edit", posted by the card's Ask agent to edit action). It stands until a SUGGEST
 follows it; `acm threads` marks such threads `[edit requested]`.
 _Avoid_: ask, ping.
 

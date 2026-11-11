@@ -101,12 +101,14 @@ import {
   type DecisionQueueUpdate,
 } from "./lib/decision";
 import type {
+  AgentStatus,
   CritToken,
   SuggestionToken,
   CommentToken,
   CommentThread,
   SidebarCard,
 } from "./lib/types";
+import AgentPill, { askFeedback, saveStatusOf } from "./components/AgentPill";
 
 
 
@@ -184,6 +186,8 @@ function DocumentApp({
       connected={sync.connected}
       saveState={sync.saveState}
       lastSavedAt={sync.lastSavedAt}
+      agentStatus={sync.agentStatus}
+      hasUnsavedContent={sync.hasUnsavedContent}
       remoteRef={remoteRef}
       pendingRemote={pendingRemote}
       settings={settings}
@@ -230,6 +234,8 @@ interface WorkspaceProps {
   connected: boolean;
   saveState: SaveState;
   lastSavedAt: number | null;
+  agentStatus: AgentStatus | null;
+  hasUnsavedContent: () => boolean;
   remoteRef: React.MutableRefObject<
     ((content: string, version: number) => void) | null
   >;
@@ -249,6 +255,8 @@ function Workspace({
   connected,
   saveState,
   lastSavedAt,
+  agentStatus,
+  hasUnsavedContent,
   remoteRef,
   pendingRemote,
   settings,
@@ -419,6 +427,10 @@ function Workspace({
   }, []);
   // Pending dismiss timers must not fire into an unmounted Workspace.
   useEffect(() => () => toastTimers.current.forEach(clearTimeout), []);
+  const toggleNotifyEach = useCallback(
+    () => onChangeSettings({ notifyEachComment: !settings.notifyEachComment }),
+    [onChangeSettings, settings.notifyEachComment],
+  );
 
   const editor = useCodeMirror({
     initialDoc,
@@ -1557,6 +1569,17 @@ function Workspace({
           openSpellReview();
         }}
         issues={{ count: diagnostics.length, fixable: fixableCount, onReview: () => setReviewOpen(true) }}
+        agentControl={
+          <AgentPill
+            status={agentStatus}
+            documentPath={documentPath}
+            notifyEach={settings.notifyEachComment}
+            onToggleNotifyEach={toggleNotifyEach}
+            onFeedback={pushToast}
+            saveStatus={saveStatusOf(saveState, hasUnsavedContent())}
+            flushSave={flushNow}
+          />
+        }
         toolbar={
           <FormatToolbar
             view={view}
@@ -1644,7 +1667,12 @@ function Workspace({
                     onReply={replyToThread}
                     onReplyAndSeen={replyAndSeen}
                     onSuggestEdit={(t, proposal) => replyAndSeen(t, `SUGGEST: ${proposal}`)}
-                    onAskAgent={(t) => replyAndSeen(t, EDIT_REQUEST_TEXT)}
+                    onAskAgent={(t) => {
+                      replyAndSeen(t, EDIT_REQUEST_TEXT);
+                      const feedback = askFeedback(agentStatus);
+                      pushToast(feedback.message, feedback.kind);
+                    }}
+
                     anchoredCardIds={anchoredCardIds}
                     onApplySuggestion={(c) =>
                       runSuggestionEdit(
