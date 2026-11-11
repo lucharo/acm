@@ -8,6 +8,8 @@
 //   • serves the doc (GET /api/doc) + accepts version-checked human writes (PUT)
 //   • lets agents drop comments (POST /api/comment) via the shared grammar
 //   • broadcasts EXTERNAL file changes to browsers over a WebSocket (~1s)
+//   • wakes the agent (#31): a line per hand-over to `onWakeLine` (acm edit --notify)
+//     and to every GET /api/agent/events stream (an attached --notify or --wait)
 //   • serves the built SPA from ./dist in production
 //
 // Loop-prevention is a SINGLE content-hash gate: `lastKnownHash` is updated on
@@ -20,7 +22,8 @@ import { readFileSync } from "node:fs";
 import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
-import { addAnchoredComment } from "./src/lib/agentEdits";
+import { addAnchoredComment, threadsSummary } from "./src/lib/agentEdits";
+import { AgentWake, formatWakeLine, waitingCounts, wakeSettings } from "./src/server/agentWake";
 import { KEEP_VERSIONS, merge3, mergeKeepingBoth, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
@@ -73,6 +76,10 @@ export interface StartServerOptions {
   allowedHosts?: readonly string[];
   /** Opened by the editor for itself: an `acm` verb never picks it implicitly. */
   auxiliary?: boolean;
+  /** `acm edit --notify` (#31): receives one line per wake; counts as a listener. */
+  onWakeLine?: (line: string) => void;
+  /** Where the startup line goes (default stdout; --notify keeps stdout for wake lines). */
+  log?: (line: string) => void;
   /** Test seam for the external filesystem boundary. */
   appendDecisionEvent?: (docPath: string, event: DecisionEvent) => Promise<{ appended: boolean }>;
   appendDecisionEvents?: (
@@ -184,6 +191,59 @@ export function startServer(opts: StartServerOptions): AcmServer {
   function pushUpdate(content: string) {
     const msg: ServerMessage = { type: "update", content, version, serverEpoch };
     server.publish(DOC_TOPIC, JSON.stringify(msg));
+    detectWakeSoon(content);
+  }
+
+  // ── Waking the agent (#31) ──────────────────────────────────────────────────
+  // Every write is checked (after a short quiet period, so a burst of saves is one
+  // look) for threads that became the agent's turn. Listeners are the in-process
+  // `onWakeLine` plus each open /api/agent/events stream; a `wait` stream ends after
+  // its first line. The page hears the listener count and what is waiting.
+  interface WakeListener {
+    once: boolean;
+    send: (line: string) => void;
+    close: () => void;
+  }
+  const wakeListeners = new Set<WakeListener>();
+  let latestContent = initialContent;
+  const summarize = async (content: string) => {
+    const settings = wakeSettings(await readConfig<Record<string, unknown>>(SETTINGS_FILE, {}));
+    return { summary: threadsSummary(content, new Set(), settings.humanAuthor), settings };
+  };
+  const agentWake = summarize(initialContent).then(({ summary }) => new AgentWake(summary));
+  const listeningCount = () => wakeListeners.size + (opts.onWakeLine ? 1 : 0);
+  let lastAgentMessage = "";
+  async function publishAgentStatus() {
+    const { summary } = await summarize(latestContent);
+    const msg: ServerMessage = { type: "agent", listening: listeningCount(), waiting: waitingCounts(summary) };
+    const text = JSON.stringify(msg);
+    if (text === lastAgentMessage) return;
+    lastAgentMessage = text;
+    server.publish(DOC_TOPIC, text);
+  }
+  function emitWake(line: string) {
+    opts.onWakeLine?.(line);
+    for (const listener of [...wakeListeners]) {
+      listener.send(line);
+      if (listener.once) removeWakeListener(listener);
+    }
+  }
+  function removeWakeListener(listener: WakeListener) {
+    if (!wakeListeners.delete(listener)) return;
+    listener.close();
+    void publishAgentStatus();
+  }
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  function detectWakeSoon(content: string) {
+    latestContent = content;
+    if (wakeTimer) clearTimeout(wakeTimer);
+    wakeTimer = setTimeout(() => {
+      void (async () => {
+        const [wake, { summary, settings }] = await Promise.all([agentWake, summarize(latestContent)]);
+        for (const event of wake.detect(summary, settings.notifyEachComment)) emitWake(formatWakeLine(event));
+        await publishAgentStatus();
+      })().catch((error) => console.error(`ACM warning: agent wake check failed: ${(error as Error).message}`));
+    }, 600);
   }
 
   // The SINGLE write path. Every writer — human PUT, agent CLI, in-app comment —
@@ -766,6 +826,79 @@ export function startServer(opts: StartServerOptions): AcmServer {
         return Response.json(saved);
       }
 
+      // GET /api/agent → is an agent listening, and what is waiting on it (#31).
+      if (pathname === "/api/agent" && req.method === "GET") {
+        const { summary, settings } = await summarize(latestContent);
+        return Response.json({
+          listening: listeningCount(),
+          waiting: waitingCounts(summary),
+          notifyEachComment: settings.notifyEachComment,
+        });
+      }
+
+      // POST /api/agent/wake → Send to agent: one line for everything waiting.
+      if (pathname === "/api/agent/wake" && req.method === "POST") {
+        const body = await jsonBody(req);
+        if (!body) return badJson();
+        if (!decisionDocumentMatches(body)) return decisionDocumentMismatch();
+        const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
+        const event = wake.review(summary);
+        const sent = { comments: event.comments, editRequests: event.editRequests };
+        if (sent.comments + sent.editRequests > 0) emitWake(formatWakeLine(event));
+        return Response.json({ listening: listeningCount(), sent });
+      }
+
+      // GET /api/agent/events → a text stream, one wake line each (acm edit --notify
+      // attached to this editor). `?wait=1` (acm edit --wait) answers at once with
+      // the work already handed over and unanswered, else ends after the next line.
+      if (pathname === "/api/agent/events" && req.method === "GET") {
+        const once = url.searchParams.get("wait") === "1";
+        server.timeout(req, 0); // a listener may sit quiet for hours
+        if (once) {
+          const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
+          const pending = wake.pendingEvents(summary);
+          if (pending.length > 0) {
+            return new Response(`${pending.map(formatWakeLine).join("\n")}\n`, {
+              headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+            });
+          }
+        }
+        const encoder = new TextEncoder();
+        let listener: WakeListener | undefined;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            let open = true;
+            listener = {
+              once,
+              send: (line) => {
+                if (open) controller.enqueue(encoder.encode(`${line}\n`));
+              },
+              close: () => {
+                if (!open) return;
+                open = false;
+                try {
+                  controller.close();
+                } catch {
+                  // the client already went away
+                }
+              },
+            };
+            // A blank first line sends the headers now: fetch() resolves on them, and
+            // listeners skip blank lines.
+            controller.enqueue(encoder.encode("\n"));
+            wakeListeners.add(listener);
+            void publishAgentStatus();
+            req.signal.addEventListener("abort", () => removeWakeListener(listener!));
+          },
+          cancel() {
+            if (listener) removeWakeListener(listener);
+          },
+        });
+        return new Response(stream, {
+          headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+        });
+      }
+
       // GET /api/settings → persisted view settings + per-document "seen" state (or {} on a
       // fresh install). The browser keeps localStorage as an instant cache; this
       // file is the source of truth across instances/restarts.
@@ -840,7 +973,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
   });
 
   const boundPort = server.port ?? port;
-  console.log(`ACM server on http://localhost:${boundPort} — doc: ${docPath}`);
+  (opts.log ?? console.log)(`ACM server on http://localhost:${boundPort} — doc: ${docPath}`);
 
   // Register in ~/.config/acm/instances.json so `acm` verbs can resolve "the doc
   // open in the editor" without --doc/ACM_DOC. Fire-and-forget; liveness (pid
@@ -859,6 +992,9 @@ export function startServer(opts: StartServerOptions): AcmServer {
     serverEpoch,
     stop: () => {
       reviewSkillServer?.stop();
+      for (const listener of wakeListeners) listener.close(); // attached listeners see the end
+      wakeListeners.clear();
+      if (wakeTimer) clearTimeout(wakeTimer);
       watcher.close();
       if (debounce) clearTimeout(debounce);
       if (historyTimer) clearTimeout(historyTimer);

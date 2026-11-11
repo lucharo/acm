@@ -514,6 +514,21 @@ test("threads reads the same per-document seen slice as the GUI", () => {
   expect(unseen.out).toContain("1 threads, 1 unseen");
 }, 15_000);
 
+test("threads marks the agent's turn by the editor's author name (#31)", () => {
+  writeFileSync(doc, "{==one==}{>>@claude: tighten?<<}{>>@Luis: yes<<} and {==two==}{>>@Luis: why?<<}{>>@claude: because<<}\n");
+  const configDir = join(dir, "config", "acm");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ settings: { author: "Luis" } }));
+
+  const result = run("threads");
+
+  expect(result.code).toBe(0);
+  const lines = result.out.trim().split("\n");
+  expect(lines[0]).toEndWith("[your turn]  ⟦one⟧ tighten?");
+  expect(lines[1]).not.toContain("[your turn]");
+  expect(lines.at(-1)).toBe("2 threads, 2 unseen, 1 your turn");
+}, 15_000);
+
 test("threads marks a thread waiting on a requested edit (#76)", () => {
   writeFileSync(doc, "{==wordy==}{>>@claude: tighten?<<}{>>@You: please suggest an edit<<}\n");
 
