@@ -235,6 +235,20 @@ describe("the wait read acm edit --wait makes", () => {
     expect(await res.text()).toMatch(/^acm: pending #\S+ Luis "conference hall"\n$/);
   });
 
+  test("Send counts the wait listener it woke, though the wait then ends", async () => {
+    settings({ author: "Luis" });
+    const { base, comment, sendReview, status } = await boot();
+    await comment("Luis", "Too wordy?");
+    const body = fetch(`${base}/api/agent/events?wait=1`, { signal: AbortSignal.timeout(4000) }).then((r) => r.text());
+    const deadline = Date.now() + 2000;
+    while ((await status()).listening !== 1 && Date.now() < deadline) await Bun.sleep(20);
+
+    const res = await sendReview();
+
+    expect(await res.json()).toEqual({ listening: 1, sent: { comments: 1, editRequests: 0 } });
+    await body;
+  });
+
   test("otherwise holds until the next wake line, then ends", async () => {
     settings({ author: "Luis" });
     const { base, comment, sendReview } = await boot();

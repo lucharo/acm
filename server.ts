@@ -844,9 +844,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
         const event = wake.review(summary);
         const sent = { comments: event.comments, editRequests: event.editRequests };
+        const heard = listeningCount(); // before emitting: a woken --wait listener leaves at once
         if (sent.comments + sent.editRequests > 0) emitWake(formatWakeLine(event));
         void publishAgentStatus();
-        return Response.json({ listening: listeningCount(), sent });
+        return Response.json({ listening: heard, sent });
       }
 
       // GET /api/agent/events → a text stream, one wake line each (acm edit --notify
