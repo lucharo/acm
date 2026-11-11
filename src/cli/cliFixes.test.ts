@@ -306,10 +306,14 @@ describe("#27 a write merged by the live editor is linted on the merged bytes", 
     const editor = Bun.serve({
       port: 0,
       async fetch(req) {
-        if (new URL(req.url).pathname !== "/api/agent-write") return Response.json({});
-        const { content } = (await req.json()) as { content: string };
-        merged = merge(content);
-        return Response.json({ version: 2, content: merged });
+        const path = new URL(req.url).pathname;
+        if (req.method !== "POST" || (path !== "/api/agent-write" && path !== "/api/decisions")) return Response.json({});
+        const body = (await req.json()) as { content?: string; decisionEvents?: { id: string }[] };
+        // Persist review decisions as the real editor does, so accept/reject run too.
+        const audit = { status: "persisted", decisionEventIds: (body.decisionEvents ?? []).map((e) => e.id) };
+        if (path === "/api/decisions") return Response.json({ audit });
+        merged = merge(body.content ?? "");
+        return Response.json({ version: 2, content: merged, audit });
       },
     });
     const cfg = join(xdg, "acm");
@@ -367,6 +371,23 @@ describe("#27 a write merged by the live editor is linted on the merged bytes", 
     expect(r.merged).toContain("## {==Wrapping up==}{>>@luis: weak heading<<}{>>@claude: SUGGEST: Two threads<<}");
     expect(warningLines(r.out)).toEqual([]);
     expect(r.out).toContain("  comments: 2 | applicable SUGGEST cards: 1\n");
+  });
+
+  test("an existing SUGGEST the write left without a span is still warned about after an unrelated merge", async () => {
+    // Accepting a two-paragraph replacement drops the anchor, so the competing
+    // SUGGEST in the same thread is left with nothing to apply to.
+    const seed =
+      "Intro.\n\nKeep {==this span==}{>>@claude: ~acm1~SUGGEST: para one\\n\\npara two<<}{>>@luis: SUGGEST: other words<<} end.\n";
+    const r = await viaMergingEditor(seed, (content) => `Human line.\n\n${content}`, ["accept", "para one"]);
+
+    const comments = scanTokens(r.merged).filter((t): t is CommentToken => t.type === "comment");
+    expect(r.code).toBe(0);
+    expect(r.merged).toBe("Human line.\n\nIntro.\n\nKeep para one\n\npara two{>>@luis: SUGGEST: other words<<} end.\n");
+    expect(warningLines(r.out)).toEqual([
+      "acm accept: warning: this write added 1 problem the editor will flag. It is written; fix it before the person reviews it:",
+      `  line 7, thread #${comments[0].id} (point comment, no span) "SUGGEST: other words": ` +
+        "SUGGEST card has no anchored span, so it can't be applied — put {==the span==} right before it",
+    ]);
   });
 
   test("a SUGGEST the merge left without a span (the person removed the highlight meanwhile) is warned about", async () => {

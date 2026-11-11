@@ -939,18 +939,16 @@ async function commitWrite(
 }
 
 /** What this write added (#27), judged in the bytes now on disk. When the live
- *  editor merged in the person's concurrent edits, those can decide whether the
- *  agent's comments apply (a highlight added or removed meanwhile), so the agent's
- *  comments are judged in the merged copy; any other problem counts only if the
- *  verb's own result had it too, so a person's edit is never blamed on the agent. */
+ *  editor merged in the person's concurrent edits, those can decide whether a
+ *  comment applies (a highlight added or removed meanwhile), so problems are judged
+ *  in the merged copy and kept when they belong to the write: a comment it added,
+ *  or a problem its own result had. A person's edit is never blamed on the agent,
+ *  except where a comment repeats the agent's exact bytes elsewhere. */
 function problemsThisWriteAdded(before: string, after: string, final: string): WriteProblem[] {
   const own = writeProblems(before, after);
   if (final === after) return own;
-  const agentComments = addedCommentRaws(before, after);
-  const ownElsewhere = new Set(own.filter((p) => p.commentId === null).map((p) => p.key));
-  return writeProblems(before, final).filter((p) =>
-    p.commentId !== null ? agentComments.has(p.key) : ownElsewhere.has(p.key),
-  );
+  const ours = new Set([...addedCommentRaws(before, after), ...own.map((p) => p.key)]);
+  return writeProblems(before, final).filter((p) => ours.has(p.key));
 }
 
 /** Warn on stderr, naming each problem's line, thread and reason. The write has
