@@ -49,11 +49,16 @@ export function sendFeedback(body: { listening: number; sent: AgentStatus["toSen
   return { message: `Sent ${what || "nothing"} to the agent.`, kind: "info" };
 }
 
-/** What the person is told after Ask agent, which always wakes a listener. */
+/** What the person is told after Ask agent to edit. The button only adds an edit
+ *  request to the thread; a listening agent is notified, and picks it up by the
+ *  usual rules (acm threads), so the message claims no more than that. */
 export function askFeedback(status: AgentStatus | null): { message: string; kind: "info" | "error" } {
   return (status?.listening ?? 0) > 0
-    ? { message: "Asked the agent for an edit.", kind: "info" }
-    : { message: "No agent is listening. The request will reach the next agent that listens to this editor (acm edit --notify or --wait).", kind: "error" };
+    ? { message: "Added an edit request to the thread; the listening agent was notified.", kind: "info" }
+    : {
+        message: "Added an edit request to the thread. No agent is listening; the next one that listens to this editor will get it.",
+        kind: "error",
+      };
 }
 
 /** Whether the editor's buffer is on disk: Send must not wake the agent before
@@ -177,7 +182,7 @@ export default function AgentPill({
               <input type="checkbox" checked={notifyEach} onChange={onToggleNotifyEach} />
             </label>
             <p className="mt-2 leading-snug text-[var(--muted)]">
-              Off: comments wait until you press Send. Ask agent always notifies. An agent listens with{" "}
+              Off: comments wait until you press Send. Ask agent to edit always notifies. An agent listens with{" "}
               <code>acm edit &lt;file.md&gt; --notify</code>.
             </p>
           </div>

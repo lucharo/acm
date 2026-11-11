@@ -72,7 +72,7 @@ Plain comments join a group with `NOTE[g:<id>]:`, and the reviewer can resolve t
 
 ## Edit requests
 
-A reply reading `please suggest an edit` (any case; a trailing `.` or `!` is allowed) asks an agent for a SUGGEST card on that thread. The editor's **Ask agent** button writes it, and `acm threads` marks the thread `[edit requested]`.
+A reply reading `please suggest an edit` (any case; a trailing `.` or `!` is allowed) asks an agent for a SUGGEST card on that thread. The editor's **Ask agent to edit** button writes it, and `acm threads` marks the thread `[edit requested]`.
 
 ## Markup that renders raw
 

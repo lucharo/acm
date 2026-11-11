@@ -55,10 +55,13 @@ describe("sendFeedback", () => {
 });
 
 describe("askFeedback", () => {
-  test("confirms the ask when an agent listens, warns when none does", () => {
-    expect(askFeedback(status(1, 0, 0))).toEqual({ message: "Asked the agent for an edit.", kind: "info" });
+  test("says it added an edit request, and whether a listening agent heard it", () => {
+    expect(askFeedback(status(1, 0, 0))).toEqual({
+      message: "Added an edit request to the thread; the listening agent was notified.",
+      kind: "info",
+    });
     expect(askFeedback(status(0, 0, 0))).toEqual({
-      message: "No agent is listening. The request will reach the next agent that listens to this editor (acm edit --notify or --wait).",
+      message: "Added an edit request to the thread. No agent is listening; the next one that listens to this editor will get it.",
       kind: "error",
     });
   });

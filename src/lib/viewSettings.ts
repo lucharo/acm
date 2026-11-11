@@ -24,7 +24,7 @@ export interface ViewSettings {
   spellcheck: boolean; // wiggly-underline misspelled words (editor/spellcheck.ts)
   spellVariant: SpellVariant; // which dictionary spell check runs against
   author: string; // name stamped on comments YOU add through the UI
-  notifyEachComment: boolean; // wake a listening agent on every comment, not only Ask agent / Send to agent (#31)
+  notifyEachComment: boolean; // wake a listening agent on every comment, not only Ask agent to edit / Send to agent (#31)
 }
 export const FONT_STACKS: Record<Font, string> = {
   serif: 'ui-serif, Georgia, Cambria, "Times New Roman", Times, serif',

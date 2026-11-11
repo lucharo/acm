@@ -47,7 +47,7 @@ A first review from the shell looks like this:
 
 The [CLI reference](cli.md) lists every command, and the skill holds the full agent workflow.
 
-When you click **Ask agent** on a thread, `acm threads` marks it `[edit requested]`, so an agent knows to answer with a SUGGEST card.
+When you click **Ask agent to edit** on a thread, `acm threads` marks it `[edit requested]`, so an agent knows to answer with a SUGGEST card.
 
 ## Waking the agent from the editor
 
@@ -60,7 +60,7 @@ acm: review 3 threads waiting (2 comments, 1 edit request) - run acm threads
 acm: pending #115bygy Luis "in the way it builds"
 ```
 
-- `ask` is **Ask agent**, which always wakes the agent.
+- `ask` is **Ask agent to edit**, which adds an edit request to the thread and always wakes the agent.
 - `comment` is a comment or reply of yours, sent only when **Notify agent on each comment** is on (off by default).
 - `review` is **Send to agent** in the header: one line for the waiting threads not sent yet, sent when you finish a round.
 - `pending` opens a new listener with the work you already sent that the agent has not answered, so work sent while no agent listened still arrives. The editor keeps this in memory: after it restarts, press **Send** again.

@@ -42,8 +42,8 @@ Usage:
   acm edit <file.md>          Open the file, creating it if missing
   acm skill                   Open your acm-user-preferences skill
   acm edit <file.md> --notify Also print one stdout line each time the person hands
-                              the agent work (a comment, Ask agent, Send to agent);
-                              attaches to an editor already open on the file
+                              the agent work (a comment, Ask agent to edit, Send to
+                              agent); attaches to an editor already open on the file
   acm edit <file.md> --wait   Exit with the first such line (at once if work is
                               already pending); the editor keeps running
 

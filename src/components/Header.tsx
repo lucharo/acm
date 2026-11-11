@@ -564,7 +564,7 @@ function ReviewTab({
         onToggle={() => onChangeSettings({ notifyEachComment: !settings.notifyEachComment })}
       />
       <p className="px-2 pb-2 text-[11px] leading-snug text-[var(--muted)]">
-        Off by default: comments wait until you send them to the agent. Ask agent always
+        Off by default: comments wait until you send them to the agent. Ask agent to edit always
         notifies. An agent listens with <code>acm edit &lt;file.md&gt; --notify</code>.
       </p>
     </div>

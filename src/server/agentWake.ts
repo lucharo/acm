@@ -2,7 +2,7 @@
 // The editor is the agent's listener. A thread is the agent's turn when the person
 // has the last word in it (`awaitingAgent`, from the same threadsSummary `acm threads`
 // prints). The person hands work over in three ways, each a one-line wake:
-//   • ask     — Ask agent (an edit request): always wakes
+//   • ask     — Ask agent to edit (an edit request): always wakes
 //   • comment — any new comment or reply from the person, when "Notify agent on
 //               each comment" is on
 //   • review  — Send to agent: one line summarising everything waiting

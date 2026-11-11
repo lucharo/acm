@@ -91,7 +91,7 @@ Lists every comment thread, SUGGEST cards included: id, message count, authors, 
 - `[SUGGEST]` marks a SUGGEST card that can still be applied.
 - `[seen]` marks a thread you marked seen in the editor; an unmarked line is unseen.
 - `[suggestion]` marks a thread on an inline suggestion, which has no seen state.
-- `[edit requested]` marks a thread where someone asked for an edit (**Ask agent**, or a reply reading `please suggest an edit`) and no SUGGEST card has answered yet.
+- `[edit requested]` marks a thread where someone asked for an edit (**Ask agent to edit**, or a reply reading `please suggest an edit`) and no SUGGEST card has answered yet.
 - `[your turn]` marks a thread whose latest comment is yours (the editor's **Author** setting): the agent owes it an answer. The last line counts them.
 - `--json` prints the same list as JSON.
 

@@ -355,7 +355,7 @@ Skip any section the human is still actively rewriting.
   are global **by content** (author+body), not per-doc — an identical comment in another
   doc shares its seen state, so don't over-trust `[seen]` across docs.
 - **Answer edit requests first.** `[edit requested]` in `acm threads` (`editRequested: true`
-  in `--json`) means the human clicked **Ask agent**: they want a SUGGEST on that thread's
+  in `--json`) means the human clicked **Ask agent to edit**: they want a SUGGEST on that thread's
   span. Answer in the thread: `acm reply "<a phrase from its comment>" "SUGGEST: <new wording>"`
   (a SUGGEST reply inherits the thread's anchor; `acm suggest` refuses a span that is already
   highlighted). A SUGGEST after the request clears the flag.
@@ -368,7 +368,7 @@ Skip any section the human is still actively rewriting.
 
 ## Being woken by the person (acm edit --notify)
 
-The person can wake you from the editor instead of switching to your chat: **Ask agent** on a
+The person can wake you from the editor instead of switching to your chat: **Ask agent to edit** on a
 thread, each comment when they turn on "Notify agent on each comment", and **Send N to agent**
 at the end of a round. You hear it by listening:
 
