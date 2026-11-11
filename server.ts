@@ -214,6 +214,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
   };
   const agentWake = summarize(initialContent).then(({ summary }) => new AgentWake(summary));
   const listeningCount = () => wakeListeners.size + (opts.onWakeLine ? 1 : 0);
+  // A --wait agent leaves as soon as it hears a line and comes back when it has done
+  // the work. Between the two it is working, not gone, so the page keeps Ask agent to
+  // edit and Send on: what it writes then is pending work the next --wait reads at once.
+  let working = 0;
   let lastAgentMessage = "";
   let statusRevision = 0;
   async function publishAgentStatus() {
@@ -222,7 +226,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
     const revision = ++statusRevision;
     const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
     if (revision !== statusRevision) return;
-    const msg: ServerMessage = { type: "agent", listening: listeningCount(), toSend: wake.toSend(summary) };
+    const msg: ServerMessage = { type: "agent", listening: listeningCount(), working, toSend: wake.toSend(summary) };
     const text = JSON.stringify(msg);
     if (text === lastAgentMessage) return;
     lastAgentMessage = text;
@@ -232,7 +236,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
     opts.onWakeLine?.(line);
     for (const listener of [...wakeListeners]) {
       listener.send(line);
-      if (listener.once) removeWakeListener(listener);
+      if (listener.once) {
+        working += 1;
+        removeWakeListener(listener);
+      }
     }
   }
   function removeWakeListener(listener: WakeListener) {
@@ -838,6 +845,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const [wake, { summary, settings }] = await Promise.all([agentWake, summarize(latestContent)]);
         return Response.json({
           listening: listeningCount(),
+          working,
           toSend: wake.toSend(summary),
           notifyEachComment: settings.notifyEachComment,
         });
@@ -897,12 +905,14 @@ export function startServer(opts: StartServerOptions): AcmServer {
             }
           },
         };
+        if (once) working = Math.max(0, working - 1); // a --wait agent re-arming is back
         wakeListeners.add(listener);
         void publishAgentStatus();
         req.signal.addEventListener("abort", () => removeWakeListener(listener));
         const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
         const ready = [...wake.pendingEvents(summary).map(formatWakeLine), ...early];
         if (once && ready.length > 0) {
+          if (wakeListeners.has(listener)) working += 1; // answered at once: off to work
           removeWakeListener(listener);
           return new Response(`${ready.join("\n")}\n`, { headers: textHeaders });
         }

@@ -5,22 +5,40 @@ import { renderToStaticMarkup } from "react-dom/server";
 import AgentPill, { agentPillLabels, askFeedback, saveStatusOf, sendDecision, sendFeedback } from "./AgentPill";
 import type { AgentStatus } from "../lib/types";
 
-const status = (listening: number, comments: number, editRequests: number): AgentStatus => ({
+const status = (listening: number, comments: number, editRequests: number, working = 0): AgentStatus => ({
   listening,
+  working,
   toSend: { comments, editRequests },
 });
 
 describe("agentPillLabels", () => {
   test("before the first status read it claims nothing", () => {
-    expect(agentPillLabels(null)).toEqual({ listening: false, status: "Agent", send: "Nothing to send", canSend: false });
+    expect(agentPillLabels(null)).toEqual({
+      listening: false,
+      status: "Agent",
+      send: "Nothing to send",
+      canSend: false,
+      sendTitle: "No agent is listening: start one with acm edit <file.md> --notify",
+    });
   });
 
-  test("no listener, work waiting", () => {
+  test("no listener: Send is off and says how to start one, even with work waiting", () => {
     expect(agentPillLabels(status(0, 2, 1))).toEqual({
       listening: false,
       status: "No agent listening",
       send: "Send 3 to agent",
+      canSend: false,
+      sendTitle: "No agent is listening: start one with acm edit <file.md> --notify",
+    });
+  });
+
+  test("a --wait agent that was woken and has not re-armed counts as working: Send stays on", () => {
+    expect(agentPillLabels(status(0, 1, 0, 1))).toEqual({
+      listening: true,
+      status: "Agent working",
+      send: "Send 1 to agent",
       canSend: true,
+      sendTitle: "Send the comments waiting on the agent as one message",
     });
   });
 
@@ -30,6 +48,7 @@ describe("agentPillLabels", () => {
       status: "Agent listening",
       send: "Nothing to send",
       canSend: false,
+      sendTitle: "Nothing new to send to the agent",
     });
   });
 

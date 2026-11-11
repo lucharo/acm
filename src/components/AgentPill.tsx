@@ -12,20 +12,34 @@ function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+export const NO_AGENT_HINT = "No agent is listening: start one with acm edit <file.md> --notify";
+
+/** An agent is in the loop: listening now, or a --wait agent woken and not yet back. */
+export function agentAvailable(status: AgentStatus | null): boolean {
+  return (status?.listening ?? 0) + (status?.working ?? 0) > 0;
+}
+
 export function agentPillLabels(status: AgentStatus | null) {
   const total = status ? status.toSend.comments + status.toSend.editRequests : 0;
-  const listening = (status?.listening ?? 0) > 0;
+  const available = agentAvailable(status);
   return {
-    listening,
+    listening: available,
     status: !status
       ? "Agent"
-      : status.listening === 0
-        ? "No agent listening"
+      : status.listening > 1
+        ? `${status.listening} agents listening`
         : status.listening === 1
           ? "Agent listening"
-          : `${status.listening} agents listening`,
+          : status.working > 0
+            ? "Agent working"
+            : "No agent listening",
     send: total > 0 ? `Send ${total} to agent` : "Nothing to send",
-    canSend: total > 0,
+    canSend: total > 0 && available,
+    sendTitle: !available
+      ? NO_AGENT_HINT
+      : total > 0
+        ? "Send the comments waiting on the agent as one message"
+        : "Nothing new to send to the agent",
   };
 }
 
@@ -167,7 +181,7 @@ export default function AgentPill({
         onClick={onSend}
         disabled={!labels.canSend || queued}
         className="flex items-center rounded-r-full border-l border-[var(--line-strong)] px-2.5 font-medium text-[var(--ink)] hover:bg-[var(--line)] disabled:font-normal disabled:text-[var(--faint)] disabled:hover:bg-transparent"
-        title={labels.canSend ? "Send the comments waiting on the agent as one message" : "Nothing new to send to the agent"}
+        title={labels.sendTitle}
       >{queued ? "Saving…" : justSent ? "Sent" : labels.send}</button>
       {open ? (
         <>

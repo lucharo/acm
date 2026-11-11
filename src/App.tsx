@@ -108,7 +108,7 @@ import type {
   CommentThread,
   SidebarCard,
 } from "./lib/types";
-import AgentPill, { askFeedback, saveStatusOf } from "./components/AgentPill";
+import AgentPill, { agentAvailable, askFeedback, saveStatusOf } from "./components/AgentPill";
 
 
 
@@ -1667,6 +1667,7 @@ function Workspace({
                     onReply={replyToThread}
                     onReplyAndSeen={replyAndSeen}
                     onSuggestEdit={(t, proposal) => replyAndSeen(t, `SUGGEST: ${proposal}`)}
+                    agentAvailable={agentAvailable(agentStatus)}
                     onAskAgent={(t) => {
                       replyAndSeen(t, EDIT_REQUEST_TEXT);
                       const feedback = askFeedback(agentStatus);

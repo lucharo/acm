@@ -674,10 +674,20 @@ describe("Ask agent (#76)", () => {
   test("offers Ask agent next to Suggest edit on a comment thread", () => {
     const html = renderSidebar([commentCard("c1", "wordy")], true, new Set(), false, {
       anchoredCardIds: new Set(["c1"]),
+      agentAvailable: true,
     });
 
     expect(html).toContain("Suggest edit");
-    expect(html).toContain(">Ask agent to edit</button>");
+    expect(html).toMatch(/<button type="button" title="Adds a reply reading “please suggest an edit” to this thread and marks it seen; the listening agent is woken and answers with a SUGGEST"[^>]*>Ask agent to edit<\/button>/);
+  });
+
+  test("with no agent listening, Ask agent to edit is disabled and says how to start one (#31)", () => {
+    const html = renderSidebar([commentCard("c1", "wordy")], true, new Set(), false, {
+      anchoredCardIds: new Set(["c1"]),
+      agentAvailable: false,
+    });
+
+    expect(html).toMatch(/<button type="button" disabled="" title="No agent is listening: start one with acm edit &lt;file.md&gt; --notify. To leave a request for later, reply: please suggest an edit"[^>]*>Ask agent to edit<\/button>/);
   });
 
   test("a point comment with no highlighted span does not offer Ask agent", () => {
