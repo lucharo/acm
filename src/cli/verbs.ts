@@ -28,6 +28,7 @@ import {
   findSuggestionComment,
   findThread,
   suggestionWhitespaceWarning,
+  addedCommentRaws,
   writeProblems,
   type WriteProblem,
 } from "../lib/agentEdits";
@@ -937,16 +938,19 @@ async function commitWrite(
   );
 }
 
-/** What this write added (#27), placed in the bytes now on disk. Found by diffing
- *  `before` against the verb's own result, so a merged human edit is never blamed
- *  on the agent; then looked up again in the merged copy for its line. */
+/** What this write added (#27), judged in the bytes now on disk. When the live
+ *  editor merged in the person's concurrent edits, those can decide whether the
+ *  agent's comments apply (a highlight added or removed meanwhile), so the agent's
+ *  comments are judged in the merged copy; any other problem counts only if the
+ *  verb's own result had it too, so a person's edit is never blamed on the agent. */
 function problemsThisWriteAdded(before: string, after: string, final: string): WriteProblem[] {
-  const added = writeProblems(before, after);
-  if (final === after || added.length === 0) return added;
-  const keys = new Set(added.map((p) => p.key));
-  const placed = writeProblems(before, final).filter((p) => keys.has(p.key));
-  const placedKeys = new Set(placed.map((p) => p.key));
-  return [...placed, ...added.filter((p) => !placedKeys.has(p.key))];
+  const own = writeProblems(before, after);
+  if (final === after) return own;
+  const agentComments = addedCommentRaws(before, after);
+  const ownElsewhere = new Set(own.filter((p) => p.commentId === null).map((p) => p.key));
+  return writeProblems(before, final).filter((p) =>
+    p.commentId !== null ? agentComments.has(p.key) : ownElsewhere.has(p.key),
+  );
 }
 
 /** Warn on stderr, naming each problem's line, thread and reason. The write has

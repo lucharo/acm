@@ -297,18 +297,18 @@ describe("#101 a live write whose response is cut off reports an unknown outcome
 });
 
 describe("#27 a write merged by the live editor is linted on the merged bytes", () => {
-  test("the warning names the merged line, and a problem the person typed meanwhile is not blamed on the write", async () => {
+  /** Run `acm <args>` against a fake live editor whose merge is `merge(content)`;
+   *  returns the CLI result and the merged bytes the editor answered with. */
+  async function viaMergingEditor(seed: string, merge: (content: string) => string, args: string[]) {
     const docPath = join(mkdtempSync(join(tmpdir(), "acm-clifix-doc-")), "doc.md");
-    writeFileSync(docPath, "Intro.\n\n## {==Wrapping up==}{>>@luis: weak heading<<}\n\nBody.\n");
-    // The person typed two lines, one with an unclosed highlight, while the write
-    // was in flight: the editor's merge puts them above the agent's reply.
+    writeFileSync(docPath, seed);
     let merged = "";
     const editor = Bun.serve({
       port: 0,
       async fetch(req) {
         if (new URL(req.url).pathname !== "/api/agent-write") return Response.json({});
         const { content } = (await req.json()) as { content: string };
-        merged = `Human {==typing\n\n${content}`;
+        merged = merge(content);
         return Response.json({ version: 2, content: merged });
       },
     });
@@ -323,22 +323,68 @@ describe("#27 a write merged by the live editor is linted on the merged bytes", 
     }
     writeFileSync(registry, JSON.stringify({ [String(editor.port)]: { port: editor.port, doc: docPath, pid: process.pid, startedAt: "2026-11-11T00:00:00Z" } }));
     try {
-      const r = await cli(["reply", "weak heading", "@claude: SUGGEST: Two threads", "--doc", docPath]);
-
-      const comments = scanTokens(merged).filter((t): t is CommentToken => t.type === "comment");
-      const reply = comments.find((c) => c.body.startsWith("@claude:"));
-      expect(reply).toBeDefined();
-      expect(r.code).toBe(0);
-      expect(r.out.split("\n").filter((l) => l.startsWith("  line ") || l.includes("warning:"))).toEqual([
-        "acm reply: warning: this write added 1 problem the editor will flag. It is written; fix it before the person reviews it:",
-        `  line 5, thread #${comments[0].id} on ⟦Wrapping up⟧, comment #${reply!.id} "@claude: SUGGEST: Two threads": ` +
-          'its text starts with "@claude:", which acm already writes as the author, so the SUGGEST: behind it is hidden and it shows as a plain note with no Apply — start the text with "SUGGEST:"',
-      ]);
-      expect(r.out).toContain("  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply\n");
+      const r = await cli([...args, "--doc", docPath]);
+      expect(r.out).toContain("written via the live editor");
+      return { ...r, merged };
     } finally {
       editor.stop(true);
       writeFileSync(registry, prev);
     }
+  }
+  const warningLines = (out: string) => out.split("\n").filter((l) => l.startsWith("  line ") || l.includes("warning:"));
+  const ANCHORED = "Intro.\n\n## {==Wrapping up==}{>>@luis: weak heading<<}\n\nBody.\n";
+  const POINT = "Intro.\n\n## Wrapping up{>>@luis: weak heading<<}\n\nBody.\n";
+
+  test("the warning names the merged line, and a problem the person typed meanwhile is not blamed on the write", async () => {
+    // The person typed two lines, one with an unclosed highlight, while the write
+    // was in flight: the editor's merge puts them above the agent's reply.
+    const r = await viaMergingEditor(ANCHORED, (content) => `Human {==typing\n\n${content}`, [
+      "reply",
+      "weak heading",
+      "@claude: SUGGEST: Two threads",
+    ]);
+
+    const comments = scanTokens(r.merged).filter((t): t is CommentToken => t.type === "comment");
+    const reply = comments.find((c) => c.body.startsWith("@claude:"));
+    expect(reply).toBeDefined();
+    expect(r.code).toBe(0);
+    expect(warningLines(r.out)).toEqual([
+      "acm reply: warning: this write added 1 problem the editor will flag. It is written; fix it before the person reviews it:",
+      `  line 5, thread #${comments[0].id} on ⟦Wrapping up⟧, comment #${reply!.id} "@claude: SUGGEST: Two threads": ` +
+        'its text starts with "@claude:", which acm already writes as the author, so the SUGGEST: behind it is hidden and it shows as a plain note with no Apply — start the text with "SUGGEST:"',
+    ]);
+    expect(r.out).toContain("  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply\n");
+  });
+
+  test("a SUGGEST the merge gave a span (the person highlighted it meanwhile) is not warned about", async () => {
+    const r = await viaMergingEditor(POINT, (content) => content.replace("## Wrapping up{>>", "## {==Wrapping up==}{>>"), [
+      "reply",
+      "weak heading",
+      "SUGGEST: Two threads",
+    ]);
+
+    expect(r.code).toBe(0);
+    expect(r.merged).toContain("## {==Wrapping up==}{>>@luis: weak heading<<}{>>@claude: SUGGEST: Two threads<<}");
+    expect(warningLines(r.out)).toEqual([]);
+    expect(r.out).toContain("  comments: 2 | applicable SUGGEST cards: 1\n");
+  });
+
+  test("a SUGGEST the merge left without a span (the person removed the highlight meanwhile) is warned about", async () => {
+    const r = await viaMergingEditor(ANCHORED, (content) => content.replace("## {==Wrapping up==}{>>", "## Wrapping up{>>"), [
+      "reply",
+      "weak heading",
+      "SUGGEST: Two threads",
+    ]);
+
+    const comments = scanTokens(r.merged).filter((t): t is CommentToken => t.type === "comment");
+    expect(r.code).toBe(0);
+    expect(r.merged).toContain("## Wrapping up{>>@luis: weak heading<<}{>>@claude: SUGGEST: Two threads<<}");
+    expect(warningLines(r.out)).toEqual([
+      "acm reply: warning: this write added 1 problem the editor will flag. It is written; fix it before the person reviews it:",
+      `  line 3, thread #${comments[0].id} (point comment, no span), comment #${comments[1].id} "SUGGEST: Two threads": ` +
+        'the thread it joins has no {==span==}, so this SUGGEST has nothing to apply to — anchor it with `acm suggest "<span>" "<new wording>"` instead',
+    ]);
+    expect(r.out).toContain("  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply\n");
   });
 });
 

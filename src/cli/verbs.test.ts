@@ -1069,4 +1069,56 @@ describe("acm write lint (#27)", () => {
     expect(r.err).toBe("");
     expect(r.out.split("\n").at(-2)).toBe("  comments: 0 | applicable SUGGEST cards: 0");
   });
+
+  test("a batch that edits two threads blames its own broken insert, not an old problem between them", () => {
+    writeFileSync(
+      doc,
+      "First {==one==}{>>@luis: early<<} end.\n\n" +
+        "Middle {==left open here.\n\n" +
+        "Last {==two==}{>>@luis: late<<} end.\n",
+    );
+    writeFileSync(
+      edits,
+      JSON.stringify([
+        { id: "t1", match: "early", insert: " {++oops" },
+        { id: "t2", match: "late", insert: "{>>@claude: fine<<}" },
+      ]),
+    );
+
+    const r = run("reply", "--batch", edits);
+
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        '  line 1 "First {==one==}{>>@luis: early<<} {++oops end.": {++ never closes in this paragraph\n',
+    );
+  });
+
+  test("a code example elsewhere with the same doubled prefix does not hide the new comment's warning", () => {
+    writeFileSync(doc, `${HEADING_DOC}\nAvoid \`{>>@claude: @claude: agreed<<}\`.\n`);
+
+    const r = run("reply", "this heading is weak", "@claude: agreed");
+
+    const c = commentIn(readFileSync(doc, "utf8").split("Avoid")[0], "@claude: agreed");
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        `  line 3, thread #${c.threadId} on ⟦Wrapping up⟧, comment #${c.id} "@claude: agreed": ` +
+        'its text starts with "@claude:", which acm already writes as the author, so it reads "@claude: @claude: …" — drop the prefix from the text\n',
+    );
+  });
+
+  test("a doubled prefix with a multi-word author is caught too", () => {
+    writeFileSync(doc, HEADING_DOC);
+
+    const r = run("reply", "this heading is weak", "@Jane Doe: agreed", "--author", "Jane Doe");
+
+    const c = commentIn(readFileSync(doc, "utf8"), "@Jane Doe: agreed");
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        `  line 3, thread #${c.threadId} on ⟦Wrapping up⟧, comment #${c.id} "@Jane Doe: agreed": ` +
+        'its text starts with "@Jane Doe:", which acm already writes as the author, so it reads "@Jane Doe: @Jane Doe: …" — drop the prefix from the text\n',
+    );
+  });
 });
