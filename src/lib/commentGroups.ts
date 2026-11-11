@@ -95,10 +95,13 @@ export function noteGroupMembers(
 /** Resolve every note thread of `groupId` as one batch of ranged edits in original
  *  coordinates (one transaction, one undo). `threads` are the resolved threads, for
  *  the decision log. A thread whose resolve range overlaps an earlier one is left
- *  open and counted in `skipped`. */
+ *  open and counted in `skipped`. `unticked` (#25) holds the group's row ids left
+ *  out: those notes stay open, and so does any thread holding an unticked comment
+ *  (an edit of the group can share a note's thread). */
 export function noteGroupResolveEdits(
   content: string,
   groupId: string,
+  unticked?: ReadonlySet<string>,
 ): {
   edits: { from: number; to: number; insert: string }[];
   threads: CommentThread[];
@@ -107,7 +110,9 @@ export function noteGroupResolveEdits(
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
   const threads = groupThreads(comments, content);
-  const members = noteGroupMembers(content, tokens, threads).get(groupId) ?? [];
+  const members = (noteGroupMembers(content, tokens, threads).get(groupId) ?? []).filter(
+    (m) => !unticked?.has(m.commentId),
+  );
   const planned = members
     .map((m) => {
       const thread = threads.find((t) => t.id === m.threadId)!;
@@ -119,6 +124,7 @@ export function noteGroupResolveEdits(
   for (const p of planned) {
     const prev = kept[kept.length - 1];
     if (prev && p.edit.from < prev.edit.to) skipped += 1;
+    else if (p.thread.comments.some((c) => unticked?.has(c.id))) skipped += 1;
     else kept.push(p);
   }
   return { edits: kept.map((p) => p.edit), threads: kept.map((p) => p.thread), skipped };

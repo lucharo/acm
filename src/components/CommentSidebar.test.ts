@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 
-import CommentSidebar, { GroupPanel, groupCountLabel } from "./CommentSidebar";
+import CommentSidebar, { GroupPanel, GroupSurface, groupCountLabel, groupPanelPlacement } from "./CommentSidebar";
 import type { GroupNoteMember } from "../lib/commentGroups";
 import type { SuggestionGroupMember } from "../lib/criticmarkup";
 import type { SidebarCard } from "../lib/types";
@@ -412,6 +413,9 @@ describe("review groups with notes (#77) and the group panel (#67)", () => {
         onGroupApplyAndResolve: noop,
         onGroupResolveNotes: noop,
         onLocate: noop,
+        unticked: new Set<string>(),
+        onToggle: noop,
+        onToggleAll: noop,
       }),
     );
     const order = ["teh", "Source 1.", "Source 2.", "Source 3."].map((t) => html.indexOf(t));
@@ -421,6 +425,229 @@ describe("review groups with notes (#77) and the group panel (#67)", () => {
     expect(html).toContain("Resolve all 3 notes");
     expect(html).toContain('tabindex="0"');
     expect(html).toContain("overflow-y-auto");
+  });
+});
+
+describe("group panel beside its card, with ticked rows (#25)", () => {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const STUBBED = ["window", "IS_REACT_ACT_ENVIRONMENT", "IS_REACT_NATIVE_TEST_ENVIRONMENT"];
+  const saved = new Map<string, unknown>();
+  let renderer: ReactTestRenderer | undefined;
+
+  beforeAll(() => {
+    for (const key of STUBBED) saved.set(key, globals[key]);
+    globals.IS_REACT_ACT_ENVIRONMENT = true;
+    globals.IS_REACT_NATIVE_TEST_ENVIRONMENT = true; // silences the renderer's web deprecation notice
+  });
+
+  afterAll(() => {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete globals[key];
+      else globals[key] = value;
+    }
+  });
+
+  afterEach(() => {
+    act(() => renderer?.unmount());
+    renderer = undefined;
+    delete globals.window;
+  });
+
+  const edits: SuggestionGroupMember[] = [1, 2, 3].map((n) => ({
+    commentId: `edit-${n}`,
+    from: n * 100,
+    anchorFrom: n * 100 - 20,
+    anchorTo: n * 100 - 10,
+    anchorText: `old ${n}`,
+    replacement: `new ${n}`,
+    isDelete: false,
+  }));
+  const notes: GroupNoteMember[] = [1, 2].map((n) => ({
+    commentId: `note-${n}`,
+    threadId: `note-${n}`,
+    threadFrom: 1000 + n * 100,
+    threadTo: 1000 + n * 100 + 40,
+    anchorFrom: 1000 + n * 100 + 3,
+    anchorTo: 1000 + n * 100 + 10,
+    anchorText: `fact ${n}`,
+    author: "claude",
+    text: `Source ${n}.`,
+  }));
+  type Call = [string, ...unknown[]];
+
+  function surfaceProps(calls: Call[]) {
+    return {
+      group: { id: "g", edits: 3, notes: 2 },
+      members: edits,
+      notes,
+      mode: "popover" as const,
+      onMode: (mode: unknown) => calls.push(["mode", mode]),
+      onGroupEdit: (id: string, mode: string, unticked?: ReadonlySet<string>) =>
+        calls.push(["edit", id, mode, unticked && [...unticked]]),
+      onGroupApplyAndResolve: (id: string, unticked?: ReadonlySet<string>) =>
+        calls.push(["apply-resolve", id, unticked && [...unticked]]),
+      onGroupResolveNotes: (id: string, unticked?: ReadonlySet<string>) =>
+        calls.push(["resolve-notes", id, unticked && [...unticked]]),
+      onLocate: () => calls.push(["locate"]),
+    };
+  }
+  const event = { stopPropagation() {}, preventDefault() {} };
+  const text = (node: ReactTestInstance): string =>
+    node.children.map((child) => (typeof child === "string" ? child : text(child))).join("");
+  const button = (label: string) => {
+    const found = renderer!.root.findAll((n) => n.type === "button" && text(n) === label);
+    expect(found).toHaveLength(1);
+    return found[0];
+  };
+  const checkbox = (id: string) => renderer!.root.find((n) => n.type === "input" && n.props.value === id);
+
+  test("places the panel under the group link, or above it when the window is short below", () => {
+    const viewport = { width: 1280, height: 800 };
+
+    expect([
+      groupPanelPlacement({ top: 200, bottom: 220, right: 1250 }, viewport),
+      groupPanelPlacement({ top: 700, bottom: 720, right: 1250 }, viewport),
+      groupPanelPlacement({ top: 250, bottom: 270, right: 1250 }, { width: 1280, height: 500 }),
+      groupPanelPlacement({ top: -300, bottom: -280, right: 1250 }, viewport),
+      groupPanelPlacement({ top: 200, bottom: 220, right: 200 }, viewport),
+      groupPanelPlacement({ top: 200, bottom: 220, right: 350 }, { width: 360, height: 800 }),
+    ]).toEqual([
+      { top: 226, right: 30, width: 400, maxHeight: 558 },
+      { bottom: 106, right: 30, width: 400, maxHeight: 678 },
+      { top: 16, right: 30, width: 400, maxHeight: 468 },
+      { top: 16, right: 30, width: 400, maxHeight: 768 },
+      { top: 226, right: 864, width: 400, maxHeight: 558 },
+      { top: 226, right: 16, width: 328, maxHeight: 558 },
+    ]);
+  });
+
+  test("the panel opens at its card's group link instead of the window corner", () => {
+    globals.window = { innerWidth: 1280, innerHeight: 800, addEventListener() {}, removeEventListener() {} };
+    const anchor = { current: { getBoundingClientRect: () => ({ top: 200, bottom: 220, right: 1250 }) } };
+
+    act(() => {
+      renderer = create(
+        createElement(GroupPanel, {
+          ...surfaceProps([]),
+          mode: "panel",
+          unticked: new Set<string>(),
+          onToggle: () => {},
+          onToggleAll: () => {},
+          anchor: anchor as never,
+        }),
+      );
+    });
+    const dialog = renderer!.root.findByProps({ role: "dialog" });
+
+    expect(dialog.props.style).toEqual({ top: 226, right: 30, width: 400, maxHeight: 558 });
+    expect(dialog.props.className).not.toContain("top-16");
+  });
+
+  test("every row has a checkbox, ticked unless unticked, and the buttons count the ticked rows", () => {
+    const html = renderToStaticMarkup(
+      createElement(GroupPanel, {
+        ...surfaceProps([]),
+        mode: "panel",
+        unticked: new Set(["edit-2", "note-1"]),
+        onToggle: () => {},
+        onToggleAll: () => {},
+      }),
+    );
+    const boxes = [...html.matchAll(/<input[^>]*value="([^"]+)"[^>]*>/g)].map((m) => [m[1], m[0].includes("checked")]);
+
+    expect(boxes).toEqual([
+      ["edit-1", true],
+      ["edit-2", false],
+      ["edit-3", true],
+      ["note-1", false],
+      ["note-2", true],
+    ]);
+    expect(
+      ["Apply 2 of 3", "Apply &amp; resolve 2", "Reject 2", "Resolve 1 of 2 notes"].filter((label) =>
+        html.includes(`>${label}</button>`),
+      ),
+    ).toEqual(["Apply 2 of 3", "Apply &amp; resolve 2", "Reject 2", "Resolve 1 of 2 notes"]);
+  });
+
+  test("with every edit unticked the edit buttons are disabled", () => {
+    act(() => {
+      renderer = create(
+        createElement(GroupPanel, {
+          ...surfaceProps([]),
+          mode: "panel",
+          unticked: new Set(["edit-1", "edit-2", "edit-3"]),
+          onToggle: () => {},
+          onToggleAll: () => {},
+        }),
+      );
+    });
+
+    expect(["Apply 0 of 3", "Apply & resolve 0", "Reject 0"].map((label) => button(label).props.disabled)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  test("unticking rows in the popover hands every button the unticked set", () => {
+    const calls: Call[] = [];
+    act(() => {
+      renderer = create(createElement(GroupSurface, surfaceProps(calls)));
+    });
+
+    act(() => checkbox("edit-2").props.onChange(event));
+    act(() => checkbox("note-1").props.onChange(event));
+    act(() => button("Apply 2 of 3").props.onClick(event));
+    act(() => button("Apply & resolve 2").props.onClick(event));
+    act(() => button("Reject 2").props.onClick(event));
+    act(() => button("Resolve 1 of 2 notes").props.onClick(event));
+
+    expect(calls).toEqual([
+      ["edit", "g", "accept", ["edit-2", "note-1"]],
+      ["apply-resolve", "g", ["edit-2", "note-1"]],
+      ["edit", "g", "reject", ["edit-2", "note-1"]],
+      ["resolve-notes", "g", ["edit-2", "note-1"]],
+    ]);
+  });
+
+  test("with every row ticked the buttons decide the whole group", () => {
+    const calls: Call[] = [];
+    act(() => {
+      renderer = create(createElement(GroupSurface, surfaceProps(calls)));
+    });
+
+    act(() => button("Apply all 3").props.onClick(event));
+    act(() => button("Resolve all 2 notes").props.onClick(event));
+
+    expect(calls).toEqual([
+      ["edit", "g", "accept", undefined],
+      ["resolve-notes", "g", undefined],
+    ]);
+  });
+
+  test("Untick all then ticking one row applies just that row", () => {
+    const calls: Call[] = [];
+    act(() => {
+      renderer = create(createElement(GroupSurface, surfaceProps(calls)));
+    });
+
+    act(() => button("Untick all").props.onClick(event));
+    act(() => checkbox("edit-3").props.onChange(event));
+    act(() => button("Apply 1 of 3").props.onClick(event));
+
+    expect(calls).toEqual([["edit", "g", "accept", ["edit-1", "edit-2", "note-1", "note-2"]]]);
+  });
+
+  test("an unticked note travels with Apply all, so an edit in its thread cannot remove it", () => {
+    const calls: Call[] = [];
+    act(() => {
+      renderer = create(createElement(GroupSurface, surfaceProps(calls)));
+    });
+
+    act(() => checkbox("note-1").props.onChange(event));
+    act(() => button("Apply all 3").props.onClick(event));
+
+    expect(calls).toEqual([["edit", "g", "accept", ["note-1"]]]);
   });
 });
 

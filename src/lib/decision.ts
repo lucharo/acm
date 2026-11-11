@@ -346,7 +346,8 @@ export function structuredSuggestionDecision(
 }
 
 /** Events for exactly the group members that the shared edit planner will apply;
- * overlapping/unresolvable members are omitted alongside their skipped edits. */
+ * overlapping/unresolvable members are omitted alongside their skipped edits.
+ * `unticked` leaves those member ids out of both (#25), as in suggestionGroupEdits. */
 export function structuredSuggestionGroupDecisions(
   content: string,
   groupId: string,
@@ -354,15 +355,16 @@ export function structuredSuggestionGroupDecisions(
   action: "accept" | "reject" | "apply" | "apply-resolve",
   actor: string,
   source: DecisionSource,
+  unticked?: ReadonlySet<string>,
 ): DecisionEvent[] {
   const discussion = action === "apply-resolve" ? "resolve-thread" : "keep-discussion";
-  const { edits } = suggestionGroupEdits(content, groupId, mode, discussion);
+  const { edits } = suggestionGroupEdits(content, groupId, mode, discussion, unticked);
   const comments = scanTokens(content).filter(
     (token): token is CommentToken => token.type === "comment",
   );
   const remainingEdits = [...edits];
   return comments
-    .filter((comment) => suggestionGroupId(comment.body) === groupId)
+    .filter((comment) => suggestionGroupId(comment.body) === groupId && !unticked?.has(comment.id))
     .flatMap((comment) => {
       const edit = suggestionThreadEdit(content, comment, mode, discussion);
       if (!edit) return [];

@@ -81,6 +81,29 @@ describe("noteGroupResolveEdits", () => {
     expect([threads.length, skipped]).toEqual([2, 0]);
   });
 
+  test("resolves only the ticked notes and leaves the unticked thread open (#25)", () => {
+    const sourceA = scanTokens(FACTS).find((t) => isComment(t) && t.body.endsWith("Source A."))!;
+
+    const { edits, threads, skipped } = noteGroupResolveEdits(FACTS, "facts", new Set([sourceA.id]));
+
+    expect(applyRangedEdits(FACTS, edits)).toBe(
+      "Some {==fact one==}{>>@claude: NOTE[g:facts]: Source A.<<} and fact two and " +
+        "{==other==}{>>@claude: plain note<<} end.",
+    );
+    expect([threads.length, skipped]).toEqual([1, 0]);
+  });
+
+  test("keeps a note thread open when it holds an unticked edit of the group (#25)", () => {
+    const content = "A {==one==}{>>@claude: NOTE[g:g1]: why<<}{>>@a: SUGGEST[g:g1]: first<<}.";
+    const suggest = scanTokens(content).find((t) => isComment(t) && t.body.startsWith("SUGGEST"))!;
+
+    expect(noteGroupResolveEdits(content, "g1", new Set([suggest.id]))).toEqual({
+      edits: [],
+      threads: [],
+      skipped: 1,
+    });
+  });
+
   test("returns no edits for an unknown group", () => {
     expect(noteGroupResolveEdits(FACTS, "nope")).toEqual({ edits: [], threads: [], skipped: 0 });
   });
