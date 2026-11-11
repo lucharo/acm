@@ -8,9 +8,8 @@
 //
 // These MUST live in the editor keymap at higher precedence than the default
 // keymap — CodeMirror's defaultKeymap binds ⌘I to `selectParentSyntax` (and ⌘U
-// to `undoSelection`), so a
-// window-level listener would fire only AFTER that ran and would toggle emphasis
-// over the wrong (re-selected) range. The keymap binding returns true, so the
+// to `undoSelection`), so a window-level listener would fire only AFTER that ran
+// and would toggle emphasis over the wrong (re-selected) range. The keymap binding returns true, so the
 // default command never runs.
 //
 // markdownPreview already renders StrongEmphasis/Emphasis and hides the `*`/`**`
