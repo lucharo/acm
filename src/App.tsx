@@ -108,7 +108,7 @@ import type {
   CommentThread,
   SidebarCard,
 } from "./lib/types";
-import AgentPill, { askFeedback } from "./components/AgentPill";
+import AgentPill, { askFeedback, saveStatusOf } from "./components/AgentPill";
 
 
 
@@ -1573,7 +1573,7 @@ function Workspace({
             notifyEach={settings.notifyEachComment}
             onToggleNotifyEach={toggleNotifyEach}
             onFeedback={pushToast}
-            savePending={saveState === "unsaved" || saveState === "saving"}
+            saveStatus={saveStatusOf(saveState)}
             flushSave={flushNow}
           />
         }

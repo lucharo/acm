@@ -215,8 +215,13 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const agentWake = summarize(initialContent).then(({ summary }) => new AgentWake(summary));
   const listeningCount = () => wakeListeners.size + (opts.onWakeLine ? 1 : 0);
   let lastAgentMessage = "";
+  let statusRevision = 0;
   async function publishAgentStatus() {
+    // Reads overlap (each awaits the settings file): only the latest may publish, so
+    // an older summary resuming late cannot overwrite a newer count on the page.
+    const revision = ++statusRevision;
     const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
+    if (revision !== statusRevision) return;
     const msg: ServerMessage = { type: "agent", listening: listeningCount(), toSend: wake.toSend(summary) };
     const text = JSON.stringify(msg);
     if (text === lastAgentMessage) return;

@@ -64,8 +64,17 @@ export class AgentWake {
     this.known = new Set(initial.filter((t) => t.awaitingAgent).map(stateKey));
   }
 
+  /** Forget states no longer waiting. A comment id hashes its bytes, so the same
+   *  words on another thread after a resolve (say "please suggest an edit") would
+   *  otherwise match a retired state and stay silent. */
+  private prune(summary: ThreadSummary[]) {
+    const live = new Set(summary.filter((t) => t.awaitingAgent).map(stateKey));
+    for (const set of [this.known, this.sent]) for (const key of set) if (!live.has(key)) set.delete(key);
+  }
+
   /** Lines for threads that became the agent's turn since the last look. */
   detect(summary: ThreadSummary[], notifyEachComment: boolean): WakeEvent[] {
+    this.prune(summary);
     const events: WakeEvent[] = [];
     for (const t of summary) {
       if (!t.awaitingAgent) continue;
@@ -83,6 +92,7 @@ export class AgentWake {
   /** Send to agent: hand over, as one line, everything waiting that no line has
    *  sent yet (the count the page's Send button shows). */
   review(summary: ThreadSummary[]): { event: "review" } & WaitingCounts {
+    this.prune(summary);
     const unsent = summary.filter((t) => t.awaitingAgent && !this.sent.has(stateKey(t)));
     for (const t of unsent) {
       this.known.add(stateKey(t));

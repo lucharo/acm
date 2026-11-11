@@ -2,7 +2,7 @@
 // waiting on it, and what the person is told after Send.
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import AgentPill, { agentPillLabels, askFeedback, sendFeedback } from "./AgentPill";
+import AgentPill, { agentPillLabels, askFeedback, saveStatusOf, sendDecision, sendFeedback } from "./AgentPill";
 import type { AgentStatus } from "../lib/types";
 
 const status = (listening: number, comments: number, editRequests: number): AgentStatus => ({
@@ -64,6 +64,16 @@ describe("askFeedback", () => {
   });
 });
 
+describe("Send and the pending save (roborev round 2)", () => {
+  test("Send goes only once the edits are on disk, and is cancelled when the save fails", () => {
+    expect(
+      ["saved", "unsaved", "saving", "offline", "conflict", "audit-error", "audit-recovery"].map((s) =>
+        sendDecision(saveStatusOf(s)),
+      ),
+    ).toEqual(["send", "wait", "wait", "cancel", "cancel", "send", "send"]);
+  });
+});
+
 describe("AgentPill markup", () => {
   test("shows the status and an enabled Send with the waiting count", () => {
     const html = renderToStaticMarkup(
@@ -73,7 +83,7 @@ describe("AgentPill markup", () => {
         notifyEach={false}
         onToggleNotifyEach={() => {}}
         onFeedback={() => {}}
-        savePending={false}
+        saveStatus="saved"
         flushSave={() => {}}
       />,
     );
@@ -90,7 +100,7 @@ describe("AgentPill markup", () => {
         notifyEach={false}
         onToggleNotifyEach={() => {}}
         onFeedback={() => {}}
-        savePending={false}
+        saveStatus="saved"
         flushSave={() => {}}
       />,
     );

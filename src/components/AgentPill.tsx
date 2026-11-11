@@ -56,15 +56,31 @@ export function askFeedback(status: AgentStatus | null): { message: string; kind
     : { message: "No agent is listening. The request will reach the next agent that listens to this editor (acm edit --notify or --wait).", kind: "error" };
 }
 
+/** Whether the editor's buffer is on disk: Send must not wake the agent before
+ *  the comment it is about has saved (the server reads the file). */
+export type SaveStatus = "saved" | "pending" | "failed";
+
+export function saveStatusOf(saveState: string): SaveStatus {
+  if (saveState === "unsaved" || saveState === "saving") return "pending";
+  if (saveState === "offline" || saveState === "conflict") return "failed";
+  return "saved"; // "saved" and the audit-* states, which settle after the content saved
+}
+
+/** What a Send click (or one waiting on a save) does now. */
+export function sendDecision(saveStatus: SaveStatus): "send" | "wait" | "cancel" {
+  return saveStatus === "saved" ? "send" : saveStatus === "pending" ? "wait" : "cancel";
+}
+
+export const SEND_NOT_SAVED = "Not sent: your latest edits have not saved. Send again once the editor shows Saved.";
+
 interface AgentPillProps {
   status: AgentStatus | null;
   documentPath: string | null;
   notifyEach: boolean;
   onToggleNotifyEach: () => void;
   onFeedback: Feedback;
-  /** The editor holds edits not on disk yet: Send saves first, so the agent hears
-   *  about the comment you just wrote (the server reads the file). */
-  savePending: boolean;
+  /** Send saves first, so the agent hears about the comment you just wrote. */
+  saveStatus: SaveStatus;
   flushSave: () => void;
 }
 
@@ -74,7 +90,7 @@ export default function AgentPill({
   notifyEach,
   onToggleNotifyEach,
   onFeedback,
-  savePending,
+  saveStatus,
   flushSave,
 }: AgentPillProps) {
   const [open, setOpen] = useState(false);
@@ -103,14 +119,20 @@ export default function AgentPill({
     }
   }, [documentPath, onFeedback]);
 
-  // A Send clicked while a save is pending waits for the save, then goes.
+  // A Send clicked while a save is pending waits for the save, then goes; a save
+  // that fails instead (offline, conflict) cancels it rather than send old bytes.
   useEffect(() => {
-    if (!queued || savePending) return;
+    if (!queued) return;
+    const decision = sendDecision(saveStatus);
+    if (decision === "wait") return;
     setQueued(false);
-    void send();
-  }, [queued, savePending, send]);
+    if (decision === "send") void send();
+    else onFeedback(SEND_NOT_SAVED, "error");
+  }, [queued, saveStatus, send, onFeedback]);
   const onSend = () => {
-    if (!savePending) return void send();
+    const decision = sendDecision(saveStatus);
+    if (decision === "send") return void send();
+    if (decision === "cancel") return onFeedback(SEND_NOT_SAVED, "error");
     flushSave();
     setQueued(true);
   };

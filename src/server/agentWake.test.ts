@@ -131,6 +131,20 @@ describe("roborev round 1 (#34)", () => {
     expect(wake.pending(summary(reworded)).map((t) => t.anchor)).toEqual(["quick fox"]);
   });
 
+  test("the same edit request on another thread after a resolve still wakes (roborev round 2)", () => {
+    const askA = BASE.replace("too vivid?<<}", "too vivid?<<}{>>@Luis: please suggest an edit<<}");
+    const wake = new AgentWake(summary(BASE));
+    expect(wake.detect(summary(askA), false)).toHaveLength(1);
+    // The person resolves A (thread gone), then asks on a new thread with the same words.
+    const resolved = BASE.replace("{==quick fox==}{>>@claude: too vivid?<<}", "quick fox");
+    expect(wake.detect(summary(resolved), false)).toEqual([]);
+    const askB = resolved.replace("{==lazy dog==}", "{==lazy dog==}{>>@claude: cut?<<}{>>@Luis: please suggest an edit<<}");
+    const [thread] = summary(askB).filter((t) => t.anchor === "lazy dog");
+    expect(wake.detect(summary(askB), false)).toEqual([
+      { event: "ask", threadId: thread.id, author: "Luis", anchor: "lazy dog" },
+    ]);
+  });
+
   test("a line without an author name still reads", () => {
     expect(formatWakeLine({ event: "comment", threadId: "ab", author: "", anchor: "x" })).toBe('acm: comment #ab (no name) "x"');
   });
