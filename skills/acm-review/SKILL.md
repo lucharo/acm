@@ -414,6 +414,17 @@ Typical loop: `acm threads --json` to see open threads → `acm reply` / `acm su
 per thread (or one `acm reply --batch edits.json`) → `acm accept`/`reject` to act on
 suggestions. `--author <name>` stamps the voice (default `claude`) on the
 single-thread verbs; on `--batch` the author lives inside each `insert` string.
+The verbs write `@author:` themselves, so the text you pass starts with the comment or
+`SUGGEST:`, never `@claude:`: a doubled prefix hides the `SUGGEST:` and it shows as a plain note.
+
+**Read the warning a write prints.** When a write adds something the editor will flag (a
+`SUGGEST:` with no span to apply to, such as a reply on a point comment; a doubled
+`@author:` prefix; markup that renders raw), the verb still writes it and exits 0, prints on
+stderr `acm <verb>: warning: this write added N problem(s) …` with one line per problem
+(line, `thread #id` as `acm threads` shows it, the anchor, the comment id, and why), and ends
+its summary line with `⚠ N new SUGGEST won't apply` or `⚠ N new markup problem(s)`. Fix it in
+the doc before the person sees it; do not re-run the verb, which would write it twice. Problems
+the doc already had are never reported.
 
 ## HTTP API / direct file (fallbacks)
 
