@@ -239,6 +239,21 @@ function appendSafeHtmlFragment(
   return appended;
 }
 
+const UNDERLINE_OPEN = /^<u>$/i;
+const UNDERLINE_CLOSE = /^<\/u>$/i;
+
+/** Index of the `</u>` that closes the `<u>` at `children[openIndex]`, or -1. */
+function underlineCloseIndex(source: string, children: SyntaxNode[], openIndex: number): number {
+  let depth = 0;
+  for (let i = openIndex; i < children.length; i += 1) {
+    if (children[i].name !== "HTMLTag") continue;
+    const text = source.slice(children[i].from, children[i].to);
+    if (UNDERLINE_OPEN.test(text)) depth += 1;
+    else if (UNDERLINE_CLOSE.test(text) && --depth === 0) return i;
+  }
+  return -1;
+}
+
 function appendInlineRange(
   parent: HTMLElement,
   source: string,
@@ -273,6 +288,20 @@ function appendInlineRange(
       cursor = math.to;
       mathIndex += 1;
       continue;
+    }
+    if (child?.name === "HTMLTag" && UNDERLINE_OPEN.test(source.slice(child.from, child.to))) {
+      // Markdown has no underline, so ACM writes <u>…</u> (#38). Draw a pair
+      // whose tags share this container; an unclosed tag stays literal text.
+      const closeIndex = underlineCloseIndex(source, children, childIndex);
+      if (closeIndex >= 0) {
+        const close = children[closeIndex];
+        const underline = parent.ownerDocument.createElement("u") as unknown as HTMLElement;
+        appendInlineRange(underline, source, container, child.to, close.from);
+        parent.appendChild(underline);
+        cursor = close.to;
+        childIndex = closeIndex + 1;
+        continue;
+      }
     }
     if (child) {
       appendInlineNode(parent, source, child);

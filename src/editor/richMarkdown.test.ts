@@ -154,6 +154,20 @@ describe("safe rich Markdown rendering", () => {
     expect(renderBlocks("A <u>key</u> point.")).toBe("<addition><p>A <u>key</u> point.</p></addition>");
   });
 
+  test("renders <u> without the HTML option, as a live table cell does (#38)", () => {
+    expect(renderInline("The <u>*key*</u> point")).toBe("<cell>The <u><em>key</em></u> point</cell>");
+  });
+
+  test("renders <u> nested in bold and italic, keeping both (#38)", () => {
+    expect(renderBlocks("A **<u>key</u>** and *<u>b</u> c*.")).toBe(
+      "<addition><p>A <strong><u>key</u></strong> and <em><u>b</u> c</em>.</p></addition>",
+    );
+  });
+
+  test("a stray </u> and an unclosed <u> stay literal text", () => {
+    expect(renderInline("A </u>stray and <u>open")).toBe("<cell>A &lt;/u&gt;stray and &lt;u&gt;open</cell>");
+  });
+
   test("drops executable HTML and unsafe attributes without enabling custom column tags", () => {
     const rendered = renderBlocks([
       '<div style="columns: 2" onclick="alert(1)">',

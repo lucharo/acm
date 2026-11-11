@@ -165,6 +165,18 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.selected).toBe("**word**");
   });
 
+  test("a selection between two separate spans wraps instead of unpairing them", () => {
+    const doc = "<u>one</u> and <u>two</u>";
+    const r = apply(doc, 3, 21, U); // "one</u> and <u>two", flanked by the outer tags
+    expect(r.out).toBe("<u><u>one</u> and <u>two</u></u>");
+  });
+
+  test("selecting two whole spans wraps them rather than stripping the outer tags", () => {
+    const doc = "<u>one</u> and <u>two</u>";
+    const r = apply(doc, 0, doc.length, U);
+    expect(r.out).toBe("<u><u>one</u> and <u>two</u></u>");
+  });
+
   test("multi-cursor wraps each range against the original doc", () => {
     const doc = "aa bb cc dd";
     const { edits, sel } = planMultiToggle(doc, [{ from: 3, to: 5 }, { from: 9, to: 11 }], U);

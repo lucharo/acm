@@ -59,6 +59,28 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
   return true;
 }
 
+/** True when every `close` in `s` follows an `open` and none is left open, so
+ *  tags flanking `s` are one pair rather than the ends of two separate spans
+ *  (`one</u> and <u>two`). Symmetric markers cannot be told apart this way and
+ *  always count as balanced. */
+function isBalanced(s: string, open: string, close: string): boolean {
+  if (open === close) return true;
+  let depth = 0;
+  for (let i = 0; i < s.length; ) {
+    if (s.startsWith(open, i)) {
+      depth += 1;
+      i += open.length;
+    } else if (s.startsWith(close, i)) {
+      depth -= 1;
+      if (depth < 0) return false;
+      i += close.length;
+    } else {
+      i += 1;
+    }
+  }
+  return depth === 0;
+}
+
 /** True when the single char `ch` is a star — used to keep an italic `*` from
  *  binding to a neighbouring star that really belongs to a `**` run. */
 const isStar = (ch: string): boolean => ch === "*";
@@ -87,7 +109,7 @@ export function planToggle(
   const sel = doc.slice(from, to);
 
   // 1) Markers are INSIDE the selection (`*word*` selected) → strip them.
-  if (isWrappedExactly(sel, open, close)) {
+  if (isWrappedExactly(sel, open, close) && isBalanced(sel.slice(m, sel.length - c), open, close)) {
     const inner = sel.slice(m, sel.length - c);
     return { edits: [{ from, to, insert: inner }], anchor: from, head: from + inner.length };
   }
@@ -97,7 +119,7 @@ export function planToggle(
   if (from - m >= 0 && to + c <= doc.length) {
     const before = doc.slice(from - m, from);
     const after = doc.slice(to, to + c);
-    let outerMatch = before === open && after === close;
+    let outerMatch = before === open && after === close && isBalanced(sel, open, close);
     if (outerMatch && italic) {
       // Don't peel one star off a `**bold**` wrap.
       if ((from - m - 1 >= 0 && isStar(doc[from - m - 1])) || (to + c < doc.length && isStar(doc[to + c]))) {

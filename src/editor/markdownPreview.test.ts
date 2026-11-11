@@ -89,7 +89,7 @@ describe("inline styles inside CriticMarkup (#85)", () => {
 });
 
 describe("underline preview (<u>…</u>, #38)", () => {
-  function viewOf(doc: string, focus?: number) {
+  function viewOf(doc: string, focus?: number, visible?: { from: number; to: number }[]) {
     const state = EditorState.create({
       doc,
       selection: focus === undefined ? undefined : { anchor: focus },
@@ -100,22 +100,22 @@ describe("underline preview (<u>…</u>, #38)", () => {
     });
     return {
       state,
-      visibleRanges: [{ from: 0, to: doc.length }],
+      visibleRanges: visible ?? [{ from: 0, to: doc.length }],
       hasFocus: focus !== undefined,
     } as unknown as EditorView;
   }
 
-  function underlined(doc: string): string[] {
+  function underlined(doc: string, visible?: { from: number; to: number }[]): string[] {
     const out: string[] = [];
-    buildStyle(viewOf(doc)).between(0, doc.length, (from, to, deco) => {
+    buildStyle(viewOf(doc, undefined, visible)).between(0, doc.length, (from, to, deco) => {
       if (deco.spec.class === "cm-md-underline") out.push(doc.slice(from, to));
     });
     return out;
   }
 
-  function hidden(doc: string, focus?: number): string[] {
+  function hidden(doc: string, focus?: number, visible?: { from: number; to: number }[]): string[] {
     const out: string[] = [];
-    buildHide(viewOf(doc, focus)).between(0, doc.length, (from, to) => {
+    buildHide(viewOf(doc, focus, visible)).between(0, doc.length, (from, to) => {
       out.push(doc.slice(from, to));
     });
     return out;
@@ -149,10 +149,30 @@ describe("underline preview (<u>…</u>, #38)", () => {
     expect(underlined("The {==<u>key</u> point==}{>>@You: why?<<} here.")).toEqual(["key"]);
   });
 
-  test("a <u> inside a highlight never pairs with a </u> outside it", () => {
-    const doc = "A {==<u>key==}{>>@You: why?<<} point</u> here.";
+  test("a comment anchored across one tag keeps the underline (acm comment can write this)", () => {
+    const doc = "A <u>very {==important</u> point==}{>>@You: why?<<}.";
+    expect(underlined(doc)).toEqual(["very {==important"]);
+    expect(hidden(doc).filter((t) => t.includes("u>"))).toEqual(["<u>", "</u>"]);
+  });
+
+  test("a tag that crosses an emphasis boundary stays raw", () => {
+    const doc = "A *very <u>key* point</u> here.";
     expect(underlined(doc)).toEqual([]);
     expect(hidden(doc).filter((t) => t.includes("u>"))).toEqual([]);
+  });
+
+  test("a closing tag broken over two lines stays raw and hides no line break", () => {
+    const doc = "A <u>word</u\n    >. More text.";
+    expect(underlined(doc)).toEqual([]);
+    expect(hidden(doc)).toEqual([]);
+  });
+
+  test("a span whose tags lie outside the rendered viewport is still drawn", () => {
+    const doc = "Start <u>one\ntwo\nthree</u> end.";
+    const middle = doc.indexOf("two");
+    const visible = [{ from: middle, to: middle + 3 }];
+    expect(underlined(doc, visible)).toEqual(["one\ntwo\nthree"]);
+    expect(hidden(doc, undefined, visible)).toEqual(["<u>", "</u>"]);
   });
 
   test("an underline wrapping bold text is drawn over the whole span", () => {
