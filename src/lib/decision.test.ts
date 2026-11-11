@@ -287,6 +287,16 @@ describe("group decisions for a ticked subset (#25)", () => {
       "third longer",
     ]);
   });
+
+  test("of two identical competing members, the event names the ticked one", () => {
+    const content = "A {==one==}{>>@a: SUGGEST[g:g1]: same<<}{>>@a: SUGGEST[g:g1]: same<<}.";
+    const comments = scanTokens(content).filter((t): t is CommentToken => t.type === "comment");
+    const only = new Set([comments[1].id]);
+
+    const events = structuredSuggestionGroupDecisions(content, "g1", "accept", "apply", "Luis", "gui", only);
+
+    expect(events.map((event) => event.target.id)).toEqual([comments[1].id]);
+  });
 });
 
 describe("decision range rebasing", () => {
