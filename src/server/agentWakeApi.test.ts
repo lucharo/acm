@@ -164,6 +164,21 @@ describe("the event stream acm edit --notify attaches to", () => {
     expect((await status()).listening).toBe(0);
   });
 
+  test("opens with the work sent while nobody listened", async () => {
+    settings({ author: "Luis" });
+    const { base, comment, sendReview } = await boot();
+    await comment("Luis", "Too wordy?");
+    await sendReview();
+
+    const controller = new AbortController();
+    const stream = await fetch(`${base}/api/agent/events`, { signal: controller.signal });
+    const lines = await readLines(stream, 1);
+    controller.abort();
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^acm: pending #\S+ Luis "conference hall"$/);
+  });
+
   test("status reports what is waiting on the agent", async () => {
     settings({ author: "Luis" });
     const { comment, status } = await boot();

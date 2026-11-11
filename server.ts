@@ -849,19 +849,19 @@ export function startServer(opts: StartServerOptions): AcmServer {
       }
 
       // GET /api/agent/events → a text stream, one wake line each (acm edit --notify
-      // attached to this editor). `?wait=1` (acm edit --wait) answers at once with
-      // the work already handed over and unanswered, else ends after the next line.
+      // attached to this editor). It opens with a `pending` line per thread already
+      // handed over and unanswered, so work sent while nobody listened still arrives.
+      // `?wait=1` (acm edit --wait) ends there when there was any, else after the
+      // next line.
       if (pathname === "/api/agent/events" && req.method === "GET") {
         const once = url.searchParams.get("wait") === "1";
         server.timeout(req, 0); // a listener may sit quiet for hours
-        if (once) {
-          const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
-          const pending = wake.pendingEvents(summary);
-          if (pending.length > 0) {
-            return new Response(`${pending.map(formatWakeLine).join("\n")}\n`, {
-              headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
-            });
-          }
+        const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
+        const pending = wake.pendingEvents(summary).map(formatWakeLine);
+        if (once && pending.length > 0) {
+          return new Response(`${pending.join("\n")}\n`, {
+            headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+          });
         }
         const encoder = new TextEncoder();
         let listener: WakeListener | undefined;
@@ -885,7 +885,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
             };
             // A blank first line sends the headers now: fetch() resolves on them, and
             // listeners skip blank lines.
-            controller.enqueue(encoder.encode("\n"));
+            controller.enqueue(encoder.encode(`\n${pending.map((line) => `${line}\n`).join("")}`));
             wakeListeners.add(listener);
             void publishAgentStatus();
             req.signal.addEventListener("abort", () => removeWakeListener(listener!));

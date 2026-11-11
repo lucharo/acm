@@ -125,6 +125,12 @@ export interface DocState {
   path: string;
 }
 
+/** Agent wake status (#31): listeners attached, threads waiting on the agent. */
+export interface AgentStatus {
+  listening: number;
+  waiting: { comments: number; editRequests: number };
+}
+
 /** Messages pushed from the Bun server to the browser over the WebSocket.
  *  State-based: every push carries the full document snapshot + version. */
 export type ServerMessage =
@@ -134,12 +140,7 @@ export type ServerMessage =
       version: number;
       serverEpoch: string;
     }
-  | {
-      /** Agent wake status (#31): listeners attached, threads waiting on the agent. */
-      type: "agent";
-      listening: number;
-      waiting: { comments: number; editRequests: number };
-    };
+  | ({ type: "agent" } & AgentStatus);
 
 /** Severity of a bottom-right toast (Toast.tsx / imageInsert.ts / App). */
 export type ToastKind = "info" | "error";
