@@ -9,6 +9,8 @@ export interface EditInvocation {
   /** Remote host names to accept besides loopback (repeatable --allow-host). */
   allowHosts?: string[];
   open: boolean;
+  /** #31: --notify prints a line per wake while the editor runs; --wait exits on the first. */
+  listen?: "notify" | "wait";
 }
 
 export type Invocation =
@@ -39,6 +41,11 @@ Usage:
   acm edit                    Open the New / Open / Recent Documents launcher
   acm edit <file.md>          Open the file, creating it if missing
   acm skill                   Open your acm-user-preferences skill
+  acm edit <file.md> --notify Also print one stdout line each time the person hands
+                              the agent work (a comment, Ask agent, Send to agent);
+                              attaches to an editor already open on the file
+  acm edit <file.md> --wait   Exit with the first such line (at once if work is
+                              already pending); the editor keeps running
 
 Agent verbs (doc resolution: --doc <file.md> > $ACM_DOC > the doc open in the
 running ACM editor; snapshot before every write):
@@ -131,6 +138,14 @@ export function parseInvocation(
       edit.open = false;
       continue;
     }
+    if (value === "--notify" || value === "--wait") {
+      const mode = value === "--notify" ? "notify" : "wait";
+      if (edit.listen && edit.listen !== mode) {
+        return { kind: "error", message: "acm edit: use --notify or --wait, not both" };
+      }
+      edit.listen = mode;
+      continue;
+    }
     if (value === "--port") {
       const raw = argv[index + 1];
       const port = Number(raw);
@@ -169,6 +184,13 @@ export function parseInvocation(
       return { kind: "error", message: "acm edit: pass one Markdown document at a time" };
     }
     edit.file = value;
+  }
+  if (edit.listen && (edit.reviewSkill || edit.file === undefined)) {
+    const verb = edit.reviewSkill ? "skill" : "edit";
+    return {
+      kind: "error",
+      message: `acm ${verb}: --${edit.listen} needs a document: acm edit <file.md> --${edit.listen}`,
+    };
   }
   return edit;
 }

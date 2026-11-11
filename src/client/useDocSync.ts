@@ -544,7 +544,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       wsRef.current = ws;
       let documentVerified = false;
       let closed = false;
-      let queuedMessage: ServerMessage | null = null;
+      let queuedMessage: Extract<ServerMessage, { type: "update" }> | null = null;
 
       const retryConnection = (state: SaveState) => {
         if (!mounted.current || closed) return;
