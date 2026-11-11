@@ -257,6 +257,16 @@ describe("other edits that cross hidden markup", () => {
     expect(view.state.selection.main.head).toBe(2);
   });
 
+  test("a deletion reaching into an already-empty highlight clears it, keeping its comment", () => {
+    const doc = "AB {====}{>>@a: x<<} c";
+    const view = editor(doc, 0);
+
+    // A keyboard selection snaps past the hidden run; a delete transaction need not.
+    view.state = view.state.update({ changes: { from: 1, to: after(doc, "{==") }, userEvent: "delete.selection" }).state;
+
+    expect(view.state.doc.toString()).toBe("A{>>@a: x<<} c");
+  });
+
   test("cutting part of a commented word puts only its visible text on the clipboard", () => {
     const view = editor(COMMENTED, { anchor: after(COMMENTED, "{==wo"), head: after(COMMENTED, "<<} he") });
 
