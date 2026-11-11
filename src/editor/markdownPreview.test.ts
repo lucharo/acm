@@ -155,6 +155,12 @@ describe("underline preview (<u>…</u>, #38)", () => {
     expect(hidden(doc).filter((t) => t.includes("u>"))).toEqual(["<u>", "</u>"]);
   });
 
+  test("only the lowercase tags ACM writes are drawn; <U> stays raw", () => {
+    const doc = "A <U>loud</U> word.";
+    expect(underlined(doc)).toEqual([]);
+    expect(hidden(doc)).toEqual([]);
+  });
+
   test("a tag that crosses an emphasis boundary stays raw", () => {
     const doc = "A *very <u>key* point</u> here.";
     expect(underlined(doc)).toEqual([]);

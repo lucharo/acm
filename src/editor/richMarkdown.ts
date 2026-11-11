@@ -239,8 +239,8 @@ function appendSafeHtmlFragment(
   return appended;
 }
 
-const UNDERLINE_OPEN = /^<u>$/i;
-const UNDERLINE_CLOSE = /^<\/u>$/i;
+const UNDERLINE_OPEN = /^<u>$/;
+const UNDERLINE_CLOSE = /^<\/u>$/;
 
 /** Index of the `</u>` that closes the `<u>` at `children[openIndex]`, or -1. */
 function underlineCloseIndex(source: string, children: SyntaxNode[], openIndex: number): number {

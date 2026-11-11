@@ -17,6 +17,7 @@
 // span reads as bold/italic/underlined the moment the cursor leaves its line.
 
 import { EditorSelection } from "@codemirror/state";
+import { GFM, parser as baseMarkdownParser } from "@lezer/markdown";
 import type { Command, KeyBinding } from "@codemirror/view";
 
 /** A single ranged text edit (string-space, so the core stays unit-testable
@@ -59,20 +60,26 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
   return true;
 }
 
-/** True when every `close` in `s` follows an `open` and none is left open, so
- *  tags flanking `s` are one pair rather than the ends of two separate spans
- *  (`one</u> and <u>two`). Symmetric markers cannot be told apart this way and
- *  always count as balanced. */
+const markdownParser = baseMarkdownParser.configure(GFM);
+
+/** True when every real `close` tag in `s` follows an `open` and none is left
+ *  open, so tags flanking `s` are one pair rather than the ends of two separate
+ *  spans (`one</u> and <u>two`). Tags are read from the Markdown parse, so one
+ *  quoted in a code span does not count; the match is exact, like the preview's.
+ *  Symmetric markers cannot be told apart this way and always count as balanced. */
 function isBalanced(s: string, open: string, close: string): boolean {
   if (open === close) return true;
-  // HTML tag names ignore case, as the preview's pairing does (`<U>` is `<u>`).
-  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let depth = 0;
-  for (const match of s.matchAll(new RegExp(`(${escape(open)})|${escape(close)}`, "gi"))) {
-    depth += match[1] ? 1 : -1;
-    if (depth < 0) return false;
-  }
-  return depth === 0;
+  let balanced = true;
+  markdownParser.parse(s).iterate({
+    enter: (node) => {
+      if (!balanced || node.name !== "HTMLTag") return;
+      const tag = s.slice(node.from, node.to);
+      if (tag === open) depth += 1;
+      else if (tag === close && --depth < 0) balanced = false;
+    },
+  });
+  return balanced && depth === 0;
 }
 
 /** True when the single char `ch` is a star — used to keep an italic `*` from

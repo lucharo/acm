@@ -170,6 +170,10 @@ describe("safe rich Markdown rendering", () => {
     );
   });
 
+  test("an uppercase <U> stays literal text, as in the editor", () => {
+    expect(renderInline("A <U>loud</U> word")).toBe("<cell>A &lt;U&gt;loud&lt;/U&gt; word</cell>");
+  });
+
   test("a stray </u> and an unclosed <u> stay literal text", () => {
     expect(renderInline("A </u>stray and <u>open")).toBe("<cell>A &lt;/u&gt;stray and &lt;u&gt;open</cell>");
   });

@@ -555,8 +555,8 @@ function inlineMarkClass(name: string): string | null {
 // one crossing an emphasis boundary stays raw rather than underlining half a
 // document. A comment highlight is transparent: `acm comment` may anchor across
 // one tag (`<u>very {==important</u> point==}`), and the pair still holds.
-const UNDERLINE_OPEN = /^<u>$/i;
-const UNDERLINE_CLOSE = /^<\/u>$/i;
+const UNDERLINE_OPEN = /^<u>$/;
+const UNDERLINE_CLOSE = /^<\/u>$/;
 
 interface UnderlineTag {
   from: number;

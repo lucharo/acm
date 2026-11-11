@@ -177,10 +177,16 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("<u><u>one</u> and <u>two</u></u>");
   });
 
-  test("tag case does not hide two separate spans from the balance check", () => {
-    const doc = "<u>one</U> and <U>two</u>";
+  test("tags quoted in code spans do not count toward the balance check", () => {
+    const doc = "<u>one `<u>`</u> and <u>`</u>` two</u>";
     const r = apply(doc, 0, doc.length, U);
-    expect(r.out).toBe("<u><u>one</U> and <U>two</u></u>");
+    expect(r.out).toBe("<u><u>one `<u>`</u> and <u>`</u>` two</u></u>");
+  });
+
+  test("tags quoted in a code span still let a real pair unwrap", () => {
+    const doc = "<u>see `</u>` here</u>";
+    const r = apply(doc, 0, doc.length, U);
+    expect(r.out).toBe("see `</u>` here");
   });
 
   test("multi-cursor wraps each range against the original doc", () => {
