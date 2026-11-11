@@ -262,7 +262,11 @@ function planEdit(state: EditorState, deletions: Span[], inserts: number[]): { r
   const cut = [...constructs.values()].filter((c) =>
     deletions.some((d) => overlaps(d, c.node)) && !deletions.some((d) => contains(d, c.unit)),
   );
-  const touchesText = (c: Construct) => deletions.some((d) => c.inner.some((part) => overlaps(d, part)));
+  // Visible text only: a nested highlight's markers are not its parent's text.
+  const touchesText = (c: Construct) =>
+    c.inner.some((part) =>
+      subtract(part, hiddenCriticSpans(state, part.from, part.to)).some((text) => deletions.some((d) => overlaps(d, text))),
+    );
   const keep = cut.flatMap((c) => (touchesText(c) ? [...c.delims, ...c.comments] : c.delims));
   const removed = deletions.flatMap((d) => subtract(d, keep));
 
@@ -340,12 +344,15 @@ export function guardCriticEdit(tr: Transaction): TransactionSpec | null {
 
 const criticEditGuard = EditorState.transactionFilter.of((tr) => guardCriticEdit(tr) ?? tr);
 
-// Copy, cut and drag of a selection carry what a cut would remove: the visible
-// text, plus any construct the selection covers whole.
+// Copy, cut and drag carry what a cut would remove: the visible text, plus any
+// construct covered whole. With nothing selected CodeMirror copies (and cuts)
+// the caret's line, so that line is the range.
 const criticClipboardFilter = EditorView.clipboardOutputFilter.of((text, state) => {
   const { main } = state.selection;
-  if (state.selection.ranges.length !== 1 || main.empty || state.sliceDoc(main.from, main.to) !== text) return text;
-  const { removed } = planEdit(state, [{ from: main.from, to: main.to }], []);
+  if (state.selection.ranges.length !== 1) return text;
+  const range = main.empty ? state.doc.lineAt(main.head) : main;
+  if (state.sliceDoc(range.from, range.to) !== text) return text;
+  const { removed } = planEdit(state, [{ from: range.from, to: range.to }], []);
   return removed.map((r) => state.sliceDoc(r.from, r.to)).join("");
 });
 

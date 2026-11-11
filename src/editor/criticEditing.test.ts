@@ -66,12 +66,14 @@ function type(view: FakeView, text: string): void {
   view.state = tr.state;
 }
 
-// The text CodeMirror puts on the clipboard or in a drag for the selection.
+// The text CodeMirror puts on the clipboard or in a drag: the selection, or
+// with nothing selected the caret's whole line (its line-wise copy and cut).
 function copied(view: FakeView): string {
-  const { from, to } = view.state.selection.main;
+  const { from, to, empty } = view.state.selection.main;
+  const raw = empty ? view.state.doc.lineAt(from).text : view.state.sliceDoc(from, to);
   return view.state
     .facet(EditorView.clipboardOutputFilter)
-    .reduce((text, filter) => filter(text, view.state), view.state.sliceDoc(from, to));
+    .reduce((text, filter) => filter(text, view.state), raw);
 }
 
 function after(doc: string, needle: string): number {
@@ -276,6 +278,27 @@ describe("other edits that cross hidden markup", () => {
 
     expect(clipboard).toBe("rd he");
     expect(view.state.doc.toString()).toBe("See {==wo==}{>>@luis: note<<}re");
+  });
+
+  test("a line-wise cut through a multi-line highlight copies only its visible text", () => {
+    const doc = "A {==first\nsecond==}{>>@a: note<<}";
+    const view = editor(doc, 1);
+
+    const clipboard = copied(view);
+    const line = view.state.doc.line(1);
+    view.state = view.state.update({ changes: { from: line.from, to: line.to + 1 }, userEvent: "delete.cut" }).state;
+
+    expect(clipboard).toBe("A first");
+    expect(view.state.doc.toString()).toBe("{==second==}{>>@a: note<<}");
+  });
+
+  test("selecting a nested highlight's markers deletes both comments and keeps the highlights", () => {
+    const doc = "A {=={==x==}{>>@a: note<<}==}{>>@b: reply<<} b";
+    const view = editor(doc, { anchor: after(doc, "{=={==x"), head: after(doc, "reply<<}") });
+
+    press(view, "Backspace");
+
+    expect(view.state.doc.toString()).toBe("A {=={==x==}==} b");
   });
 
   test("copying a whole commented word keeps its markup", () => {
