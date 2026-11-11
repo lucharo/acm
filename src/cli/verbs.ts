@@ -929,8 +929,7 @@ async function commitWrite(
   if (snap) console.log(`  backup → ${snap}`);
   if (viaEditorPort !== null)
     console.log(`  written via the live editor on :${viaEditorPort} (merged with any concurrent human edits)`);
-  // A restore puts back an earlier version as it was; every other write is new markup.
-  const problems = source === "agent" ? problemsThisWriteAdded(before, after, final) : [];
+  const problems = problemsThisWriteAdded(before, after, final);
   reportWriteProblems(cmd, problems);
   console.log(
     `  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}` +
