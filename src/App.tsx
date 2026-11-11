@@ -101,12 +101,21 @@ import {
   type DecisionQueueUpdate,
 } from "./lib/decision";
 import type {
+  AgentStatus,
   CritToken,
   SuggestionToken,
   CommentToken,
   CommentThread,
   SidebarCard,
 } from "./lib/types";
+import {
+  AgentHeaderPill,
+  AgentRailPill,
+  AgentReviewBar,
+  AgentVariantSwitcher,
+  ComposerNotifyToggle,
+  readAgentVariant,
+} from "./components/AgentWake";
 
 
 
@@ -184,6 +193,7 @@ function DocumentApp({
       connected={sync.connected}
       saveState={sync.saveState}
       lastSavedAt={sync.lastSavedAt}
+      agentStatus={sync.agentStatus}
       remoteRef={remoteRef}
       pendingRemote={pendingRemote}
       settings={settings}
@@ -230,6 +240,7 @@ interface WorkspaceProps {
   connected: boolean;
   saveState: SaveState;
   lastSavedAt: number | null;
+  agentStatus: AgentStatus | null;
   remoteRef: React.MutableRefObject<
     ((content: string, version: number) => void) | null
   >;
@@ -249,6 +260,7 @@ function Workspace({
   connected,
   saveState,
   lastSavedAt,
+  agentStatus,
   remoteRef,
   pendingRemote,
   settings,
@@ -419,6 +431,11 @@ function Workspace({
   }, []);
   // Pending dismiss timers must not fire into an unmounted Workspace.
   useEffect(() => () => toastTimers.current.forEach(clearTimeout), []);
+  const agentVariant = useMemo(readAgentVariant, []);
+  const toggleNotifyEach = useCallback(
+    () => onChangeSettings({ notifyEachComment: !settings.notifyEachComment }),
+    [onChangeSettings, settings.notifyEachComment],
+  );
 
   const editor = useCodeMirror({
     initialDoc,
@@ -1557,6 +1574,17 @@ function Workspace({
           openSpellReview();
         }}
         issues={{ count: diagnostics.length, fixable: fixableCount, onReview: () => setReviewOpen(true) }}
+        agentControl={
+          agentVariant === "A" ? (
+            <AgentHeaderPill
+              status={agentStatus}
+              documentPath={documentPath}
+              notifyEach={settings.notifyEachComment}
+              onToggleNotifyEach={toggleNotifyEach}
+              onFeedback={pushToast}
+            />
+          ) : null
+        }
         toolbar={
           <FormatToolbar
             view={view}
@@ -1645,6 +1673,16 @@ function Workspace({
                     onReplyAndSeen={replyAndSeen}
                     onSuggestEdit={(t, proposal) => replyAndSeen(t, `SUGGEST: ${proposal}`)}
                     onAskAgent={(t) => replyAndSeen(t, EDIT_REQUEST_TEXT)}
+                    agentControl={
+                      agentVariant === "B" ? (
+                        <AgentRailPill status={agentStatus} documentPath={documentPath} onFeedback={pushToast} />
+                      ) : null
+                    }
+                    composerAgentControl={
+                      agentVariant === "B" ? (
+                        <ComposerNotifyToggle notifyEach={settings.notifyEachComment} onToggleNotifyEach={toggleNotifyEach} />
+                      ) : null
+                    }
                     anchoredCardIds={anchoredCardIds}
                     onApplySuggestion={(c) =>
                       runSuggestionEdit(
@@ -1795,6 +1833,16 @@ function Workspace({
       ) : null}
 
       <ContextMenu menu={menu} onClose={() => setMenu(null)} />
+      {agentVariant === "C" ? (
+        <AgentReviewBar
+          status={agentStatus}
+          documentPath={documentPath}
+          notifyEach={settings.notifyEachComment}
+          onToggleNotifyEach={toggleNotifyEach}
+          onFeedback={pushToast}
+        />
+      ) : null}
+      <AgentVariantSwitcher variant={agentVariant} />
       <ToastStack toasts={toasts} />
       <PrintDocument
         result={printResult}
