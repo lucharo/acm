@@ -30,6 +30,7 @@ import type { GroupNoteMember, ReviewGroupInfo } from "../lib/commentGroups";
 import { commentSegments } from "../lib/commentLinks";
 import { visibleReviewCards } from "../lib/visibleReviewCards";
 import { authorColor, groupColor } from "./authorColor";
+import { DiffVariantSwitcher, EditDiff, FlipToggle, prototypePanelWidth, useDiffVariant } from "./GroupDiff.prototype";
 import CommentComposer from "./CommentComposer";
 import { handleCommentKey, mayDiscardDraft } from "./commentKeys";
 import ReviewTextEditor, { closeReviewEditorAfterSuccessfulSave } from "./ReviewTextEditor";
@@ -1204,7 +1205,7 @@ export function groupPanelPlacement(
   anchor: { top: number; bottom: number; right: number },
   viewport: { width: number; height: number },
 ): GroupPanelPlacement {
-  const width = Math.min(PANEL_WIDTH, viewport.width - 2 * PANEL_MARGIN);
+  const width = Math.min(prototypePanelWidth(PANEL_WIDTH), viewport.width - 2 * PANEL_MARGIN);
   let edge = Math.min(anchor.right, viewport.width - PANEL_MARGIN);
   if (edge - width < PANEL_MARGIN) edge = PANEL_MARGIN + width;
   const right = viewport.width - edge;
@@ -1249,7 +1250,12 @@ export function GroupMembers({
     ...members.map((m) => ({ key: m.commentId, at: m.from, from: m.anchorFrom, to: m.anchorTo, edit: m, note: null })),
     ...notes.map((n) => ({ key: n.commentId, at: n.threadFrom, from: n.anchorFrom, to: n.anchorTo, edit: null, note: n })),
   ].sort((a, b) => a.at - b.at);
+  const variant = useDiffVariant();
+  const [side, setSide] = useState<"before" | "after">("before");
   return (
+    <>
+    {variant === "C" ? <div className="px-2 pt-2"><FlipToggle side={side} onSide={setSide} /></div> : null}
+    {variant ? <DiffVariantSwitcher /> : null}
     <ul className={large ? "divide-y divide-[var(--line)]" : "space-y-0.5"}>
       {rows.map((row, i) => {
         const ticked = !unticked.has(row.key);
@@ -1272,8 +1278,10 @@ export function GroupMembers({
               className={`flex min-w-0 flex-1 gap-1.5 rounded text-left leading-snug hover:bg-[var(--line)] ${large ? "px-2 py-1.5 text-[13px]" : "px-1 py-0.5 text-[12px]"}`}
             >
               <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {row.edit ? (
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                {row.edit && variant ? (
+                  <EditDiff edit={row.edit} variant={variant} side={side} />
+                ) : row.edit ? (
                   <>
                     {row.edit.anchorText ? (
                       <>
@@ -1301,6 +1309,7 @@ export function GroupMembers({
         );
       })}
     </ul>
+    </>
   );
 }
 
