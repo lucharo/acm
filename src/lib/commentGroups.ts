@@ -99,6 +99,7 @@ export function noteGroupMembers(
 export function noteGroupResolveEdits(
   content: string,
   groupId: string,
+  only?: ReadonlySet<string>,
 ): {
   edits: { from: number; to: number; insert: string }[];
   threads: CommentThread[];
@@ -107,7 +108,10 @@ export function noteGroupResolveEdits(
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
   const threads = groupThreads(comments, content);
-  const members = noteGroupMembers(content, tokens, threads).get(groupId) ?? [];
+  // `only`: the ticked note comment ids (#25); unticked notes stay open.
+  const members = (noteGroupMembers(content, tokens, threads).get(groupId) ?? []).filter(
+    (m) => !only || only.has(m.commentId),
+  );
   const planned = members
     .map((m) => {
       const thread = threads.find((t) => t.id === m.threadId)!;

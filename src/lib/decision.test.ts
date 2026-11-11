@@ -258,6 +258,37 @@ describe("structured suggestion decision events", () => {
   });
 });
 
+describe("group decisions for a ticked subset (#25)", () => {
+  test("record only the ticked members, at their final positions", () => {
+    const content =
+      "A {==one==}{>>@a: SUGGEST[g:g1]: first<<} B {==two==}{>>@b: SUGGEST[g:g1]: second<<} " +
+      "C {==three==}{>>@c: SUGGEST[g:g1]: third longer<<}.";
+    const comments = scanTokens(content).filter((t): t is CommentToken => t.type === "comment");
+    const only = new Set([comments[0].id, comments[2].id]);
+    const { edits } = suggestionGroupEdits(content, "g1", "accept", "keep-discussion", only);
+    let after = content;
+    for (const edit of [...edits].reverse()) {
+      after = after.slice(0, edit.from) + edit.insert + after.slice(edit.to);
+    }
+
+    const events = structuredSuggestionGroupDecisions(
+      content,
+      "g1",
+      "accept",
+      "apply",
+      "Luis",
+      "gui",
+      only,
+    );
+
+    expect(events.map((event) => event.target.id)).toEqual([comments[0].id, comments[2].id]);
+    expect(events.map((event) => after.slice(event.target.afterFrom, event.target.afterTo))).toEqual([
+      "first",
+      "third longer",
+    ]);
+  });
+});
+
 describe("decision range rebasing", () => {
   test("later local typing and a server merge move the persisted result range", () => {
     const base = "Header\n{~~old~>new~~}\nnew\n";
