@@ -17,8 +17,6 @@
 // span reads as bold/italic/underlined the moment the cursor leaves its line.
 
 import { EditorSelection } from "@codemirror/state";
-import { GFM, parser as baseMarkdownParser } from "@lezer/markdown";
-import { CriticMarkup } from "./criticMarkupParser";
 import type { Command, KeyBinding } from "@codemirror/view";
 
 /** A single ranged text edit (string-space, so the core stays unit-testable
@@ -61,31 +59,16 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
   return true;
 }
 
-// The editor's own grammar (GFM plus CriticMarkup), so the toggle sees the same
-// tags the preview pairs: a comment body stays opaque and cannot hide one.
-const markdownParser = baseMarkdownParser.configure([GFM, CriticMarkup]);
-
-/** True when every real `close` tag in `doc[from, to)` follows an `open` and
- *  none is left open, so tags flanking the range are one pair rather than the
- *  ends of two separate spans (`one</u> and <u>two`). Tags come from parsing the
- *  whole document, so one quoted in a code span does not count and the range is
- *  read in its own context; the match is exact, like the preview's. Symmetric
- *  markers cannot be told apart this way and always count as balanced. */
-function isBalanced(doc: string, from: number, to: number, open: string, close: string): boolean {
+/** True when `doc[from, to)` holds no `open` or `close` text at all, so the
+ *  tags flanking it can only be one pair, never the ends of two separate spans
+ *  (`one</u> and <u>two`). Deliberately plain text: anything tag-shaped between
+ *  them (a nested span, one quoted in code or inside a comment or tracked change)
+ *  makes the toggle wrap instead, which can never leave a tag unmatched.
+ *  Symmetric markers cannot be told apart this way and always count as clear. */
+function noOtherTagBetween(doc: string, from: number, to: number, open: string, close: string): boolean {
   if (open === close) return true;
-  let depth = 0;
-  let balanced = true;
-  markdownParser.parse(doc).iterate({
-    from,
-    to,
-    enter: (node) => {
-      if (!balanced || node.name !== "HTMLTag" || node.from < from || node.to > to) return;
-      const tag = doc.slice(node.from, node.to);
-      if (tag === open) depth += 1;
-      else if (tag === close && --depth < 0) balanced = false;
-    },
-  });
-  return balanced && depth === 0;
+  const between = doc.slice(from, to);
+  return !between.includes(open) && !between.includes(close);
 }
 
 /** True when the single char `ch` is a star — used to keep an italic `*` from
@@ -116,7 +99,7 @@ export function planToggle(
   const sel = doc.slice(from, to);
 
   // 1) Markers are INSIDE the selection (`*word*` selected) → strip them.
-  if (isWrappedExactly(sel, open, close) && isBalanced(doc, from + m, to - c, open, close)) {
+  if (isWrappedExactly(sel, open, close) && noOtherTagBetween(doc, from + m, to - c, open, close)) {
     const inner = sel.slice(m, sel.length - c);
     return { edits: [{ from, to, insert: inner }], anchor: from, head: from + inner.length };
   }
@@ -126,7 +109,7 @@ export function planToggle(
   if (from - m >= 0 && to + c <= doc.length) {
     const before = doc.slice(from - m, from);
     const after = doc.slice(to, to + c);
-    let outerMatch = before === open && after === close && isBalanced(doc, from, to, open, close);
+    let outerMatch = before === open && after === close && noOtherTagBetween(doc, from, to, open, close);
     if (outerMatch && italic) {
       // Don't peel one star off a `**bold**` wrap.
       if ((from - m - 1 >= 0 && isStar(doc[from - m - 1])) || (to + c < doc.length && isStar(doc[to + c]))) {

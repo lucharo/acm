@@ -195,10 +195,18 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("A <u><u>one{>>@a: tick `<<}</u> and <u>{>>@b: tick `<<}two</u></u>.");
   });
 
-  test("tags quoted in a code span still let a real pair unwrap", () => {
+  test("any other tag text between the pair makes Cmd+U wrap, never remove", () => {
     const doc = "<u>see `</u>` here</u>";
     const r = apply(doc, 0, doc.length, U);
-    expect(r.out).toBe("see `</u>` here");
+    expect(r.out).toBe("<u><u>see `</u>` here</u></u>");
+  });
+
+  test("two spans inside a tracked insertion are not unpaired", () => {
+    const doc = "A {++<u>one</u> and <u>two</u>++}.";
+    const from = doc.indexOf("<u>one");
+    const to = doc.indexOf("++}");
+    const r = apply(doc, from, to, U);
+    expect(r.out).toBe("A {++<u><u>one</u> and <u>two</u></u>++}.");
   });
 
   test("multi-cursor wraps each range against the original doc", () => {
