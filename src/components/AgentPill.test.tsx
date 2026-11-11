@@ -57,7 +57,7 @@ describe("sendFeedback", () => {
 describe("askFeedback", () => {
   test("says it added an edit request, and whether a listening agent heard it", () => {
     expect(askFeedback(status(1, 0, 0))).toEqual({
-      message: "Added an edit request to the thread; the listening agent was notified.",
+      message: "Added an edit request to the thread; the listening agent will be notified once it saves.",
       kind: "info",
     });
     expect(askFeedback(status(0, 0, 0))).toEqual({

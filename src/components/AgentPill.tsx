@@ -54,7 +54,7 @@ export function sendFeedback(body: { listening: number; sent: AgentStatus["toSen
  *  usual rules (acm threads), so the message claims no more than that. */
 export function askFeedback(status: AgentStatus | null): { message: string; kind: "info" | "error" } {
   return (status?.listening ?? 0) > 0
-    ? { message: "Added an edit request to the thread; the listening agent was notified.", kind: "info" }
+    ? { message: "Added an edit request to the thread; the listening agent will be notified once it saves.", kind: "info" }
     : {
         message: "Added an edit request to the thread. No agent is listening; the next one that listens to this editor will get it.",
         kind: "error",
