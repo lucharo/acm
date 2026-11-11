@@ -366,6 +366,27 @@ Skip any section the human is still actively rewriting.
   with your own judgment conservatively — it catches what you've gone blind to after
   many passes.
 
+## Being woken by the person (acm edit --notify)
+
+The person can wake you from the editor instead of switching to your chat: **Ask agent** on a
+thread, each comment when they turn on "Notify agent on each comment", and **Send N to agent**
+at the end of a round. You hear it by listening:
+
+- **Claude Code:** start the editor once in the background (`acm edit <file.md> --no-open`),
+  then run `acm edit <file.md> --notify --no-open` under the **Monitor** tool. It attaches to
+  the open editor and prints one stdout line per hand-over, each a wake:
+  `acm: ask #id Luis "anchor"`, `acm: comment #id …`, `acm: review 3 threads waiting (…)`,
+  and on attach `acm: pending #id …` for work sent while nobody listened. `acm: closed …`
+  means the editor stopped. A Monitor ends after 30 minutes: re-arm it on expiry.
+- **Harnesses that wake only on a finished command:** run `acm edit <file.md> --wait` as a
+  background job. It exits with the first line (at once if sent work is unanswered) and
+  leaves the editor running; act, then run it again.
+
+On every wake, one rule: `acm threads`, answer each `[your turn]` thread (its latest comment is
+the person's), `[edit requested]` ones first with a SUGGEST, then go back to listening. Don't
+act on the line's text alone; the doc is the source of truth. Answering a thread (any reply of
+yours) takes it off `[your turn]`, so a later `--wait` won't wake you for it again.
+
 ## Workflow
 
 1. Read the doc; build the thread/anchor map with `scanTokens`/`groupThreads`.
@@ -391,7 +412,9 @@ with no editor up they write the file directly. Either way the editor reflects t
 result within ~1s — and they refuse rather than clobber on conflict.
 
 ```
-acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen], [edit requested]
+acm threads [--json]              # read/verify: each thread's anchor, authors, count, [SUGGEST], [seen], [edit requested], [your turn]
+acm edit <file.md> --notify       # listen: one stdout line per hand-over from the person (run under Monitor)
+acm edit <file.md> --wait         # listen once: exit on the first hand-over (or at once if some is unanswered)
 acm comment "<span>" "<text>"     # NEW comment anchored on the unique prose <span>: {==span==}{>>@you: text<<}
 acm comment … --group <id>        # tag the note as part of group <id> (NOTE[g:id]: …; Resolve all in the GUI)
 acm reply "<phrase>" "<text>"     # reply to the thread whose comment matches <phrase> (= acm comment --reply/-r)

@@ -49,6 +49,37 @@ The [CLI reference](cli.md) lists every command, and the skill holds the full ag
 
 When you click **Ask agent** on a thread, `acm threads` marks it `[edit requested]`, so an agent knows to answer with a SUGGEST card.
 
+## Waking the agent from the editor
+
+An agent that opens the document with `acm edit <file.md> --notify` is woken each time you hand it work, so you never switch to its chat to say "I left comments". For as long as the editor runs, the command prints one line on stdout per hand-over and nothing else (the editor's own messages go to stderr):
+
+```text
+acm: ask #126zf67 Luis "systematic"
+acm: comment #115bygy Luis "in the way it builds"
+acm: review 3 threads waiting (2 comments, 1 edit request) - run acm threads
+acm: pending #115bygy Luis "in the way it builds"
+```
+
+- `ask` is **Ask agent**, which always wakes the agent.
+- `comment` is a comment or reply of yours, sent only when **Notify agent on each comment** is on (off by default).
+- `review` is **Send to agent** in the header: one line for everything waiting, sent when you finish a round.
+- `pending` opens a new listener with the work you already sent that the agent has not answered, so nothing sent while no agent listened is lost.
+- `closed` means the editor stopped; the command exits 1.
+
+A thread is the agent's turn when your name (the **Author** setting) wrote its latest comment. `acm threads` marks those threads `[your turn]`, so the agent's loop is one rule: on each line, run `acm threads`, answer the `[your turn]` threads, and wait for the next line.
+
+The header pill shows whether an agent is listening and how many threads **Send** would hand over; it counts only threads not sent yet, so it reads **Nothing to send** once the agent has them. If the editor is already open on the file, `--notify` attaches to it instead of starting a second editor, so your clicks in that page reach the agent.
+
+In Claude Code, run the listener under the Monitor tool, which wakes the agent on each stdout line:
+
+```text
+Monitor: acm edit essay.md --notify --no-open
+```
+
+A Monitor watch ends after at most 30 minutes. When it ends, start it again: if it started the editor, the editor stops with it and the next `--notify` starts a fresh one, so start the editor once in the background (`acm edit essay.md --no-open`) and point the Monitor at `--notify`, which then only attaches.
+
+For a harness that wakes only when a command finishes, use `acm edit <file.md> --wait`: it exits with the first line, or at once when work you sent is still unanswered, and leaves the editor running (it starts one in the background if none is open). Act on the work, then run `--wait` again.
+
 ## Which document the agent edits
 
 The `acm` commands pick the document in this order:

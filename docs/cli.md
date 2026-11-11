@@ -67,6 +67,8 @@ Opens one document in the editor, creating the file if it is missing. With no fi
 | `--allow-host <name>` | Also accept requests for this host name, such as the Mac's Tailscale name; repeat for several | `ACM_ALLOWED_HOSTS`, else this Mac's Tailscale name when Tailscale is up |
 | `--asset-root <dir>` | The folder images may load from | `ACM_ASSET_ROOT`, else the document's git repository, else its folder |
 | `--no-open` | Do not open a browser tab (`ACM_NO_OPEN=1` does the same; a set `$BROWSER` is used as the opener) | open one |
+| `--notify` | Also print one stdout line each time you hand the agent work, for as long as the editor runs; attaches to an editor already open on the file. See [Waking the agent](agents.md#waking-the-agent-from-the-editor) | off |
+| `--wait` | Exit with the first such line, or at once when sent work is unanswered; the editor keeps running | off |
 
 ```text
 --8<-- "edit.txt"
@@ -90,6 +92,7 @@ Lists every comment thread, SUGGEST cards included: id, message count, authors, 
 - `[seen]` marks a thread you marked seen in the editor; an unmarked line is unseen.
 - `[suggestion]` marks a thread on an inline suggestion, which has no seen state.
 - `[edit requested]` marks a thread where someone asked for an edit (**Ask agent**, or a reply reading `please suggest an edit`) and no SUGGEST card has answered yet.
+- `[your turn]` marks a thread whose latest comment is yours (the editor's **Author** setting): the agent owes it an answer. The last line counts them.
 - `--json` prints the same list as JSON.
 
 ## acm comment { data-toc-label="comment" }
