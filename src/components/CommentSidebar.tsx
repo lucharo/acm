@@ -87,14 +87,14 @@ interface CommentSidebarProps {
   groupMembersOf: Map<string, SuggestionGroupMember[]>;
   /** groupId → its notes, in document order. */
   groupNotesOf: Map<string, GroupNoteMember[]>;
-  /** Resolve a group's note threads as one atomic edit: every one, or only the
-   *  ticked comment ids in `only` (#25). */
-  onGroupResolveNotes: (groupId: string, only?: ReadonlySet<string>) => void;
-  /** Accept/reject a group's members as one atomic edit: every member, or only
-   *  the ticked comment ids in `only` (#25). */
-  onGroupEdit: (groupId: string, mode: "accept" | "reject", only?: ReadonlySet<string>) => void;
+  /** Resolve a group's note threads as one atomic edit: every one, or all but
+   *  the comment ids in `unticked` (#25). */
+  onGroupResolveNotes: (groupId: string, unticked?: ReadonlySet<string>) => void;
+  /** Accept/reject a group's members as one atomic edit: every member, or all
+   *  but the comment ids in `unticked` (#25). */
+  onGroupEdit: (groupId: string, mode: "accept" | "reject", unticked?: ReadonlySet<string>) => void;
   /** Apply every non-conflicting (ticked) member and resolve its discussion atomically. */
-  onGroupApplyAndResolve: (groupId: string, only?: ReadonlySet<string>) => void;
+  onGroupApplyAndResolve: (groupId: string, unticked?: ReadonlySet<string>) => void;
   /** Scroll a span into view + flash it — a group member row → its edit in the doc. */
   onLocate: (from: number, to: number) => void;
   /** Accept / reject a suggestion card's suggestion. */
@@ -507,9 +507,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         notes={groupNotesOf.get(g.id) ?? []}
         mode={mode}
         onMode={(next) => setOpenControl(next ? { key: commentId, mode: next } : null)}
-        onGroupEdit={(id, m, only) => { close(); onGroupEdit(id, m, only); }}
-        onGroupApplyAndResolve={(id, only) => { close(); onGroupApplyAndResolve(id, only); }}
-        onGroupResolveNotes={(id, only) => { close(); onGroupResolveNotes(id, only); }}
+        onGroupEdit={(id, m, unticked) => { close(); onGroupEdit(id, m, unticked); }}
+        onGroupApplyAndResolve={(id, unticked) => { close(); onGroupApplyAndResolve(id, unticked); }}
+        onGroupResolveNotes={(id, unticked) => { close(); onGroupResolveNotes(id, unticked); }}
         onLocate={onLocate}
       />
     );
@@ -1221,13 +1221,6 @@ export function groupPanelPlacement(
   return { top: PANEL_MARGIN, right, width, maxHeight: viewport.height - 2 * PANEL_MARGIN };
 }
 
-/** The ticked ids among `ids`, or undefined when none is unticked: the whole set,
- *  so a full decision keeps the group's all-or-nothing path. */
-function tickedOnly(ids: string[], unticked: ReadonlySet<string>): ReadonlySet<string> | undefined {
-  const ticked = ids.filter((id) => !unticked.has(id));
-  return ticked.length === ids.length ? undefined : new Set(ticked);
-}
-
 /** Which rows of an open group surface are left out of its decision (#25). Every
  *  row starts ticked; the set holds the unticked comment ids. */
 interface GroupSelection {
@@ -1342,17 +1335,21 @@ function GroupActions({
   notes: GroupNoteMember[];
   unticked: ReadonlySet<string>;
   large?: boolean;
-  onGroupEdit: (groupId: string, mode: "accept" | "reject", only?: ReadonlySet<string>) => void;
-  onGroupApplyAndResolve: (groupId: string, only?: ReadonlySet<string>) => void;
-  onGroupResolveNotes: (groupId: string, only?: ReadonlySet<string>) => void;
+  onGroupEdit: (groupId: string, mode: "accept" | "reject", unticked?: ReadonlySet<string>) => void;
+  onGroupApplyAndResolve: (groupId: string, unticked?: ReadonlySet<string>) => void;
+  onGroupResolveNotes: (groupId: string, unticked?: ReadonlySet<string>) => void;
 }) {
   const { id, edits, notes: noteCount } = group;
   const editIds = members.map((m) => m.commentId);
   const noteIds = notes.map((n) => n.commentId);
-  const onlyEdits = tickedOnly(editIds, unticked);
-  const onlyNotes = tickedOnly(noteIds, unticked);
-  const tickedEdits = onlyEdits ? onlyEdits.size : edits;
-  const tickedNotes = onlyNotes ? onlyNotes.size : noteCount;
+  const tickedEdits = editIds.filter((e) => !unticked.has(e)).length;
+  const tickedNotes = noteIds.filter((n) => !unticked.has(n)).length;
+  const someEdits = tickedEdits < editIds.length;
+  const someNotes = tickedNotes < noteIds.length;
+  // Every button gets the whole unticked set, edits and notes alike: a thread can
+  // hold both, and deciding one must not remove the other (#25). With nothing
+  // unticked the group is decided whole, as before.
+  const leftOut = unticked.size ? unticked : undefined;
   const left = (n: number) => (n > 0 ? `; the ${n} unticked stay open` : "");
   // The panel's buttons match the card-sized reply buttons; the popover's stay compact.
   const size = `${large ? "px-2.5 py-1 text-[12px]" : "px-1.5 py-0.5 text-[10px]"} disabled:cursor-not-allowed disabled:opacity-40`;
@@ -1363,29 +1360,29 @@ function GroupActions({
           <button
             type="button"
             disabled={tickedEdits === 0}
-            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "accept", onlyEdits); }}
-            title={`Apply ${onlyEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits (one undo)${left(editIds.length - tickedEdits)}`}
+            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "accept", leftOut); }}
+            title={`Apply ${someEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits (one undo)${left(editIds.length - tickedEdits)}`}
             className={`rounded-md bg-[var(--crit-ins)] ${size} font-medium text-[var(--panel)]`}
           >
-            {onlyEdits ? `Apply ${tickedEdits} of ${editIds.length}` : `Apply all ${edits}`}
+            {someEdits ? `Apply ${tickedEdits} of ${editIds.length}` : `Apply all ${edits}`}
           </button>
           <button
             type="button"
             disabled={tickedEdits === 0}
-            onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(id, onlyEdits); }}
-            title={`Apply ${onlyEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits and resolve their discussions (one undo)${left(editIds.length - tickedEdits)}`}
+            onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(id, leftOut); }}
+            title={`Apply ${someEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits and resolve their discussions (one undo)${left(editIds.length - tickedEdits)}`}
             className={`rounded-md border border-[var(--crit-ins)] ${size} font-medium text-[var(--crit-ins)]`}
           >
-            {onlyEdits ? `Apply & resolve ${tickedEdits}` : "Apply & resolve all"}
+            {someEdits ? `Apply & resolve ${tickedEdits}` : "Apply & resolve all"}
           </button>
           <button
             type="button"
             disabled={tickedEdits === 0}
-            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "reject", onlyEdits); }}
-            title={`Reject ${onlyEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits (one undo)${left(editIds.length - tickedEdits)}`}
+            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "reject", leftOut); }}
+            title={`Reject ${someEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits (one undo)${left(editIds.length - tickedEdits)}`}
             className={`rounded-md border border-[var(--line-strong)] ${size} font-medium text-[var(--crit-del)]`}
           >
-            {onlyEdits ? `Reject ${tickedEdits}` : "Reject all"}
+            {someEdits ? `Reject ${tickedEdits}` : "Reject all"}
           </button>
         </>
       ) : null}
@@ -1393,11 +1390,11 @@ function GroupActions({
         <button
           type="button"
           disabled={tickedNotes === 0}
-          onClick={(e) => { e.stopPropagation(); onGroupResolveNotes(id, onlyNotes); }}
-          title={`Resolve ${onlyNotes ? `the ${tickedNotes} ticked` : `all ${noteCount}`} notes (one undo)${left(noteIds.length - tickedNotes)}`}
+          onClick={(e) => { e.stopPropagation(); onGroupResolveNotes(id, leftOut); }}
+          title={`Resolve ${someNotes ? `the ${tickedNotes} ticked` : `all ${noteCount}`} notes (one undo)${left(noteIds.length - tickedNotes)}`}
           className={`rounded-md border border-[var(--line-strong)] ${size} font-medium text-[var(--ink)] hover:bg-[var(--line)]`}
         >
-          {onlyNotes
+          {someNotes
             ? `Resolve ${tickedNotes} of ${noteIds.length} ${noteIds.length === 1 ? "note" : "notes"}`
             : `Resolve all ${noteCount} ${noteCount === 1 ? "note" : "notes"}`}
         </button>
@@ -1412,9 +1409,9 @@ interface GroupSurfaceProps {
   notes: GroupNoteMember[];
   mode: GroupSurfaceMode | null;
   onMode: (mode: GroupSurfaceMode | null) => void;
-  onGroupEdit: (groupId: string, mode: "accept" | "reject", only?: ReadonlySet<string>) => void;
-  onGroupApplyAndResolve: (groupId: string, only?: ReadonlySet<string>) => void;
-  onGroupResolveNotes: (groupId: string, only?: ReadonlySet<string>) => void;
+  onGroupEdit: (groupId: string, mode: "accept" | "reject", unticked?: ReadonlySet<string>) => void;
+  onGroupApplyAndResolve: (groupId: string, unticked?: ReadonlySet<string>) => void;
+  onGroupResolveNotes: (groupId: string, unticked?: ReadonlySet<string>) => void;
   onLocate: (from: number, to: number) => void;
 }
 

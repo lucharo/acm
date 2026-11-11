@@ -2460,17 +2460,18 @@ export function suggestCards(
  * every conflicting thread, because resolving one would otherwise silently erase
  * its competing proposal.
  *
- * `only` (#25) limits the decision to the ticked member comment ids; the rest stay
- * open. A ticked member whose edit would remove an unticked member's comment is
- * held back too (counted in `skipped`), so unticking always keeps that proposal.
- * An unanchored member still blocks the group, ticked or not.
+ * `unticked` (#25) holds the comment ids of the group's rows (edits and notes)
+ * left out of the decision; those stay open. A ticked member whose edit would
+ * remove an unticked comment (Apply & resolve, or accepting a deletion, rewrites
+ * the whole thread) is held back too and counted in `skipped`. An unanchored
+ * member still blocks the group.
  */
 export function suggestionGroupEdits(
   content: string,
   groupId: string,
   mode: "accept" | "reject",
   discussion: SuggestionDiscussion = "keep-discussion",
-  only?: ReadonlySet<string>,
+  unticked?: ReadonlySet<string>,
 ): { edits: { from: number; to: number; insert: string }[]; skipped: number; unanchored: number } {
   const tokens = scanTokens(content);
   const comments = tokens.filter((t): t is CommentToken => t.type === "comment");
@@ -2481,20 +2482,17 @@ export function suggestionGroupEdits(
   const unanchored = tagged - members.length;
   if (unanchored > 0) return { edits: [], skipped: tagged, unanchored };
   const edits: { from: number; to: number; insert: string }[] = [];
-  const kept: CommentToken[] = [];
+  const kept = unticked ? comments.filter((c) => unticked.has(c.id)) : [];
   let skipped = 0;
   for (const m of members) {
+    if (unticked?.has(m.commentId)) continue;
     const c = comments.find((t) => t.from === m.commentFrom);
-    if (only && !only.has(m.commentId)) {
-      if (c) kept.push(c);
-      continue;
-    }
     const e = c ? suggestionThreadEdit(content, c, mode, discussion) : null;
     if (e) edits.push(e);
     else skipped += 1;
   }
   // A ticked edit spans its whole thread: hold it back if it would drop an
-  // unticked member's comment (Apply & resolve, or accepting a deletion).
+  // unticked comment, an edit or a note of the group.
   for (let i = edits.length - 1; i >= 0; i -= 1) {
     const e = edits[i];
     if (kept.some((c) => c.from >= e.from && c.to <= e.to && !e.insert.includes(c.raw))) {

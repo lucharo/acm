@@ -112,25 +112,24 @@ describe("Apply & resolve", () => {
   });
 });
 
-function groupMemberId(content: string, replacement: string): string {
+function groupMemberId(content: string, ending: string): string {
   const comment = scanTokens(content).find(
-    (token): token is CommentToken =>
-      token.type === "comment" && token.body.endsWith(`]: ${replacement}`),
+    (token): token is CommentToken => token.type === "comment" && token.body.endsWith(`]: ${ending}`),
   );
-  if (!comment) throw new Error(`missing group member ${replacement}`);
+  if (!comment) throw new Error(`missing group member ${ending}`);
   return comment.id;
 }
 
-describe("applying only the ticked members of a group (#25)", () => {
+describe("deciding a group with unticked members (#25)", () => {
   const three =
     "A {==one==}{>>@a: SUGGEST[g:g1]: first<<}. " +
     "B {==two==}{>>@a: SUGGEST[g:g1]: second<<}. " +
     "C {==three==}{>>@a: SUGGEST[g:g1]: third<<}.";
 
   test("Apply changes the ticked members and leaves the unticked one as an open suggestion", () => {
-    const only = new Set([groupMemberId(three, "first"), groupMemberId(three, "third")]);
+    const unticked = new Set([groupMemberId(three, "second")]);
 
-    const result = suggestionGroupEdits(three, "g1", "accept", "keep-discussion", only);
+    const result = suggestionGroupEdits(three, "g1", "accept", "keep-discussion", unticked);
 
     expect(result.skipped).toBe(0);
     expect(result.unanchored).toBe(0);
@@ -140,9 +139,9 @@ describe("applying only the ticked members of a group (#25)", () => {
   });
 
   test("Reject restores only the ticked members' original spans", () => {
-    const only = new Set([groupMemberId(three, "second")]);
+    const unticked = new Set([groupMemberId(three, "first"), groupMemberId(three, "third")]);
 
-    const result = suggestionGroupEdits(three, "g1", "reject", "keep-discussion", only);
+    const result = suggestionGroupEdits(three, "g1", "reject", "keep-discussion", unticked);
 
     expect(applyRangedEdits(three, result.edits)).toBe(
       "A {==one==}{>>@a: SUGGEST[g:g1]: first<<}. B two. C {==three==}{>>@a: SUGGEST[g:g1]: third<<}.",
@@ -152,9 +151,9 @@ describe("applying only the ticked members of a group (#25)", () => {
   test("Apply keeps an unticked competing proposal in the same thread", () => {
     const content =
       "A {==one==}{>>@a: SUGGEST[g:g1]: first<<}{>>@b: SUGGEST[g:g1]: alternative<<}.";
-    const only = new Set([groupMemberId(content, "first")]);
+    const unticked = new Set([groupMemberId(content, "alternative")]);
 
-    const result = suggestionGroupEdits(content, "g1", "accept", "keep-discussion", only);
+    const result = suggestionGroupEdits(content, "g1", "accept", "keep-discussion", unticked);
 
     expect(result.skipped).toBe(0);
     expect(applyRangedEdits(content, result.edits)).toBe(
@@ -166,9 +165,9 @@ describe("applying only the ticked members of a group (#25)", () => {
     const content =
       "A {==one==}{>>@a: SUGGEST[g:g1]: first<<}{>>@b: SUGGEST[g:g1]: alternative<<}. " +
       "B {==two==}{>>@a: SUGGEST[g:g1]: second<<}.";
-    const only = new Set([groupMemberId(content, "first"), groupMemberId(content, "second")]);
+    const unticked = new Set([groupMemberId(content, "alternative")]);
 
-    const result = suggestionGroupEdits(content, "g1", "accept", "resolve-thread", only);
+    const result = suggestionGroupEdits(content, "g1", "accept", "resolve-thread", unticked);
 
     expect(result.skipped).toBe(1);
     expect(applyRangedEdits(content, result.edits)).toBe(
@@ -176,14 +175,24 @@ describe("applying only the ticked members of a group (#25)", () => {
     );
   });
 
-  test("a member without an anchor still blocks a ticked subset", () => {
+  test("Apply & resolve holds back an edit whose thread holds an unticked note of the group", () => {
+    const content = "A {==one==}{>>@claude: NOTE[g:g1]: why<<}{>>@a: SUGGEST[g:g1]: first<<}.";
+    const unticked = new Set([groupMemberId(content, "why")]);
+
+    const result = suggestionGroupEdits(content, "g1", "accept", "resolve-thread", unticked);
+
+    expect(result).toEqual({ edits: [], skipped: 1, unanchored: 0 });
+  });
+
+  test("a member without an anchor still blocks the group when another is unticked", () => {
     const doc =
-      "The {==universal mind==}{>>@claude: SUGGEST[g:um]: universal mind[^um]<<} idea.\n\n" +
+      "The {==universal mind==}{>>@claude: SUGGEST[g:um]: universal mind[^um]<<} idea. " +
+      "{==two==}{>>@claude: SUGGEST[g:um]: deux<<}.\n\n" +
       "[^a]: old def.{>>@claude: SUGGEST[g:um]: old def.\n[^um]: the def.<<}\n";
-    const only = new Set([groupMemberId(doc, "universal mind[^um]")]);
+    const unticked = new Set([groupMemberId(doc, "deux")]);
 
-    const result = suggestionGroupEdits(doc, "um", "accept", "keep-discussion", only);
+    const result = suggestionGroupEdits(doc, "um", "accept", "keep-discussion", unticked);
 
-    expect(result).toEqual({ edits: [], skipped: 2, unanchored: 1 });
+    expect(result).toEqual({ edits: [], skipped: 3, unanchored: 1 });
   });
 });

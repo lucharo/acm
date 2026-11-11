@@ -754,16 +754,16 @@ function Workspace({
     [editor.viewRef, pushToast, settings.author],
   );
 
-  // Accept / reject EVERY member of a suggestion group (#21), or only the ticked
-  // ones in `only` (#25), as ONE transaction (array of changes in original
+  // Accept / reject EVERY member of a suggestion group (#21), or all but the
+  // `unticked` ones (#25), as ONE transaction (array of changes in original
   // coordinates → atomic apply + a single undo). Edits and decision events use the
-  // same `only`, so the history matches what changed.
+  // same `unticked`, so the history matches what changed.
   const runGroupEdit = useCallback(
     (
       groupId: string,
       mode: "accept" | "reject",
       discussion: SuggestionDiscussion = "keep-discussion",
-      only?: ReadonlySet<string>,
+      unticked?: ReadonlySet<string>,
     ) => {
       const v = editor.viewRef.current;
       if (!v) return;
@@ -774,7 +774,7 @@ function Workspace({
         groupId,
         mode,
         effectiveDiscussion,
-        only,
+        unticked,
       );
       if (edits.length) {
         const events = structuredSuggestionGroupDecisions(
@@ -788,7 +788,7 @@ function Workspace({
             : "reject",
           settings.author,
           "gui",
-          only,
+          unticked,
         );
         if (events.length !== edits.length) {
           pushToast("Could not record every group decision. No changes were made.", "error");
@@ -1092,11 +1092,11 @@ function Workspace({
   // Resolve every note of a review group (#77) as ONE transaction (one undo), each
   // thread logged like a single Resolve.
   const resolveNoteGroup = useCallback(
-    (groupId: string, only?: ReadonlySet<string>) => {
+    (groupId: string, unticked?: ReadonlySet<string>) => {
       const v = editor.viewRef.current;
       if (!v) return;
       const content = v.state.doc.toString();
-      const { edits, threads: resolved, skipped } = noteGroupResolveEdits(content, groupId, only);
+      const { edits, threads: resolved, skipped } = noteGroupResolveEdits(content, groupId, unticked);
       if (edits.length) {
         const events = resolved.map((thread) => threadResolveDecision(content, thread, settings.author, "gui"));
         v.dispatch({ changes: edits, annotations: decisionAnnotations(events) });
@@ -1661,16 +1661,16 @@ function Workspace({
                     groupMembersOf={groupMembersOf}
                     groupNotesOf={groupNotesOf}
                     onGroupResolveNotes={resolveNoteGroup}
-                    onGroupEdit={(groupId, mode, only) =>
+                    onGroupEdit={(groupId, mode, unticked) =>
                       runGroupEdit(
                         groupId,
                         mode,
                         mode === "accept" ? defaultApplyDiscussion : "keep-discussion",
-                        only,
+                        unticked,
                       )
                     }
-                    onGroupApplyAndResolve={(groupId, only) =>
-                      runGroupEdit(groupId, "accept", "resolve-thread", only)
+                    onGroupApplyAndResolve={(groupId, unticked) =>
+                      runGroupEdit(groupId, "accept", "resolve-thread", unticked)
                     }
                     onLocate={locateSpan}
                     onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}

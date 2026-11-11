@@ -264,8 +264,8 @@ describe("group decisions for a ticked subset (#25)", () => {
       "A {==one==}{>>@a: SUGGEST[g:g1]: first<<} B {==two==}{>>@b: SUGGEST[g:g1]: second<<} " +
       "C {==three==}{>>@c: SUGGEST[g:g1]: third longer<<}.";
     const comments = scanTokens(content).filter((t): t is CommentToken => t.type === "comment");
-    const only = new Set([comments[0].id, comments[2].id]);
-    const { edits } = suggestionGroupEdits(content, "g1", "accept", "keep-discussion", only);
+    const unticked = new Set([comments[1].id]);
+    const { edits } = suggestionGroupEdits(content, "g1", "accept", "keep-discussion", unticked);
     let after = content;
     for (const edit of [...edits].reverse()) {
       after = after.slice(0, edit.from) + edit.insert + after.slice(edit.to);
@@ -278,7 +278,7 @@ describe("group decisions for a ticked subset (#25)", () => {
       "apply",
       "Luis",
       "gui",
-      only,
+      unticked,
     );
 
     expect(events.map((event) => event.target.id)).toEqual([comments[0].id, comments[2].id]);
@@ -291,9 +291,9 @@ describe("group decisions for a ticked subset (#25)", () => {
   test("of two identical competing members, the event names the ticked one", () => {
     const content = "A {==one==}{>>@a: SUGGEST[g:g1]: same<<}{>>@a: SUGGEST[g:g1]: same<<}.";
     const comments = scanTokens(content).filter((t): t is CommentToken => t.type === "comment");
-    const only = new Set([comments[1].id]);
+    const unticked = new Set([comments[0].id]);
 
-    const events = structuredSuggestionGroupDecisions(content, "g1", "accept", "apply", "Luis", "gui", only);
+    const events = structuredSuggestionGroupDecisions(content, "g1", "accept", "apply", "Luis", "gui", unticked);
 
     expect(events.map((event) => event.target.id)).toEqual([comments[1].id]);
   });

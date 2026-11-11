@@ -482,12 +482,12 @@ describe("group panel beside its card, with ticked rows (#25)", () => {
       notes,
       mode: "popover" as const,
       onMode: (mode: unknown) => calls.push(["mode", mode]),
-      onGroupEdit: (id: string, mode: string, only?: ReadonlySet<string>) =>
-        calls.push(["edit", id, mode, only && [...only]]),
-      onGroupApplyAndResolve: (id: string, only?: ReadonlySet<string>) =>
-        calls.push(["apply-resolve", id, only && [...only]]),
-      onGroupResolveNotes: (id: string, only?: ReadonlySet<string>) =>
-        calls.push(["resolve-notes", id, only && [...only]]),
+      onGroupEdit: (id: string, mode: string, unticked?: ReadonlySet<string>) =>
+        calls.push(["edit", id, mode, unticked && [...unticked]]),
+      onGroupApplyAndResolve: (id: string, unticked?: ReadonlySet<string>) =>
+        calls.push(["apply-resolve", id, unticked && [...unticked]]),
+      onGroupResolveNotes: (id: string, unticked?: ReadonlySet<string>) =>
+        calls.push(["resolve-notes", id, unticked && [...unticked]]),
       onLocate: () => calls.push(["locate"]),
     };
   }
@@ -589,7 +589,7 @@ describe("group panel beside its card, with ticked rows (#25)", () => {
     ]);
   });
 
-  test("unticking a row in the popover applies, resolves and rejects only the ticked rows", () => {
+  test("unticking rows in the popover hands every button the unticked set", () => {
     const calls: Call[] = [];
     act(() => {
       renderer = create(createElement(GroupSurface, surfaceProps(calls)));
@@ -603,10 +603,10 @@ describe("group panel beside its card, with ticked rows (#25)", () => {
     act(() => button("Resolve 1 of 2 notes").props.onClick(event));
 
     expect(calls).toEqual([
-      ["edit", "g", "accept", ["edit-1", "edit-3"]],
-      ["apply-resolve", "g", ["edit-1", "edit-3"]],
-      ["edit", "g", "reject", ["edit-1", "edit-3"]],
-      ["resolve-notes", "g", ["note-2"]],
+      ["edit", "g", "accept", ["edit-2", "note-1"]],
+      ["apply-resolve", "g", ["edit-2", "note-1"]],
+      ["edit", "g", "reject", ["edit-2", "note-1"]],
+      ["resolve-notes", "g", ["edit-2", "note-1"]],
     ]);
   });
 
@@ -635,7 +635,19 @@ describe("group panel beside its card, with ticked rows (#25)", () => {
     act(() => checkbox("edit-3").props.onChange(event));
     act(() => button("Apply 1 of 3").props.onClick(event));
 
-    expect(calls).toEqual([["edit", "g", "accept", ["edit-3"]]]);
+    expect(calls).toEqual([["edit", "g", "accept", ["edit-1", "edit-2", "note-1", "note-2"]]]);
+  });
+
+  test("an unticked note travels with Apply all, so an edit in its thread cannot remove it", () => {
+    const calls: Call[] = [];
+    act(() => {
+      renderer = create(createElement(GroupSurface, surfaceProps(calls)));
+    });
+
+    act(() => checkbox("note-1").props.onChange(event));
+    act(() => button("Apply all 3").props.onClick(event));
+
+    expect(calls).toEqual([["edit", "g", "accept", ["note-1"]]]);
   });
 });
 
