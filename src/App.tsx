@@ -754,13 +754,16 @@ function Workspace({
     [editor.viewRef, pushToast, settings.author],
   );
 
-  // Accept / reject EVERY member of a suggestion group (#21) as ONE transaction
-  // (array of changes in original coordinates → atomic apply + a single undo).
+  // Accept / reject EVERY member of a suggestion group (#21), or only the ticked
+  // ones in `only` (#25), as ONE transaction (array of changes in original
+  // coordinates → atomic apply + a single undo). Edits and decision events use the
+  // same `only`, so the history matches what changed.
   const runGroupEdit = useCallback(
     (
       groupId: string,
       mode: "accept" | "reject",
       discussion: SuggestionDiscussion = "keep-discussion",
+      only?: ReadonlySet<string>,
     ) => {
       const v = editor.viewRef.current;
       if (!v) return;
@@ -771,6 +774,7 @@ function Workspace({
         groupId,
         mode,
         effectiveDiscussion,
+        only,
       );
       if (edits.length) {
         const events = structuredSuggestionGroupDecisions(
@@ -784,6 +788,7 @@ function Workspace({
             : "reject",
           settings.author,
           "gui",
+          only,
         );
         if (events.length !== edits.length) {
           pushToast("Could not record every group decision. No changes were made.", "error");
@@ -1087,11 +1092,11 @@ function Workspace({
   // Resolve every note of a review group (#77) as ONE transaction (one undo), each
   // thread logged like a single Resolve.
   const resolveNoteGroup = useCallback(
-    (groupId: string) => {
+    (groupId: string, only?: ReadonlySet<string>) => {
       const v = editor.viewRef.current;
       if (!v) return;
       const content = v.state.doc.toString();
-      const { edits, threads: resolved, skipped } = noteGroupResolveEdits(content, groupId);
+      const { edits, threads: resolved, skipped } = noteGroupResolveEdits(content, groupId, only);
       if (edits.length) {
         const events = resolved.map((thread) => threadResolveDecision(content, thread, settings.author, "gui"));
         v.dispatch({ changes: edits, annotations: decisionAnnotations(events) });
@@ -1656,15 +1661,16 @@ function Workspace({
                     groupMembersOf={groupMembersOf}
                     groupNotesOf={groupNotesOf}
                     onGroupResolveNotes={resolveNoteGroup}
-                    onGroupEdit={(groupId, mode) =>
+                    onGroupEdit={(groupId, mode, only) =>
                       runGroupEdit(
                         groupId,
                         mode,
                         mode === "accept" ? defaultApplyDiscussion : "keep-discussion",
+                        only,
                       )
                     }
-                    onGroupApplyAndResolve={(groupId) =>
-                      runGroupEdit(groupId, "accept", "resolve-thread")
+                    onGroupApplyAndResolve={(groupId, only) =>
+                      runGroupEdit(groupId, "accept", "resolve-thread", only)
                     }
                     onLocate={locateSpan}
                     onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}

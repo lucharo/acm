@@ -87,12 +87,14 @@ interface CommentSidebarProps {
   groupMembersOf: Map<string, SuggestionGroupMember[]>;
   /** groupId → its notes, in document order. */
   groupNotesOf: Map<string, GroupNoteMember[]>;
-  /** Resolve every note thread of a group as one atomic edit. */
-  onGroupResolveNotes: (groupId: string) => void;
-  /** Accept/reject EVERY member of a group as one atomic edit. */
-  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
-  /** Apply every non-conflicting member and resolve its discussion atomically. */
-  onGroupApplyAndResolve: (groupId: string) => void;
+  /** Resolve a group's note threads as one atomic edit: every one, or only the
+   *  ticked comment ids in `only` (#25). */
+  onGroupResolveNotes: (groupId: string, only?: ReadonlySet<string>) => void;
+  /** Accept/reject a group's members as one atomic edit: every member, or only
+   *  the ticked comment ids in `only` (#25). */
+  onGroupEdit: (groupId: string, mode: "accept" | "reject", only?: ReadonlySet<string>) => void;
+  /** Apply every non-conflicting (ticked) member and resolve its discussion atomically. */
+  onGroupApplyAndResolve: (groupId: string, only?: ReadonlySet<string>) => void;
   /** Scroll a span into view + flash it — a group member row → its edit in the doc. */
   onLocate: (from: number, to: number) => void;
   /** Accept / reject a suggestion card's suggestion. */
@@ -495,6 +497,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     const g = groupOf.get(commentId);
     if (!g) return null;
     const mode = openControl?.key === commentId ? openControl.mode : null;
+    // A decision closes the surface: what is left of the group (the unticked rows)
+    // stays as open cards to comment on or decide later (#25).
+    const close = () => setOpenControl(null);
     return (
       <GroupSurface
         group={g}
@@ -502,9 +507,9 @@ export default function CommentSidebar(props: CommentSidebarProps) {
         notes={groupNotesOf.get(g.id) ?? []}
         mode={mode}
         onMode={(next) => setOpenControl(next ? { key: commentId, mode: next } : null)}
-        onGroupEdit={onGroupEdit}
-        onGroupApplyAndResolve={onGroupApplyAndResolve}
-        onGroupResolveNotes={onGroupResolveNotes}
+        onGroupEdit={(id, m, only) => { close(); onGroupEdit(id, m, only); }}
+        onGroupApplyAndResolve={(id, only) => { close(); onGroupApplyAndResolve(id, only); }}
+        onGroupResolveNotes={(id, only) => { close(); onGroupResolveNotes(id, only); }}
         onLocate={onLocate}
       />
     );
@@ -1178,121 +1183,223 @@ export function groupCountLabel(group: Pick<ReviewGroupInfo, "edits" | "notes">)
     .join(" · ");
 }
 
+/** Where the group panel sits, in viewport px (#25): just under the card's group
+ *  link and flush with the card's right edge, so it reads as coming from that
+ *  card and covers the cards column rather than the prose. Above the link when
+ *  the window has no room below; the full window height when neither side fits. */
+const PANEL_MARGIN = 16;
+const PANEL_GAP = 6;
+const PANEL_WIDTH = 400;
+const PANEL_MIN_HEIGHT = 320;
+
+export interface GroupPanelPlacement {
+  top?: number;
+  bottom?: number;
+  right: number;
+  width: number;
+  maxHeight: number;
+}
+
+export function groupPanelPlacement(
+  anchor: { top: number; bottom: number; right: number },
+  viewport: { width: number; height: number },
+): GroupPanelPlacement {
+  const width = Math.min(PANEL_WIDTH, viewport.width - 2 * PANEL_MARGIN);
+  let edge = Math.min(anchor.right, viewport.width - PANEL_MARGIN);
+  if (edge - width < PANEL_MARGIN) edge = PANEL_MARGIN + width;
+  const right = viewport.width - edge;
+  const below = viewport.height - PANEL_MARGIN - (anchor.bottom + PANEL_GAP);
+  const above = anchor.top - PANEL_GAP - PANEL_MARGIN;
+  if (below >= PANEL_MIN_HEIGHT) {
+    const top = Math.max(PANEL_MARGIN, anchor.bottom + PANEL_GAP);
+    return { top, right, width, maxHeight: viewport.height - PANEL_MARGIN - top };
+  }
+  if (above >= PANEL_MIN_HEIGHT) {
+    const bottom = Math.max(PANEL_MARGIN, viewport.height - (anchor.top - PANEL_GAP));
+    return { bottom, right, width, maxHeight: viewport.height - PANEL_MARGIN - bottom };
+  }
+  return { top: PANEL_MARGIN, right, width, maxHeight: viewport.height - 2 * PANEL_MARGIN };
+}
+
+/** The ticked ids among `ids`, or undefined when none is unticked: the whole set,
+ *  so a full decision keeps the group's all-or-nothing path. */
+function tickedOnly(ids: string[], unticked: ReadonlySet<string>): ReadonlySet<string> | undefined {
+  const ticked = ids.filter((id) => !unticked.has(id));
+  return ticked.length === ids.length ? undefined : new Set(ticked);
+}
+
+/** Which rows of an open group surface are left out of its decision (#25). Every
+ *  row starts ticked; the set holds the unticked comment ids. */
+interface GroupSelection {
+  unticked: ReadonlySet<string>;
+  onToggle: (commentId: string) => void;
+  onToggleAll: (tick: boolean) => void;
+}
+
 /** The members of a group, in document order: edits as old → new rows, notes as
- *  their text. Click a row to scroll to + flash the span it is about (onLocate). */
+ *  their text, each with a checkbox deciding whether the group's buttons act on it.
+ *  Click a row to scroll to + flash the span it is about (onLocate). */
 export function GroupMembers({
   members,
   notes,
   large = false,
   onLocate,
+  unticked,
+  onToggle,
 }: {
   members: SuggestionGroupMember[];
   notes: GroupNoteMember[];
   large?: boolean;
   onLocate: (from: number, to: number) => void;
-}) {
+} & Pick<GroupSelection, "unticked" | "onToggle">) {
   const rows = [
     ...members.map((m) => ({ key: m.commentId, at: m.from, from: m.anchorFrom, to: m.anchorTo, edit: m, note: null })),
     ...notes.map((n) => ({ key: n.commentId, at: n.threadFrom, from: n.anchorFrom, to: n.anchorTo, edit: null, note: n })),
   ].sort((a, b) => a.at - b.at);
   return (
     <ul className={large ? "divide-y divide-[var(--line)]" : "space-y-0.5"}>
-      {rows.map((row, i) => (
-        <li key={row.key}>
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onLocate(row.from, row.to); }}
-            title="Jump to this item in the document"
-            className={`flex w-full gap-1.5 rounded text-left leading-snug hover:bg-[var(--line)] ${large ? "px-2 py-1.5 text-[13px]" : "px-1 py-0.5 text-[12px]"}`}
-          >
-            <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
-            <span className="min-w-0 [overflow-wrap:anywhere]">
-              {row.edit ? (
-                <>
-                  {row.edit.anchorText ? (
-                    <>
-                      <span className="text-[var(--crit-del)] line-through">{row.edit.anchorText}</span>
-                      <span className="px-1 text-[var(--faint)]">→</span>
-                    </>
-                  ) : null}
-                  {row.edit.isDelete ? (
-                    <span className="italic text-[var(--crit-del)]">(delete)</span>
-                  ) : (
-                    <span className="text-[var(--crit-ins)]">{row.edit.replacement}</span>
-                  )}
-                </>
-              ) : row.note ? (
-                <>
-                  {row.note.anchorText ? (
-                    <span className="mr-1 rounded bg-[var(--crit-hl-bg)] px-1 text-[var(--ink)]">{row.note.anchorText}</span>
-                  ) : null}
-                  <span className="text-[var(--ink)]">{row.note.text}</span>
-                </>
-              ) : null}
-            </span>
-          </button>
-        </li>
-      ))}
+      {rows.map((row, i) => {
+        const ticked = !unticked.has(row.key);
+        return (
+          <li key={row.key} className={`flex items-start ${ticked ? "" : "opacity-50"}`}>
+            <input
+              type="checkbox"
+              value={row.key}
+              checked={ticked}
+              onChange={(e) => { e.stopPropagation(); onToggle(row.key); }}
+              onClick={(e) => e.stopPropagation()}
+              aria-label={`Include item ${i + 1}`}
+              title={ticked ? "Untick to leave this one open" : "Tick to include this one"}
+              className={`shrink-0 cursor-pointer accent-[var(--crit-ins)] ${large ? "ml-2 mt-[9px]" : "ml-1 mt-[5px]"}`}
+            />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onLocate(row.from, row.to); }}
+              title="Jump to this item in the document"
+              className={`flex min-w-0 flex-1 gap-1.5 rounded text-left leading-snug hover:bg-[var(--line)] ${large ? "px-2 py-1.5 text-[13px]" : "px-1 py-0.5 text-[12px]"}`}
+            >
+              <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {row.edit ? (
+                  <>
+                    {row.edit.anchorText ? (
+                      <>
+                        <span className="text-[var(--crit-del)] line-through">{row.edit.anchorText}</span>
+                        <span className="px-1 text-[var(--faint)]">→</span>
+                      </>
+                    ) : null}
+                    {row.edit.isDelete ? (
+                      <span className="italic text-[var(--crit-del)]">(delete)</span>
+                    ) : (
+                      <span className="text-[var(--crit-ins)]">{row.edit.replacement}</span>
+                    )}
+                  </>
+                ) : row.note ? (
+                  <>
+                    {row.note.anchorText ? (
+                      <span className="mr-1 rounded bg-[var(--crit-hl-bg)] px-1 text-[var(--ink)]">{row.note.anchorText}</span>
+                    ) : null}
+                    <span className="text-[var(--ink)]">{row.note.text}</span>
+                  </>
+                ) : null}
+              </span>
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
-/** Apply-all / Reject-all for the group's edits and Resolve-all for its notes,
- *  each one undoable edit. */
+/** "Untick all" / "Tick all" for a group surface's rows. */
+function TickAllToggle({ allUnticked, onToggleAll }: { allUnticked: boolean; onToggleAll: (tick: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onToggleAll(allUnticked); }}
+      className="rounded px-1 text-[11px] text-[var(--muted)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+    >
+      {allUnticked ? "Tick all" : "Untick all"}
+    </button>
+  );
+}
+
+/** Apply / Reject for the group's ticked edits and Resolve for its ticked notes,
+ *  each one undoable edit. With every row ticked they decide the whole group, as
+ *  before (#25); unticked rows stay as open cards. */
 function GroupActions({
   group,
+  members,
+  notes,
+  unticked,
   large = false,
   onGroupEdit,
   onGroupApplyAndResolve,
   onGroupResolveNotes,
 }: {
   group: ReviewGroupInfo;
+  members: SuggestionGroupMember[];
+  notes: GroupNoteMember[];
+  unticked: ReadonlySet<string>;
   large?: boolean;
-  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
-  onGroupApplyAndResolve: (groupId: string) => void;
-  onGroupResolveNotes: (groupId: string) => void;
+  onGroupEdit: (groupId: string, mode: "accept" | "reject", only?: ReadonlySet<string>) => void;
+  onGroupApplyAndResolve: (groupId: string, only?: ReadonlySet<string>) => void;
+  onGroupResolveNotes: (groupId: string, only?: ReadonlySet<string>) => void;
 }) {
-  const { id, edits, notes } = group;
+  const { id, edits, notes: noteCount } = group;
+  const editIds = members.map((m) => m.commentId);
+  const noteIds = notes.map((n) => n.commentId);
+  const onlyEdits = tickedOnly(editIds, unticked);
+  const onlyNotes = tickedOnly(noteIds, unticked);
+  const tickedEdits = onlyEdits ? onlyEdits.size : edits;
+  const tickedNotes = onlyNotes ? onlyNotes.size : noteCount;
+  const left = (n: number) => (n > 0 ? `; the ${n} unticked stay open` : "");
   // The panel's buttons match the card-sized reply buttons; the popover's stay compact.
-  const size = large ? "px-2.5 py-1 text-[12px]" : "px-1.5 py-0.5 text-[10px]";
+  const size = `${large ? "px-2.5 py-1 text-[12px]" : "px-1.5 py-0.5 text-[10px]"} disabled:cursor-not-allowed disabled:opacity-40`;
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${large ? "mt-3" : "mt-2"}`}>
       {edits > 0 ? (
         <>
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "accept"); }}
-            title={`Apply all ${edits} edits in this group (one undo)`}
+            disabled={tickedEdits === 0}
+            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "accept", onlyEdits); }}
+            title={`Apply ${onlyEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits (one undo)${left(editIds.length - tickedEdits)}`}
             className={`rounded-md bg-[var(--crit-ins)] ${size} font-medium text-[var(--panel)]`}
           >
-            Apply all {edits}
+            {onlyEdits ? `Apply ${tickedEdits} of ${editIds.length}` : `Apply all ${edits}`}
           </button>
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(id); }}
-            title={`Apply all ${edits} edits and resolve their discussions (one undo)`}
+            disabled={tickedEdits === 0}
+            onClick={(e) => { e.stopPropagation(); onGroupApplyAndResolve(id, onlyEdits); }}
+            title={`Apply ${onlyEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits and resolve their discussions (one undo)${left(editIds.length - tickedEdits)}`}
             className={`rounded-md border border-[var(--crit-ins)] ${size} font-medium text-[var(--crit-ins)]`}
           >
-            Apply &amp; resolve all
+            {onlyEdits ? `Apply & resolve ${tickedEdits}` : "Apply & resolve all"}
           </button>
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "reject"); }}
-            title={`Reject all ${edits} edits in this group (one undo)`}
+            disabled={tickedEdits === 0}
+            onClick={(e) => { e.stopPropagation(); onGroupEdit(id, "reject", onlyEdits); }}
+            title={`Reject ${onlyEdits ? `the ${tickedEdits} ticked` : `all ${edits}`} edits (one undo)${left(editIds.length - tickedEdits)}`}
             className={`rounded-md border border-[var(--line-strong)] ${size} font-medium text-[var(--crit-del)]`}
           >
-            Reject all
+            {onlyEdits ? `Reject ${tickedEdits}` : "Reject all"}
           </button>
         </>
       ) : null}
-      {notes > 0 ? (
+      {noteCount > 0 ? (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onGroupResolveNotes(id); }}
-          title={`Resolve all ${notes} notes in this group (one undo)`}
+          disabled={tickedNotes === 0}
+          onClick={(e) => { e.stopPropagation(); onGroupResolveNotes(id, onlyNotes); }}
+          title={`Resolve ${onlyNotes ? `the ${tickedNotes} ticked` : `all ${noteCount}`} notes (one undo)${left(noteIds.length - tickedNotes)}`}
           className={`rounded-md border border-[var(--line-strong)] ${size} font-medium text-[var(--ink)] hover:bg-[var(--line)]`}
         >
-          Resolve all {notes} {notes === 1 ? "note" : "notes"}
+          {onlyNotes
+            ? `Resolve ${tickedNotes} of ${noteIds.length} ${noteIds.length === 1 ? "note" : "notes"}`
+            : `Resolve all ${noteCount} ${noteCount === 1 ? "note" : "notes"}`}
         </button>
       ) : null}
     </div>
@@ -1305,22 +1412,46 @@ interface GroupSurfaceProps {
   notes: GroupNoteMember[];
   mode: GroupSurfaceMode | null;
   onMode: (mode: GroupSurfaceMode | null) => void;
-  onGroupEdit: (groupId: string, mode: "accept" | "reject") => void;
-  onGroupApplyAndResolve: (groupId: string) => void;
-  onGroupResolveNotes: (groupId: string) => void;
+  onGroupEdit: (groupId: string, mode: "accept" | "reject", only?: ReadonlySet<string>) => void;
+  onGroupApplyAndResolve: (groupId: string, only?: ReadonlySet<string>) => void;
+  onGroupResolveNotes: (groupId: string, only?: ReadonlySet<string>) => void;
   onLocate: (from: number, to: number) => void;
 }
 
-/** The side panel for reviewing a whole group (#67/#74): wide, most of the window
- *  tall, its list scrolling by wheel, trackpad and keyboard (it takes focus, so
- *  ↑/↓/PageUp/PageDown/Space work at once). Escape closes it. The document stays
- *  visible to its left, so a row's jump link shows the span in place. */
-export function GroupPanel(props: GroupSurfaceProps) {
-  const { group, members, notes, onMode, onLocate } = props;
+type GroupPanelProps = GroupSurfaceProps &
+  GroupSelection & {
+    /** The card's group control: the panel opens beside it (#25). Without it the
+     *  panel falls back to the window's top-right corner. */
+    anchor?: { readonly current: HTMLElement | null };
+  };
+
+function placeBeside(anchor: GroupPanelProps["anchor"]): GroupPanelPlacement | null {
+  if (!anchor?.current || typeof window === "undefined") return null;
+  return groupPanelPlacement(anchor.current.getBoundingClientRect(), {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+}
+
+/** The panel for reviewing a whole group (#67/#74), opened beside the card it came
+ *  from (#25): most of the window tall at most, its list scrolling by wheel,
+ *  trackpad and keyboard (it takes focus, so ↑/↓/PageUp/PageDown/Space work at
+ *  once). Escape closes it. It stays put while the document scrolls, so a row's
+ *  jump link shows the span in place. */
+export function GroupPanel(props: GroupPanelProps) {
+  const { group, members, notes, onMode, onLocate, unticked, onToggle, onToggleAll, anchor } = props;
   const listRef = useRef<HTMLDivElement | null>(null);
+  const [placement, setPlacement] = useState(() => placeBeside(anchor));
   useEffect(() => {
     listRef.current?.focus({ preventScroll: true });
   }, []);
+  useEffect(() => {
+    if (!anchor || typeof window === "undefined") return;
+    const onResize = () => setPlacement(placeBeside(anchor));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [anchor]);
+  const rowCount = members.length + notes.length;
   return (
     <div
       data-group-ui
@@ -1333,21 +1464,25 @@ export function GroupPanel(props: GroupSurfaceProps) {
           onMode(null);
         }
       }}
-      className="fixed right-4 top-16 z-50 flex max-h-[calc(100vh-5rem)] w-[min(34rem,calc(100vw-2rem))] flex-col rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] p-3 text-[var(--ink)] shadow-[0_12px_40px_rgba(0,0,0,0.22)]"
+      style={placement ?? undefined}
+      className={`fixed z-50 flex flex-col rounded-xl border border-[var(--line-strong)] bg-[var(--panel)] p-3 text-[var(--ink)] shadow-[0_12px_40px_rgba(0,0,0,0.22)] ${placement ? "" : "right-4 top-16 max-h-[calc(100vh-5rem)] w-[min(34rem,calc(100vw-2rem))]"}`}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-[13px] font-medium" style={{ color: groupColor(group.id) }}>
           <span aria-hidden="true">⛓</span> {group.id} · {groupCountLabel(group)}
         </span>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onMode(null); }}
-          aria-label="Close"
-          title="Close (esc)"
-          className="rounded p-1 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
-        >
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
-        </button>
+        <span className="flex items-center gap-1">
+          <TickAllToggle allUnticked={rowCount > 0 && unticked.size >= rowCount} onToggleAll={onToggleAll} />
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onMode(null); }}
+            aria-label="Close"
+            title="Close (esc)"
+            className="rounded p-1 text-[var(--faint)] hover:bg-[var(--line)] hover:text-[var(--ink)]"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+          </button>
+        </span>
       </div>
       <div
         ref={listRef}
@@ -1355,10 +1490,13 @@ export function GroupPanel(props: GroupSurfaceProps) {
         aria-label="Group members"
         className="min-h-0 shrink overflow-y-auto rounded-lg border border-[var(--line)] outline-none"
       >
-        <GroupMembers members={members} notes={notes} large onLocate={onLocate} />
+        <GroupMembers members={members} notes={notes} large onLocate={onLocate} unticked={unticked} onToggle={onToggle} />
       </div>
       <GroupActions
         group={group}
+        members={members}
+        notes={notes}
+        unticked={unticked}
         large
         onGroupEdit={props.onGroupEdit}
         onGroupApplyAndResolve={props.onGroupApplyAndResolve}
@@ -1368,8 +1506,25 @@ export function GroupPanel(props: GroupSurfaceProps) {
   );
 }
 
-function GroupSurface(props: GroupSurfaceProps) {
+export function GroupSurface(props: GroupSurfaceProps) {
   const { group, members, notes, mode, onMode, onLocate } = props;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Every row starts ticked; closing the surface forgets what was unticked.
+  const [unticked, setUnticked] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (mode === null) setUnticked((prev) => (prev.size ? new Set() : prev));
+  }, [mode]);
+  const rowIds = [...members.map((m) => m.commentId), ...notes.map((n) => n.commentId)];
+  const selection: GroupSelection = {
+    unticked,
+    onToggle: (commentId) =>
+      setUnticked((prev) => {
+        const next = new Set(prev);
+        if (!next.delete(commentId)) next.add(commentId);
+        return next;
+      }),
+    onToggleAll: (tick) => setUnticked(tick ? new Set() : new Set(rowIds)),
+  };
   // Group tag, colour-matched to the card's spine so identity is unmistakable.
   const color = groupColor(group.id);
   const chip = (
@@ -1381,9 +1536,10 @@ function GroupSurface(props: GroupSurfaceProps) {
 
   // Small groups open a popover off the card. It opens UPWARD (the control sits at
   // the card's bottom) so it overlays the visible card body rather than spilling
-  // past the clipped column edge. Large groups, or ⤢, open the side panel.
+  // past the clipped column edge. Large groups, or ⤢, open the panel beside the card.
   return (
     <div
+      ref={rootRef}
       data-group-ui
       className="relative mt-1.5 border-t border-[var(--line)] pt-1.5 text-[10px] text-[var(--muted)]"
     >
@@ -1409,6 +1565,10 @@ function GroupSurface(props: GroupSurfaceProps) {
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-[11px] font-medium">{chip}</span>
             <span className="flex items-center gap-0.5">
+              <TickAllToggle
+                allUnticked={rowIds.length > 0 && unticked.size >= rowIds.length}
+                onToggleAll={selection.onToggleAll}
+              />
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onMode("panel"); }}
@@ -1429,17 +1589,20 @@ function GroupSurface(props: GroupSurfaceProps) {
             </span>
           </div>
           <div tabIndex={0} aria-label="Group members" className="max-h-60 overflow-y-auto pr-0.5 outline-none">
-            <GroupMembers members={members} notes={notes} onLocate={onLocate} />
+            <GroupMembers members={members} notes={notes} onLocate={onLocate} {...selection} />
           </div>
           <GroupActions
             group={group}
+            members={members}
+            notes={notes}
+            unticked={unticked}
             onGroupEdit={props.onGroupEdit}
             onGroupApplyAndResolve={props.onGroupApplyAndResolve}
             onGroupResolveNotes={props.onGroupResolveNotes}
           />
         </div>
       ) : null}
-      {mode === "panel" ? createPortal(<GroupPanel {...props} />, document.body) : null}
+      {mode === "panel" ? createPortal(<GroupPanel {...props} {...selection} anchor={rootRef} />, document.body) : null}
     </div>
   );
 }
