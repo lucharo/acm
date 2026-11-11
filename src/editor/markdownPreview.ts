@@ -583,7 +583,8 @@ function enclosingBlocks(state: EditorState, from: number, to: number): { from: 
 }
 
 /** Matched `<u>`…`</u>` pairs in the blocks the viewport touches. Skips what the
- *  preview never styles: tables, code, comment bodies, standalone insertions. */
+ *  preview never styles: tables, code and standalone insertions (a comment body
+ *  parses as one opaque node, so it holds no tags). */
 export function underlineSpans(view: EditorView): UnderlineSpan[] {
   const { state } = view;
   const standaloneInsertions = standaloneInsertionTokens(state);
@@ -595,9 +596,7 @@ export function underlineSpans(view: EditorView): UnderlineSpan[] {
       to: range.to,
       enter: (node) => {
         const name = node.name;
-        if (name === "Table" || name === "FencedCode" || name === "CodeBlock" || name === "CMComment") {
-          return false;
-        }
+        if (name === "Table" || name === "FencedCode" || name === "CodeBlock") return false;
         if (standaloneInsertions.some((ins) => ins.from <= node.from && node.to <= ins.to)) return false;
         if (name !== "HTMLTag") return;
         const text = state.doc.sliceString(node.from, node.to);
