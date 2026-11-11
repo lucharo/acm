@@ -129,8 +129,6 @@ export interface DocState {
  *  agent that have not been sent to it yet (what Send would hand over). */
 export interface AgentStatus {
   listening: number;
-  /** --wait agents woken and not yet re-armed: busy with the work, still in the loop. */
-  working: number;
   toSend: { comments: number; editRequests: number };
 }
 

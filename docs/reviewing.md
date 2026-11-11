@@ -48,7 +48,7 @@ Comments can share a group too (an agent writes them with `acm comment --group <
 
 ## Send your comments to the agent
 
-The pill in the header shows whether an agent is listening (a filled dot) and **Send N to agent**, the threads where you had the last word that the agent has not been sent yet. Press **Send** at the end of a review round to wake the agent once for all of them, and a message confirms it. **Send** is on only while an agent is listening, or while an agent that uses `--wait` is working on what it last received (the pill reads **Agent working**).
+The pill in the header shows whether an agent is listening (a filled dot) and **Send N to agent**, the threads where you had the last word that the agent has not been sent yet. Press **Send** at the end of a review round to wake the agent once for all of them, and a message confirms it. **Send** is on only while an agent is listening. An agent that uses `--wait` stops listening while it works on what it received, so for these buttons prefer `--notify`.
 
 Click the status side of the pill, or open **Settings > Review**, for **Notify agent on each comment**. Off (the default), your comments wait for **Send**; on, every comment you post wakes the agent. An agent listens with `acm edit <file.md> --notify`; see [Agents](agents.md#waking-the-agent-from-the-editor).
 

@@ -572,7 +572,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
           .then((res) => (res.ok ? (res.json() as Promise<AgentStatus>) : null))
           .then((status) => {
             if (status && mounted.current && !closed && !agentPushed) {
-              setAgentStatus({ listening: status.listening, working: status.working, toSend: status.toSend });
+              setAgentStatus({ listening: status.listening, toSend: status.toSend });
             }
           })
           .catch(() => undefined);
@@ -666,7 +666,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
         if (msg.type === "agent") {
           agentPushed = true;
-          setAgentStatus({ listening: msg.listening, working: msg.working, toSend: msg.toSend });
+          setAgentStatus({ listening: msg.listening, toSend: msg.toSend });
           return;
         }
         if (msg.type !== "update") return;

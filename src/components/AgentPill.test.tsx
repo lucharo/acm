@@ -5,9 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import AgentPill, { agentPillLabels, askFeedback, saveStatusOf, sendDecision, sendFeedback } from "./AgentPill";
 import type { AgentStatus } from "../lib/types";
 
-const status = (listening: number, comments: number, editRequests: number, working = 0): AgentStatus => ({
+const status = (listening: number, comments: number, editRequests: number): AgentStatus => ({
   listening,
-  working,
   toSend: { comments, editRequests },
 });
 
@@ -32,10 +31,10 @@ describe("agentPillLabels", () => {
     });
   });
 
-  test("a --wait agent that was woken and has not re-armed counts as working: Send stays on", () => {
-    expect(agentPillLabels(status(0, 1, 0, 1))).toEqual({
+  test("an agent listening with work waiting: Send is on", () => {
+    expect(agentPillLabels(status(1, 1, 0))).toEqual({
       listening: true,
-      status: "Agent working",
+      status: "Agent listening",
       send: "Send 1 to agent",
       canSend: true,
       sendTitle: "Send the comments waiting on the agent as one message",

@@ -188,7 +188,6 @@ describe("the event stream acm edit --notify attaches to", () => {
     await comment("Luis", "Too wordy?");
     expect(await status()).toEqual({
       listening: 0,
-      working: 0,
       toSend: { comments: 1, editRequests: 0 },
       notifyEachComment: false,
     });
@@ -210,7 +209,7 @@ describe("the event stream acm edit --notify attaches to", () => {
     settings({ author: "Luis" });
     const { base, comment } = await boot();
     const ws = new WebSocket(`${base.replace("http", "ws")}/ws`);
-    const messages: { type: string; listening?: number; working?: number; toSend?: unknown }[] = [];
+    const messages: { type: string; listening?: number; toSend?: unknown }[] = [];
     ws.onmessage = (ev) => messages.push(JSON.parse(String(ev.data)));
     await new Promise((done) => (ws.onopen = done));
 
@@ -222,7 +221,6 @@ describe("the event stream acm edit --notify attaches to", () => {
     expect(messages.filter((m) => m.type === "agent").at(-1)).toEqual({
       type: "agent",
       listening: 0,
-      working: 0,
       toSend: { comments: 1, editRequests: 0 },
     });
   });
@@ -306,31 +304,6 @@ describe("the wait read acm edit --wait makes", () => {
 
     expect(await res.json()).toEqual({ listening: 1, sent: { comments: 1, editRequests: 0 } });
     await body;
-  });
-
-  test("a woken wait listener counts as working until it re-arms, so the page keeps its buttons on", async () => {
-    settings({ author: "Luis" });
-    const { base, docPath, comment, sendReview, status } = await boot();
-    await comment("Luis", "Too wordy?");
-    const first = fetch(`${base}/api/agent/events?wait=1`, { headers: AGENT }).then((r) => r.text());
-    const deadline = Date.now() + 2000;
-    while ((await status()).listening !== 1 && Date.now() < deadline) await Bun.sleep(20);
-    await sendReview();
-    await first;
-    expect(await status()).toMatchObject({ listening: 0, working: 1 });
-
-    // The agent answers in the file, then re-arms with nothing pending.
-    const text = await Bun.file(docPath).text();
-    await Bun.write(docPath, text.replace("Too wordy?<<}", "Too wordy?<<}{>>@claude: Cut it<<}"));
-    const answered = Date.now() + 3000;
-    while ((await status()).toSend.comments !== 0 && Date.now() < answered) await Bun.sleep(50);
-    await Bun.sleep(700); // the watcher's read lands before the wait reads pending work
-    const again = new AbortController();
-    void fetch(`${base}/api/agent/events?wait=1`, { headers: AGENT, signal: again.signal }).catch(() => {});
-    const rearmed = Date.now() + 2000;
-    while ((await status()).listening !== 1 && Date.now() < rearmed) await Bun.sleep(20);
-    expect(await status()).toMatchObject({ listening: 1, working: 0 });
-    again.abort();
   });
 
   test("otherwise holds until the next wake line, then ends", async () => {

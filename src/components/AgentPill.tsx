@@ -14,9 +14,9 @@ function plural(n: number, word: string) {
 
 export const NO_AGENT_HINT = "No agent is listening: start one with acm edit <file.md> --notify";
 
-/** An agent is in the loop: listening now, or a --wait agent woken and not yet back. */
+/** An agent is listening now: acm edit --notify, or a --wait that has not been woken yet. */
 export function agentAvailable(status: AgentStatus | null): boolean {
-  return (status?.listening ?? 0) + (status?.working ?? 0) > 0;
+  return (status?.listening ?? 0) > 0;
 }
 
 export function agentPillLabels(status: AgentStatus | null) {
@@ -30,9 +30,7 @@ export function agentPillLabels(status: AgentStatus | null) {
         ? `${status.listening} agents listening`
         : status.listening === 1
           ? "Agent listening"
-          : status.working > 0
-            ? "Agent working"
-            : "No agent listening",
+          : "No agent listening",
     send: total > 0 ? `Send ${total} to agent` : "Nothing to send",
     canSend: total > 0 && available,
     sendTitle: !available
