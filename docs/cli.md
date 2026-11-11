@@ -46,6 +46,7 @@ How the review commands behave:
 - **Every write takes a snapshot first**, into `.acm/snapshots/<document>/` beside the document, and prints its path as `backup →`.
 - **When the document is live** (an editor has it open), the write goes through that editor and merges with your unsaved typing; otherwise `acm` writes the file directly.
 - **After each write** `acm` re-reads the document and prints its comment and SUGGEST-card counts.
+- **A write that adds something the editor will flag** still lands and exits 0, but prints a warning on stderr naming each problem's line, thread, anchor and reason (a SUGGEST with no span to apply to, a text that repeats the `@author:` prefix `acm` already writes, markup that renders raw), and its count line ends with `⚠ 1 new SUGGEST won't apply` or `⚠ 1 new markup problem`. Problems the document already had are not reported.
 
 ## acm { data-toc-label="acm" }
 
