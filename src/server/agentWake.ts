@@ -7,8 +7,8 @@
 //               each comment" is on
 //   • review  — Send to agent: one line summarising everything waiting
 // `pending` is what `acm edit --wait` reports at once: threads handed over and not
-// yet answered. A thread is identified by its id plus its comment count, so an
-// answer (or a later reply) makes it a new state rather than the same work again.
+// yet answered. A thread's state is its latest comment, so an answer (or a later
+// reply, or an edit to that comment) makes it a new state rather than the same work.
 
 import type { ThreadSummary } from "../lib/agentEdits";
 
@@ -35,7 +35,7 @@ export function formatWakeLine(e: WakeEvent): string {
   }
   const flat = e.anchor?.replace(/\s+/g, " ").trim();
   const anchor = flat ? ` "${flat.length > ANCHOR_MAX ? `${flat.slice(0, ANCHOR_MAX - 1)}…` : flat}"` : "";
-  return `acm: ${e.event} #${e.threadId} ${e.author}${anchor}`;
+  return `acm: ${e.event} #${e.threadId} ${e.author || "(no name)"}${anchor}`;
 }
 
 /** Threads that are the agent's turn, split into edit requests and everything else. */
@@ -45,7 +45,9 @@ export function waitingCounts(summary: ThreadSummary[]): WaitingCounts {
   return { comments: waiting.length - editRequests, editRequests };
 }
 
-const stateKey = (t: ThreadSummary) => `${t.id}/${t.count}`;
+// The latest comment's id hashes its bytes, so a reply or an edit to it is a new
+// state, while an edit to an earlier comment (which renames the thread) is not.
+const stateKey = (t: ThreadSummary) => t.lastCommentId;
 
 function threadEvent(event: "comment" | "ask" | "pending", t: ThreadSummary): WakeEvent {
   return { event, threadId: t.id, author: t.lastAuthor, anchor: t.anchor };
@@ -78,14 +80,15 @@ export class AgentWake {
     return events;
   }
 
-  /** Send to agent: hand over everything waiting as one line. */
+  /** Send to agent: hand over, as one line, everything waiting that no line has
+   *  sent yet (the count the page's Send button shows). */
   review(summary: ThreadSummary[]): { event: "review" } & WaitingCounts {
-    for (const t of summary) {
-      if (!t.awaitingAgent) continue;
+    const unsent = summary.filter((t) => t.awaitingAgent && !this.sent.has(stateKey(t)));
+    for (const t of unsent) {
       this.known.add(stateKey(t));
       this.sent.add(stateKey(t));
     }
-    return { event: "review", ...waitingCounts(summary) };
+    return { event: "review", ...waitingCounts(unsent) };
   }
 
   /** Threads waiting on the agent that no line has handed over yet. */
@@ -107,6 +110,7 @@ export class AgentWake {
 /** The person's name and the notify-each setting, from settings.json's `settings`. */
 export function wakeSettings(config: Record<string, unknown>): { humanAuthor: string; notifyEachComment: boolean } {
   const settings = (config.settings ?? {}) as { author?: unknown; notifyEachComment?: unknown };
-  const author = typeof settings.author === "string" && settings.author.trim() ? settings.author.trim() : "You";
+  // An empty Author is a real choice: the editor then writes comments with no name.
+  const author = typeof settings.author === "string" ? settings.author.trim() : "You";
   return { humanAuthor: author, notifyEachComment: settings.notifyEachComment === true };
 }

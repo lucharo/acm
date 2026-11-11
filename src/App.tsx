@@ -1573,6 +1573,8 @@ function Workspace({
             notifyEach={settings.notifyEachComment}
             onToggleNotifyEach={toggleNotifyEach}
             onFeedback={pushToast}
+            savePending={saveState === "unsaved" || saveState === "saving"}
+            flushSave={flushNow}
           />
         }
         toolbar={

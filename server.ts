@@ -80,6 +80,8 @@ export interface StartServerOptions {
   onWakeLine?: (line: string) => void;
   /** Where the startup line goes (default stdout; --notify keeps stdout for wake lines). */
   log?: (line: string) => void;
+  /** Blank keep-alive line interval on a quiet /api/agent/events stream (test seam). */
+  agentKeepAliveMs?: number;
   /** Test seam for the external filesystem boundary. */
   appendDecisionEvent?: (docPath: string, event: DecisionEvent) => Promise<{ appended: boolean }>;
   appendDecisionEvents?: (
@@ -472,7 +474,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
           const skillPath = create ? createUserReviewSkill() : findUserReviewSkill();
           if (!skillPath) return Response.json({ error: NO_REVIEW_PREFERENCES }, { status: 404 });
           if (skillPath === docPath) return Response.json({ url: new URL(req.url).origin });
-          reviewSkillServer ??= startServer({ docPath: skillPath, port: 0, staticDir, staticAssets, auxiliary: true });
+          reviewSkillServer ??= startServer({ docPath: skillPath, port: 0, staticDir, staticAssets, auxiliary: true, log: opts.log });
           return Response.json({ url: `http://localhost:${reviewSkillServer.port}` });
         } catch (error) {
           return Response.json({ error: (error as Error).message }, { status: 500 });
@@ -856,49 +858,74 @@ export function startServer(opts: StartServerOptions): AcmServer {
       // `?wait=1` (acm edit --wait) ends there when there was any, else after the
       // next line.
       if (pathname === "/api/agent/events" && req.method === "GET") {
+        // Only the acm CLI sends this header. A page elsewhere can fire a no-cors GET
+        // at a loopback port, which carries no Origin, but cannot set a custom header,
+        // so it cannot register as a listener and make the pill say "Agent listening".
+        if (req.headers.get("x-acm-agent") !== "1") {
+          return new Response("Forbidden: agent event streams are for the acm CLI", { status: 403 });
+        }
         const once = url.searchParams.get("wait") === "1";
         server.timeout(req, 0); // a listener may sit quiet for hours
-        const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
-        const pending = wake.pendingEvents(summary).map(formatWakeLine);
-        if (once && pending.length > 0) {
-          return new Response(`${pending.join("\n")}\n`, {
-            headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
-          });
-        }
+        const textHeaders = { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" };
         const encoder = new TextEncoder();
-        let listener: WakeListener | undefined;
+        // Register BEFORE reading what is pending: a line emitted while that read is
+        // in flight is held in `early` instead of falling between the two.
+        const early: string[] = [];
+        let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+        let open = true;
+        let keepAlive: ReturnType<typeof setInterval> | undefined;
+        const listener: WakeListener = {
+          once,
+          send: (line) => {
+            if (!open) return;
+            if (controller) controller.enqueue(encoder.encode(`${line}\n`));
+            else early.push(line);
+          },
+          close: () => {
+            if (!open) return;
+            open = false;
+            clearInterval(keepAlive);
+            try {
+              controller?.close();
+            } catch {
+              // the client already went away
+            }
+          },
+        };
+        wakeListeners.add(listener);
+        void publishAgentStatus();
+        req.signal.addEventListener("abort", () => removeWakeListener(listener));
+        const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
+        const ready = [...wake.pendingEvents(summary).map(formatWakeLine), ...early];
+        if (once && ready.length > 0) {
+          removeWakeListener(listener);
+          return new Response(`${ready.join("\n")}\n`, { headers: textHeaders });
+        }
         const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            let open = true;
-            listener = {
-              once,
-              send: (line) => {
-                if (open) controller.enqueue(encoder.encode(`${line}\n`));
-              },
-              close: () => {
-                if (!open) return;
-                open = false;
-                try {
-                  controller.close();
-                } catch {
-                  // the client already went away
-                }
-              },
-            };
+          start(c) {
             // A blank first line sends the headers now: fetch() resolves on them, and
             // listeners skip blank lines.
-            controller.enqueue(encoder.encode(`\n${pending.map((line) => `${line}\n`).join("")}`));
-            wakeListeners.add(listener);
-            void publishAgentStatus();
-            req.signal.addEventListener("abort", () => removeWakeListener(listener!));
+            c.enqueue(encoder.encode(`\n${ready.map((line) => `${line}\n`).join("")}`));
+            if (!open) {
+              c.close(); // the editor stopped while the read was in flight
+              return;
+            }
+            controller = c;
+            // A blank line now and then: a client's fetch gives up on a body that stays
+            // silent for minutes (Bun: ~5 min), which would read as the editor stopping.
+            keepAlive = setInterval(() => {
+              try {
+                c.enqueue(encoder.encode("\n"));
+              } catch {
+                removeWakeListener(listener);
+              }
+            }, opts.agentKeepAliveMs ?? 30_000);
           },
           cancel() {
-            if (listener) removeWakeListener(listener);
+            removeWakeListener(listener);
           },
         });
-        return new Response(stream, {
-          headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
-        });
+        return new Response(stream, { headers: textHeaders });
       }
 
       // GET /api/settings → persisted view settings + per-document "seen" state (or {} on a

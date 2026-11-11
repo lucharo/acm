@@ -42,7 +42,7 @@ export function sendFeedback(body: { listening: number; sent: AgentStatus["toSen
     .join(" and ");
   if (body.listening === 0) {
     return {
-      message: `No agent is listening. ${what || "Nothing"} will reach the next agent that runs acm edit --notify or --wait.`,
+      message: `No agent is listening. ${what || "Nothing"} will reach the next agent that listens to this editor (acm edit --notify or --wait).`,
       kind: "error",
     };
   }
@@ -53,7 +53,7 @@ export function sendFeedback(body: { listening: number; sent: AgentStatus["toSen
 export function askFeedback(status: AgentStatus | null): { message: string; kind: "info" | "error" } {
   return (status?.listening ?? 0) > 0
     ? { message: "Asked the agent for an edit.", kind: "info" }
-    : { message: "No agent is listening. The request will reach the next agent that runs acm edit --notify or --wait.", kind: "error" };
+    : { message: "No agent is listening. The request will reach the next agent that listens to this editor (acm edit --notify or --wait).", kind: "error" };
 }
 
 interface AgentPillProps {
@@ -62,11 +62,24 @@ interface AgentPillProps {
   notifyEach: boolean;
   onToggleNotifyEach: () => void;
   onFeedback: Feedback;
+  /** The editor holds edits not on disk yet: Send saves first, so the agent hears
+   *  about the comment you just wrote (the server reads the file). */
+  savePending: boolean;
+  flushSave: () => void;
 }
 
-export default function AgentPill({ status, documentPath, notifyEach, onToggleNotifyEach, onFeedback }: AgentPillProps) {
+export default function AgentPill({
+  status,
+  documentPath,
+  notifyEach,
+  onToggleNotifyEach,
+  onFeedback,
+  savePending,
+  flushSave,
+}: AgentPillProps) {
   const [open, setOpen] = useState(false);
   const [justSent, setJustSent] = useState(false);
+  const [queued, setQueued] = useState(false);
   useEffect(() => {
     if (!justSent) return;
     const t = setTimeout(() => setJustSent(false), 2500);
@@ -90,6 +103,18 @@ export default function AgentPill({ status, documentPath, notifyEach, onToggleNo
     }
   }, [documentPath, onFeedback]);
 
+  // A Send clicked while a save is pending waits for the save, then goes.
+  useEffect(() => {
+    if (!queued || savePending) return;
+    setQueued(false);
+    void send();
+  }, [queued, savePending, send]);
+  const onSend = () => {
+    if (!savePending) return void send();
+    flushSave();
+    setQueued(true);
+  };
+
   return (
     <div className="relative flex h-7 items-stretch rounded-full border border-[var(--line-strong)] text-[12px]">
       <button
@@ -108,11 +133,11 @@ export default function AgentPill({ status, documentPath, notifyEach, onToggleNo
       </button>
       <button
         type="button"
-        onClick={() => void send()}
-        disabled={!labels.canSend}
+        onClick={onSend}
+        disabled={!labels.canSend || queued}
         className="flex items-center rounded-r-full border-l border-[var(--line-strong)] px-2.5 font-medium text-[var(--ink)] hover:bg-[var(--line)] disabled:font-normal disabled:text-[var(--faint)] disabled:hover:bg-transparent"
         title={labels.canSend ? "Send the comments waiting on the agent as one message" : "Nothing new to send to the agent"}
-      >{justSent ? "Sent" : labels.send}</button>
+      >{queued ? "Saving…" : justSent ? "Sent" : labels.send}</button>
       {open ? (
         <>
           <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />

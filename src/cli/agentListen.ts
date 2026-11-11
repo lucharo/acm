@@ -38,8 +38,15 @@ export async function listenToEditor(
   const url = `http://127.0.0.1:${port}/api/agent/events${once ? "?wait=1" : ""}`;
   let printed = 0;
   try {
-    const res = await fetch(url);
+    // A listener waits hours: the editor sends a blank line every 30 s, so fetch's
+    // own idle timeout (about 5 minutes in Bun) never reads a quiet stream as dead.
+    const res = await fetch(url, { headers: { "X-ACM-Agent": "1" } });
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    if (!res.headers.get("content-type")?.startsWith("text/plain")) {
+      // An editor from before #31 answers this path with the page's HTML.
+      write(`acm: closed the editor at http://localhost:${port} is older than this acm and has no agent events; restart it with acm edit`);
+      return 1;
+    }
     const decoder = new TextDecoder();
     let buffer = "";
     const reader = res.body.getReader();

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startServer, type AcmServer } from "../../server";
 import { liveInstances } from "../server/instances";
+import { listenToEditor } from "./agentListen";
 
 const cli = resolve(import.meta.dir, "../../cli.ts");
 setDefaultTimeout(30_000);
@@ -145,5 +146,25 @@ describe("acm edit --wait", () => {
     expect(await acm.proc.exited).toBe(0);
     expect(acm.out.stdout).toBe("acm: review 1 thread waiting (1 comment, 0 edit requests) - run acm threads\n");
     expect((await fetch(`http://127.0.0.1:${port}/api/agent`)).status).toBe(200); // the editor is still up
+  });
+});
+
+describe("listenToEditor against an editor from before #31", () => {
+  test("an HTML answer is not read as wake lines: one closed line, exit 1", async () => {
+    const old = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: () => new Response("<!doctype html>\n<html>\n<body>ACM</body>\n</html>\n", { headers: { "Content-Type": "text/html" } }),
+    });
+    const port = old.port!;
+    const lines: string[] = [];
+    try {
+      expect(await listenToEditor(port, true, (line) => lines.push(line))).toBe(1);
+    } finally {
+      old.stop(true);
+    }
+    expect(lines).toEqual([
+      `acm: closed the editor at http://localhost:${port} is older than this acm and has no agent events; restart it with acm edit`,
+    ]);
   });
 });

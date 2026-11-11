@@ -48,7 +48,7 @@ describe("sendFeedback", () => {
 
   test("says when nobody is listening and that the work will still arrive", () => {
     expect(sendFeedback({ listening: 0, sent: { comments: 1, editRequests: 0 } })).toEqual({
-      message: "No agent is listening. 1 comment will reach the next agent that runs acm edit --notify or --wait.",
+      message: "No agent is listening. 1 comment will reach the next agent that listens to this editor (acm edit --notify or --wait).",
       kind: "error",
     });
   });
@@ -58,7 +58,7 @@ describe("askFeedback", () => {
   test("confirms the ask when an agent listens, warns when none does", () => {
     expect(askFeedback(status(1, 0, 0))).toEqual({ message: "Asked the agent for an edit.", kind: "info" });
     expect(askFeedback(status(0, 0, 0))).toEqual({
-      message: "No agent is listening. The request will reach the next agent that runs acm edit --notify or --wait.",
+      message: "No agent is listening. The request will reach the next agent that listens to this editor (acm edit --notify or --wait).",
       kind: "error",
     });
   });
@@ -73,6 +73,8 @@ describe("AgentPill markup", () => {
         notifyEach={false}
         onToggleNotifyEach={() => {}}
         onFeedback={() => {}}
+        savePending={false}
+        flushSave={() => {}}
       />,
     );
     expect(html).toContain("Agent listening");
@@ -88,6 +90,8 @@ describe("AgentPill markup", () => {
         notifyEach={false}
         onToggleNotifyEach={() => {}}
         onFeedback={() => {}}
+        savePending={false}
+        flushSave={() => {}}
       />,
     );
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Nothing to send<\/button>/);

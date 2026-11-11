@@ -385,7 +385,9 @@ at the end of a round. You hear it by listening:
 On every wake, one rule: `acm threads`, answer each `[your turn]` thread (its latest comment is
 the person's), `[edit requested]` ones first with a SUGGEST, then go back to listening. Don't
 act on the line's text alone; the doc is the source of truth. Answering a thread (any reply of
-yours) takes it off `[your turn]`, so a later `--wait` won't wake you for it again.
+yours) takes it off `[your turn]`, so a later `--wait` won't wake you for it again. Reply to (or
+resolve) every one, even a "nice!": an unanswered `[your turn]` thread that was sent keeps
+`--wait` returning at once.
 
 ## Workflow
 

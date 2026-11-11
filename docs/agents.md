@@ -62,11 +62,11 @@ acm: pending #115bygy Luis "in the way it builds"
 
 - `ask` is **Ask agent**, which always wakes the agent.
 - `comment` is a comment or reply of yours, sent only when **Notify agent on each comment** is on (off by default).
-- `review` is **Send to agent** in the header: one line for everything waiting, sent when you finish a round.
-- `pending` opens a new listener with the work you already sent that the agent has not answered, so nothing sent while no agent listened is lost.
+- `review` is **Send to agent** in the header: one line for the waiting threads not sent yet, sent when you finish a round.
+- `pending` opens a new listener with the work you already sent that the agent has not answered, so work sent while no agent listened still arrives. The editor keeps this in memory: after it restarts, press **Send** again.
 - `closed` means the editor stopped; the command exits 1.
 
-A thread is the agent's turn when your name (the **Author** setting) wrote its latest comment. `acm threads` marks those threads `[your turn]`, so the agent's loop is one rule: on each line, run `acm threads`, answer the `[your turn]` threads, and wait for the next line.
+A thread is the agent's turn when your name (the **Author** setting) wrote its latest comment. `acm threads` marks those threads `[your turn]`, so the agent's loop is one rule: on each line, run `acm threads`, answer the `[your turn]` threads, and wait for the next line. Every `[your turn]` thread needs a reply (or a resolve); one left unanswered keeps `--wait` returning at once.
 
 The header pill shows whether an agent is listening and how many threads **Send** would hand over; it counts only threads not sent yet, so it reads **Nothing to send** once the agent has them. If the editor is already open on the file, `--notify` attaches to it instead of starting a second editor, so your clicks in that page reach the agent.
 

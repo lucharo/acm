@@ -550,6 +550,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       let documentVerified = false;
       let closed = false;
       let queuedMessage: Extract<ServerMessage, { type: "update" }> | null = null;
+      let agentPushed = false; // a pushed status is newer than the read on connect
 
       const retryConnection = (state: SaveState) => {
         if (!mounted.current || closed) return;
@@ -568,7 +569,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
         void fetch("/api/agent")
           .then((res) => (res.ok ? (res.json() as Promise<AgentStatus>) : null))
           .then((status) => {
-            if (status && mounted.current && !closed) {
+            if (status && mounted.current && !closed && !agentPushed) {
               setAgentStatus({ listening: status.listening, toSend: status.toSend });
             }
           })
@@ -662,6 +663,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
         if (msg.type === "agent") {
+          agentPushed = true;
           setAgentStatus({ listening: msg.listening, toSend: msg.toSend });
           return;
         }
