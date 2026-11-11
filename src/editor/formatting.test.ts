@@ -183,6 +183,12 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("<u><u>one `<u>`</u> and <u>`</u>` two</u></u>");
   });
 
+  test("an indented first span is still read as tags, so two spans are not unpaired", () => {
+    const doc = "A <u>    one</u> and <u>two</u>.";
+    const r = apply(doc, 2, doc.length - 1, U); // "<u>    one</u> and <u>two</u>"
+    expect(r.out).toBe("A <u><u>    one</u> and <u>two</u></u>.");
+  });
+
   test("tags quoted in a code span still let a real pair unwrap", () => {
     const doc = "<u>see `</u>` here</u>";
     const r = apply(doc, 0, doc.length, U);

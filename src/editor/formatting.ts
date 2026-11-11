@@ -62,19 +62,22 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
 
 const markdownParser = baseMarkdownParser.configure(GFM);
 
-/** True when every real `close` tag in `s` follows an `open` and none is left
- *  open, so tags flanking `s` are one pair rather than the ends of two separate
- *  spans (`one</u> and <u>two`). Tags are read from the Markdown parse, so one
- *  quoted in a code span does not count; the match is exact, like the preview's.
- *  Symmetric markers cannot be told apart this way and always count as balanced. */
-function isBalanced(s: string, open: string, close: string): boolean {
+/** True when every real `close` tag in `doc[from, to)` follows an `open` and
+ *  none is left open, so tags flanking the range are one pair rather than the
+ *  ends of two separate spans (`one</u> and <u>two`). Tags come from parsing the
+ *  whole document, so one quoted in a code span does not count and the range is
+ *  read in its own context; the match is exact, like the preview's. Symmetric
+ *  markers cannot be told apart this way and always count as balanced. */
+function isBalanced(doc: string, from: number, to: number, open: string, close: string): boolean {
   if (open === close) return true;
   let depth = 0;
   let balanced = true;
-  markdownParser.parse(s).iterate({
+  markdownParser.parse(doc).iterate({
+    from,
+    to,
     enter: (node) => {
-      if (!balanced || node.name !== "HTMLTag") return;
-      const tag = s.slice(node.from, node.to);
+      if (!balanced || node.name !== "HTMLTag" || node.from < from || node.to > to) return;
+      const tag = doc.slice(node.from, node.to);
       if (tag === open) depth += 1;
       else if (tag === close && --depth < 0) balanced = false;
     },
@@ -110,7 +113,7 @@ export function planToggle(
   const sel = doc.slice(from, to);
 
   // 1) Markers are INSIDE the selection (`*word*` selected) → strip them.
-  if (isWrappedExactly(sel, open, close) && isBalanced(sel.slice(m, sel.length - c), open, close)) {
+  if (isWrappedExactly(sel, open, close) && isBalanced(doc, from + m, to - c, open, close)) {
     const inner = sel.slice(m, sel.length - c);
     return { edits: [{ from, to, insert: inner }], anchor: from, head: from + inner.length };
   }
@@ -120,7 +123,7 @@ export function planToggle(
   if (from - m >= 0 && to + c <= doc.length) {
     const before = doc.slice(from - m, from);
     const after = doc.slice(to, to + c);
-    let outerMatch = before === open && after === close && isBalanced(sel, open, close);
+    let outerMatch = before === open && after === close && isBalanced(doc, from, to, open, close);
     if (outerMatch && italic) {
       // Don't peel one star off a `**bold**` wrap.
       if ((from - m - 1 >= 0 && isStar(doc[from - m - 1])) || (to + c < doc.length && isStar(doc[to + c]))) {
