@@ -14,10 +14,14 @@
 // Word-based breaks are stable under CodeMirror's async line-height measurement —
 // the count never drifts as heights settle. A boundary inside an ordinary paragraph
 // snaps to the nearest line boundary (frac ≥ 0.5 → after). One inside a paragraph
-// long enough to skew the page (the lib sets `offset`) stays in the paragraph, as an
-// inline widget at a sentence start, so the line wraps around the gap.
+// long enough to skew the page (the lib sets `offset`) stays in the paragraph, at a
+// sentence start, as a block widget there too: CodeMirror then lays the paragraph
+// out as separate blocks, one per page. That matters for a dictated draft that is
+// one 3,000-word line (#24, #26): CodeMirror draws only part of a wrapped line over
+// 20,000 characters and estimates the rest, and with suggestions on it those
+// estimates never settled ("Measure loop restarted", gaps jumping as you scroll).
 
-import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
+import { BlockType, Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { RangeSetBuilder, StateField } from "@codemirror/state";
 import type { Extension, Text } from "@codemirror/state";
@@ -55,7 +59,8 @@ class PageGapWidget extends WidgetType {
 
 interface PageBreakState {
   deco: DecorationSet;
-  /** Doc positions (line starts) of each spacer, for the scroll chip. */
+  /** Doc positions of each spacer (a line start, or a sentence start inside a long
+   *  paragraph), for the scroll chip. */
   positions: number[];
   pages: number;
 }
@@ -66,14 +71,15 @@ function buildSpacers(doc: Text): PageBreakState {
   const positions: number[] = [];
   let lastPos = -1;
   breaks.forEach(({ line, frac, offset }, i) => {
-    const inline = offset !== undefined;
-    // Otherwise snap the word boundary to the nearest LINE boundary: block widgets
-    // live between lines.
-    const pos = inline ? doc.line(line).from + offset : doc.line(Math.min(frac >= 0.5 ? line + 1 : line, doc.lines)).from;
+    // Without an offset, snap the word boundary to the nearest LINE boundary.
+    const pos =
+      offset !== undefined
+        ? doc.line(line).from + offset
+        : doc.line(Math.min(frac >= 0.5 ? line + 1 : line, doc.lines)).from;
     if (pos <= lastPos) return; // a >1-page line would stack spacers — keep one
     lastPos = pos;
     positions.push(pos);
-    builder.add(pos, pos, Decoration.widget({ widget: new PageGapWidget(i + 2), side: -1, block: !inline }));
+    builder.add(pos, pos, Decoration.widget({ widget: new PageGapWidget(i + 2), side: -1, block: true }));
   });
   return { deco: builder.finish(), positions, pages };
 }
@@ -103,13 +109,14 @@ class PageChipPlugin {
     if (u.docChanged || u.geometryChanged) this.updateChip();
   }
 
-  /** The gap's top in document coordinates. An inside-paragraph gap isn't at its
-   *  line's top, so it needs the rendered position; outside the rendered viewport
-   *  the line's top is on the same side of the viewport centre anyway. */
+  /** The gap's top in document coordinates, from the height map, so it is known
+   *  outside the rendered viewport too. A line holding block widgets comes back as
+   *  one block whose `type` lists its parts; the gap is the widget part at `pos`. */
   gapTop(pos: number): number {
-    const line = this.view.state.doc.lineAt(pos);
-    const coords = pos === line.from ? null : this.view.coordsAtPos(pos, -1);
-    return coords ? coords.top - this.view.documentTop : this.view.lineBlockAt(pos).top;
+    const block = this.view.lineBlockAt(pos);
+    if (!Array.isArray(block.type)) return block.top;
+    const gap = block.type.find((part) => part.from === pos && part.type !== BlockType.Text);
+    return (gap ?? block).top;
   }
 
   updateChip() {

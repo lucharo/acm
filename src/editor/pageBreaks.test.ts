@@ -36,11 +36,33 @@ describe("page gaps in the editor", () => {
     const gaps = gapsIn(doc);
 
     expect(gaps).toEqual([
-      { pos: doc.indexOf("word", 550 * 5), block: false },
-      { pos: doc.indexOf("word", 1100 * 5), block: false },
+      { pos: doc.indexOf("word", 550 * 5), block: true },
+      { pos: doc.indexOf("word", 1100 * 5), block: true },
     ]);
     const sheets = [doc.slice(0, gaps[0].pos), doc.slice(gaps[0].pos, gaps[1].pos), doc.slice(gaps[1].pos)];
     expect(sheets.map(countWords)).toEqual([550, 550, 200]);
+  });
+
+  test("a dictated paragraph covered in suggestions is cut into page-sized blocks", () => {
+    // One ~3,000-word line with 140 highlighted SUGGEST comments, the shape of a
+    // dictated draft under review (#24, #26). CodeMirror hides every part of a
+    // wrapped line longer than 20,000 characters behind height estimates
+    // (LG.MarginWrap << 1 in @codemirror/view), which drifted and never settled
+    // here; a block widget splits the line, so no stretch reaches that size.
+    const sentence = (n: number) =>
+      `{==Um so this is sentence ${n} uh which I dictated==}{>>@claude: SUGGEST[g:fixes]: This is sentence ${n}, which I dictated<<} and then it goes on for a while longer with plain words.`;
+    const body = Array.from({ length: 140 }, (_, n) => sentence(n)).join(" ");
+    const doc = `# A title\n\n${body}`;
+
+    const gaps = gapsIn(doc);
+
+    const paragraphStart = doc.indexOf("{==");
+    const inside = gaps.filter((gap) => gap.pos > paragraphStart);
+    expect(inside.map((gap) => gap.block)).toEqual([true, true, true, true, true]);
+    const edges = [paragraphStart, ...inside.map((gap) => gap.pos), doc.length];
+    const stretches = edges.slice(1).map((end, i) => end - edges[i]);
+    expect(stretches.every((length) => length < 20_000)).toBe(true);
+    expect(doc.length - paragraphStart).toBeGreaterThan(20_000);
   });
 
   test("an ordinary paragraph keeps its break at the paragraph edge", () => {
@@ -61,8 +83,8 @@ describe("pageBreakLines inside a long paragraph", () => {
     const gaps = gapsIn(doc);
 
     expect(gaps).toEqual([
-      { pos: doc.indexOf("word", 550 * 5), block: false },
-      { pos: doc.indexOf("word", 1100 * 5), block: false },
+      { pos: doc.indexOf("word", 550 * 5), block: true },
+      { pos: doc.indexOf("word", 1100 * 5), block: true },
     ]);
   });
 
@@ -73,8 +95,8 @@ describe("pageBreakLines inside a long paragraph", () => {
     const gaps = gapsIn(doc);
 
     expect(gaps).toEqual([
-      { pos: body.indexOf("word", 550 * 5), block: false },
-      { pos: body.indexOf("word", 1100 * 5), block: false },
+      { pos: body.indexOf("word", 550 * 5), block: true },
+      { pos: body.indexOf("word", 1100 * 5), block: true },
     ]);
   });
 
