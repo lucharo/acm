@@ -253,6 +253,33 @@ describe("listener hardening (#34 review)", () => {
   });
 });
 
+describe("settings changes", () => {
+  test("changing the Author setting republishes what Send would hand over (roborev round 6)", async () => {
+    settings({ author: "You" });
+    const { base, comment } = await boot();
+    await comment("Luis", "Too wordy?"); // not the person's yet: Author is You
+    const ws = new WebSocket(`${base.replace("http", "ws")}/ws`);
+    const messages: { type: string; toSend?: unknown }[] = [];
+    ws.onmessage = (ev) => messages.push(JSON.parse(String(ev.data)));
+    await new Promise((done) => (ws.onopen = done));
+    await Bun.sleep(900); // past the detection debounce, so only the settings change can push
+
+    await fetch(`${base}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ settings: { author: "Luis" } }),
+    });
+    const deadline = Date.now() + 3000;
+    const latest = () => messages.filter((m) => m.type === "agent").at(-1);
+    while (JSON.stringify(latest()?.toSend) !== JSON.stringify({ comments: 1, editRequests: 0 }) && Date.now() < deadline) {
+      await Bun.sleep(50);
+    }
+    ws.close();
+
+    expect(latest()?.toSend).toEqual({ comments: 1, editRequests: 0 });
+  });
+});
+
 describe("the wait read acm edit --wait makes", () => {
   test("returns at once when sent work is already pending", async () => {
     settings({ author: "Luis" });

@@ -951,6 +951,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
           await updateConfig<Record<string, unknown>>(SETTINGS_FILE, {}, (current) =>
             mergeConfigPatch(current, patch),
           );
+          void publishAgentStatus(); // the Author setting decides whose turn a thread is
           return Response.json({ ok: true });
         });
       }
