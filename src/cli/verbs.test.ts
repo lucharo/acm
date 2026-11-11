@@ -1057,15 +1057,18 @@ describe("acm write lint (#27)", () => {
   });
 
   test("a rewrite that spans an old problem (wrap) does not report it as new", () => {
-    const long = "word ".repeat(12).trim();
-    writeFileSync(doc, `${long}\n\nMiddle {==left open here.\n\n${long}\n`);
+    // Long enough that the diff gives up on per-character ranges and returns the
+    // whole paragraph as one changed range, with the old {== inside it.
+    const long = "word ".repeat(600).trim();
+    writeFileSync(doc, `${long} {==left open ${long}\n`);
 
     const r = run("wrap", "20");
 
     const written = readFileSync(doc, "utf8");
     expect(r.code).toBe(0);
     expect(written.startsWith("word word word word\n")).toBe(true);
-    expect(written.endsWith("word word word word\nword word word word\n")).toBe(true);
+    expect(written.split("\n").length).toBeGreaterThan(300);
+    expect(written).toContain("{==left");
     expect(r.err).toBe("");
     expect(r.out.split("\n").at(-2)).toBe("  comments: 0 | applicable SUGGEST cards: 0");
   });
