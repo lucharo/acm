@@ -112,6 +112,7 @@ describe("deleting at the visible edge of a commented word", () => {
     press(view, "Delete");
 
     expect(view.state.doc.toString()).toBe("See {==word==}{>>@luis: note<<}here");
+    expect(view.state.selection.main.head).toBe(before(COMMENTED, "==}"));
   });
 
   test("Backspace at the start of the document leaves the markup alone", () => {
