@@ -18,6 +18,7 @@
 
 import { EditorSelection } from "@codemirror/state";
 import { GFM, parser as baseMarkdownParser } from "@lezer/markdown";
+import { CriticMarkup } from "./criticMarkupParser";
 import type { Command, KeyBinding } from "@codemirror/view";
 
 /** A single ranged text edit (string-space, so the core stays unit-testable
@@ -60,7 +61,9 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
   return true;
 }
 
-const markdownParser = baseMarkdownParser.configure(GFM);
+// The editor's own grammar (GFM plus CriticMarkup), so the toggle sees the same
+// tags the preview pairs: a comment body stays opaque and cannot hide one.
+const markdownParser = baseMarkdownParser.configure([GFM, CriticMarkup]);
 
 /** True when every real `close` tag in `doc[from, to)` follows an `open` and
  *  none is left open, so tags flanking the range are one pair rather than the

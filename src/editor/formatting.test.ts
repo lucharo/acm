@@ -189,6 +189,12 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("A <u><u>    one</u> and <u>two</u></u>.");
   });
 
+  test("backticks inside comment bodies do not hide tags from the balance check", () => {
+    const doc = "A <u>one{>>@a: tick `<<}</u> and <u>{>>@b: tick `<<}two</u>.";
+    const r = apply(doc, 2, doc.length - 1, U);
+    expect(r.out).toBe("A <u><u>one{>>@a: tick `<<}</u> and <u>{>>@b: tick `<<}two</u></u>.");
+  });
+
   test("tags quoted in a code span still let a real pair unwrap", () => {
     const doc = "<u>see `</u>` here</u>";
     const r = apply(doc, 0, doc.length, U);
