@@ -92,7 +92,7 @@ interface UseDocSyncResult {
   flushNow: () => void;
   /** Report the editor's live caret/selection so agent writes can avoid it. */
   reportSelection: (from: number, to: number) => void;
-  /** Is an agent listening, and what is waiting on it (#31); null until first read. */
+  /** Is an agent listening, and what Send would hand it (#31); null until first read. */
   agentStatus: AgentStatus | null;
 }
 
@@ -569,7 +569,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
           .then((res) => (res.ok ? (res.json() as Promise<AgentStatus>) : null))
           .then((status) => {
             if (status && mounted.current && !closed) {
-              setAgentStatus({ listening: status.listening, waiting: status.waiting });
+              setAgentStatus({ listening: status.listening, toSend: status.toSend });
             }
           })
           .catch(() => undefined);
@@ -662,7 +662,7 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data as string) as ServerMessage;
         if (msg.type === "agent") {
-          setAgentStatus({ listening: msg.listening, waiting: msg.waiting });
+          setAgentStatus({ listening: msg.listening, toSend: msg.toSend });
           return;
         }
         if (msg.type !== "update") return;

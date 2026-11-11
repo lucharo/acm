@@ -125,10 +125,11 @@ export interface DocState {
   path: string;
 }
 
-/** Agent wake status (#31): listeners attached, threads waiting on the agent. */
+/** Agent wake status (#31): listeners attached, and the threads waiting on the
+ *  agent that have not been sent to it yet (what Send would hand over). */
 export interface AgentStatus {
   listening: number;
-  waiting: { comments: number; editRequests: number };
+  toSend: { comments: number; editRequests: number };
 }
 
 /** Messages pushed from the Bun server to the browser over the WebSocket.

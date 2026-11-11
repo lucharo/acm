@@ -179,22 +179,34 @@ describe("the event stream acm edit --notify attaches to", () => {
     expect(lines[0]).toMatch(/^acm: pending #\S+ Luis "conference hall"$/);
   });
 
-  test("status reports what is waiting on the agent", async () => {
+  test("status counts what Send would hand over, and nothing once it is sent", async () => {
     settings({ author: "Luis" });
-    const { comment, status } = await boot();
+    const { comment, sendReview, status } = await boot();
     await comment("Luis", "Too wordy?");
     expect(await status()).toEqual({
       listening: 0,
-      waiting: { comments: 1, editRequests: 0 },
+      toSend: { comments: 1, editRequests: 0 },
       notifyEachComment: false,
     });
+
+    await sendReview();
+
+    expect((await status()).toSend).toEqual({ comments: 0, editRequests: 0 });
+  });
+
+  test("an Ask agent is sent by itself, so Send does not count it", async () => {
+    settings({ author: "Luis" });
+    const { comment, status } = await boot(() => {});
+    await comment("Luis", "please suggest an edit");
+    await Bun.sleep(1200); // past the detection debounce
+    expect((await status()).toSend).toEqual({ comments: 0, editRequests: 0 });
   });
 
   test("the page hears listener and waiting changes over its socket", async () => {
     settings({ author: "Luis" });
     const { base, comment } = await boot();
     const ws = new WebSocket(`${base.replace("http", "ws")}/ws`);
-    const messages: { type: string; listening?: number; waiting?: unknown }[] = [];
+    const messages: { type: string; listening?: number; toSend?: unknown }[] = [];
     ws.onmessage = (ev) => messages.push(JSON.parse(String(ev.data)));
     await new Promise((done) => (ws.onopen = done));
 
@@ -206,7 +218,7 @@ describe("the event stream acm edit --notify attaches to", () => {
     expect(messages.filter((m) => m.type === "agent").at(-1)).toEqual({
       type: "agent",
       listening: 0,
-      waiting: { comments: 1, editRequests: 0 },
+      toSend: { comments: 1, editRequests: 0 },
     });
   });
 });

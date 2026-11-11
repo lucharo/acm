@@ -23,7 +23,7 @@ import { dirname, basename, resolve } from "node:path";
 import type { ServerMessage } from "./src/lib/types";
 import { insertComment } from "./src/lib/criticmarkup";
 import { addAnchoredComment, threadsSummary } from "./src/lib/agentEdits";
-import { AgentWake, formatWakeLine, waitingCounts, wakeSettings } from "./src/server/agentWake";
+import { AgentWake, formatWakeLine, wakeSettings } from "./src/server/agentWake";
 import { KEEP_VERSIONS, merge3, mergeKeepingBoth, changedSpan, changedFragments } from "./src/lib/merge";
 import { readConfig, SETTINGS_FILE, updateConfig } from "./src/server/config";
 import { registerInstance } from "./src/server/instances";
@@ -214,8 +214,8 @@ export function startServer(opts: StartServerOptions): AcmServer {
   const listeningCount = () => wakeListeners.size + (opts.onWakeLine ? 1 : 0);
   let lastAgentMessage = "";
   async function publishAgentStatus() {
-    const { summary } = await summarize(latestContent);
-    const msg: ServerMessage = { type: "agent", listening: listeningCount(), waiting: waitingCounts(summary) };
+    const [wake, { summary }] = await Promise.all([agentWake, summarize(latestContent)]);
+    const msg: ServerMessage = { type: "agent", listening: listeningCount(), toSend: wake.toSend(summary) };
     const text = JSON.stringify(msg);
     if (text === lastAgentMessage) return;
     lastAgentMessage = text;
@@ -828,10 +828,10 @@ export function startServer(opts: StartServerOptions): AcmServer {
 
       // GET /api/agent → is an agent listening, and what is waiting on it (#31).
       if (pathname === "/api/agent" && req.method === "GET") {
-        const { summary, settings } = await summarize(latestContent);
+        const [wake, { summary, settings }] = await Promise.all([agentWake, summarize(latestContent)]);
         return Response.json({
           listening: listeningCount(),
-          waiting: waitingCounts(summary),
+          toSend: wake.toSend(summary),
           notifyEachComment: settings.notifyEachComment,
         });
       }
@@ -845,6 +845,7 @@ export function startServer(opts: StartServerOptions): AcmServer {
         const event = wake.review(summary);
         const sent = { comments: event.comments, editRequests: event.editRequests };
         if (sent.comments + sent.editRequests > 0) emitWake(formatWakeLine(event));
+        void publishAgentStatus();
         return Response.json({ listening: listeningCount(), sent });
       }
 

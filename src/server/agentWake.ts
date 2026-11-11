@@ -88,6 +88,11 @@ export class AgentWake {
     return { event: "review", ...waitingCounts(summary) };
   }
 
+  /** Threads waiting on the agent that no line has handed over yet. */
+  toSend(summary: ThreadSummary[]): WaitingCounts {
+    return waitingCounts(summary.filter((t) => !this.sent.has(stateKey(t))));
+  }
+
   /** Handed-over threads the agent has not answered yet. */
   pending(summary: ThreadSummary[]): ThreadSummary[] {
     return summary.filter((t) => t.awaitingAgent && this.sent.has(stateKey(t)));

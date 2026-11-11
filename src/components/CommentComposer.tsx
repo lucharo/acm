@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import type { ReactNode } from "react";
 import { MOD } from "../lib/platform";
 import { handleCommentKey } from "./commentKeys";
 
@@ -9,8 +8,6 @@ interface CommentComposerProps {
   anchored: boolean;
   onDraftChange: (value: string) => void;
   onPost: () => void;
-  /** Shown at the start of the button row (the Notify agent toggle, #31). */
-  extraControl?: ReactNode;
   onPostDone: () => void;
   onCancel: () => void;
   autoFocus?: boolean;
@@ -23,7 +20,6 @@ export default function CommentComposer({
   anchored,
   onDraftChange,
   onPost,
-  extraControl,
   onPostDone,
   onCancel,
   autoFocus = true,
@@ -80,7 +76,6 @@ export default function CommentComposer({
         </p>
       ) : null}
       <div className={mobile ? "mt-2.5 grid grid-cols-2 gap-2" : "mt-2.5 flex flex-wrap items-center justify-end gap-1.5"}>
-        {mobile ? null : extraControl}
         {!suggestion ? <button
           type="button"
           onClick={onPostDone}

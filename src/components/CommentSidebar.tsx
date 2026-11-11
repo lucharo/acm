@@ -17,7 +17,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
 import { MOD } from "../lib/platform";
 import type { SidebarCard, CommentToken, SuggestionToken } from "../lib/types";
@@ -67,9 +67,6 @@ interface CommentSidebarProps {
   /** One click: append an edit request for the agent at the end of the thread and
    *  mark it seen (#76). */
   onAskAgent: (card: SidebarCard) => void;
-  /** Agent wake control (#31) under the open-count, and one for the composer. */
-  agentControl?: ReactNode;
-  composerAgentControl?: ReactNode;
   /** Comment cards anchored to a highlighted span; only these offer Ask agent, as a
    *  SUGGEST reply on a point comment has no span to apply to. */
   anchoredCardIds?: Set<string>;
@@ -184,8 +181,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onReplyAndSeen,
     onSuggestEdit,
     onAskAgent,
-    agentControl,
-    composerAgentControl,
     anchoredCardIds,
     onApplySuggestion,
     onApplyAndResolveSuggestion,
@@ -549,7 +544,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     <div ref={containerRef} className="relative h-full w-full">
       {/* Zero-inbox counter: open (unseen) comments remaining (top-right, always shown).
           Click it to jump to the first open comment. */}
-      {!composerOpen ? <div ref={statusRef} className="absolute right-3 top-3 z-20 flex select-none flex-col items-end transition-opacity duration-150">
+      {!composerOpen ? <div ref={statusRef} className="absolute right-3 top-3 z-20 select-none transition-opacity duration-150">
         <div
           className={`flex h-6 items-center rounded-full text-[11px] font-medium text-[var(--panel)] shadow-sm ${unseenCount > 0 ? "bg-[var(--accent)]" : "bg-[var(--crit-ins)]"}`}
         >
@@ -584,7 +579,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
             <StatusStep direction={1} label="Next card (↓)" onStep={() => stepCard(1)} />
           ) : null}
         </div>
-        {agentControl}
       </div> : null}
       {ordered.length === 0 && !composerOpen ? (
         <div className="px-3 pt-5 text-xs italic text-[var(--faint)]">
@@ -654,7 +648,6 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                       onPost={onPostComment}
                       onPostDone={onPostCommentSeen}
                       onCancel={onCancelComposer}
-                      extraControl={composerAgentControl}
                       // Focus once the composer is placed: a hidden element cannot
                       // take focus, so focusing on mount left it in the editor.
                       autoFocus={composerLayout !== undefined}
