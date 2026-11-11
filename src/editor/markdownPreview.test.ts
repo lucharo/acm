@@ -139,8 +139,8 @@ describe("underline preview (<u>…</u>, #38)", () => {
     expect(hidden(doc)).toEqual([]);
   });
 
-  test("other inline HTML tags are left alone", () => {
-    const doc = "Some <b>bold</b> and <span>span</span>.";
+  test("other inline HTML tags are left alone, and never close with a stray </u>", () => {
+    const doc = "Some <b>bold</b> and <span>span</u>.";
     expect(underlined(doc)).toEqual([]);
     expect(hidden(doc)).toEqual([]);
   });
