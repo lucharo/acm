@@ -11,6 +11,7 @@ import {
   groupThreads,
   groupCards,
   suggestCards,
+  suggestionAnchorTexts,
   suggestionGroupMembers,
   nestedCommentIssues,
   validateMarkup,
@@ -65,6 +66,12 @@ export function useDocDerived(doc: string) {
   const applicableSuggestionIds = useMemo(
     () => new Set(suggestCardList.map((s) => s.commentId)),
     [suggestCardList],
+  );
+  // The text each applicable SUGGEST would replace, so its card can show the edit
+  // word by word (#32).
+  const suggestionAnchorTextById = useMemo(
+    () => suggestionAnchorTexts(doc, tokens, suggestCardList),
+    [doc, tokens, suggestCardList],
   );
 
   // Doc health: comments accidentally inserted INSIDE another comment's body
@@ -150,6 +157,7 @@ export function useDocDerived(doc: string) {
     commentCards,
     suggestCardList,
     applicableSuggestionIds,
+    suggestionAnchorTextById,
     healIssues,
     diagnostics,
     fixableCount,

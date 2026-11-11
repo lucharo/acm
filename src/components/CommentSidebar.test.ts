@@ -734,3 +734,60 @@ describe("long threads at rest (#79)", () => {
     expect(html).toContain(">second<");
   });
 });
+
+describe("suggested edits shown word by word (#32)", () => {
+  const marked = (html: string, tag: "del" | "ins") =>
+    [...html.matchAll(new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, "g"))].map((m) => m[1]);
+  const suggestCard = (body: string): SidebarCard => ({
+    kind: "comment",
+    id: "s-1",
+    from: 0,
+    to: 40,
+    comments: [{ id: "s-1", type: "comment", from: 0, to: 40, raw: `{>>@claude: ${body}<<}`, author: "claude", body }],
+  });
+
+  test("a group panel row marks only the changed words, under a Replace summary", () => {
+    const html = renderToStaticMarkup(
+      createElement(GroupPanel, {
+        group: { id: "g", edits: 2, notes: 0 },
+        members: [
+          { commentId: "e-1", from: 100, anchorFrom: 80, anchorTo: 92, anchorText: "it was great", replacement: "it is great", isDelete: false },
+          { commentId: "e-2", from: 200, anchorFrom: 180, anchorTo: 190, anchorText: "cut this", replacement: "", isDelete: true },
+        ],
+        notes: [],
+        mode: "panel",
+        onMode: () => {},
+        onGroupEdit: () => {},
+        onGroupApplyAndResolve: () => {},
+        onGroupResolveNotes: () => {},
+        onLocate: () => {},
+        unticked: new Set<string>(),
+        onToggle: () => {},
+        onToggleAll: () => {},
+      } as never),
+    );
+
+    expect(marked(html, "del")).toEqual(["was ", "cut this"]);
+    expect(marked(html, "ins")).toEqual(["is "]);
+    expect(html).toContain("Replace: <q>it was great</q> with <q>it is great</q>");
+    expect(html).toContain("Delete: <q>cut this</q>");
+  });
+
+  test("a suggestion card compares its anchored text with the proposal", () => {
+    const html = renderSidebar([suggestCard("SUGGEST: it is great")], true, new Set(), false, {
+      applicableSuggestionIds: new Set(["s-1"]),
+      suggestionAnchorTextById: new Map([["s-1", "it was great"]]),
+    });
+
+    expect(marked(html, "del")).toEqual(["was "]);
+    expect(marked(html, "ins")).toEqual(["is "]);
+    expect(html).toContain("Replace: <q>it was great</q> with <q>it is great</q>");
+  });
+
+  test("a suggestion with no anchored text still shows just the proposal", () => {
+    const html = renderSidebar([suggestCard("SUGGEST: it is great")]);
+
+    expect(marked(html, "del")).toEqual([]);
+    expect(html).toContain(">it is great</p>");
+  });
+});
