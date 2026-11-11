@@ -30,6 +30,7 @@ import type { GroupNoteMember, ReviewGroupInfo } from "../lib/commentGroups";
 import { commentSegments } from "../lib/commentLinks";
 import { visibleReviewCards } from "../lib/visibleReviewCards";
 import { authorColor, groupColor } from "./authorColor";
+import { SuggestionDiff } from "./SuggestionDiff";
 import CommentComposer from "./CommentComposer";
 import { handleCommentKey, mayDiscardDraft } from "./commentKeys";
 import ReviewTextEditor, { closeReviewEditorAfterSuccessfulSave } from "./ReviewTextEditor";
@@ -79,6 +80,9 @@ interface CommentSidebarProps {
   /** Ids of SUGGEST: comments with a resolvable anchor → their Apply is real.
    *  A SUGGEST: not in this set shows the proposal but no (dead) Apply button. */
   applicableSuggestionIds: Set<string>;
+  /** SUGGEST comment id → the anchored text it would replace, so the card shows the
+   *  edit word by word (#32). A SUGGEST missing here shows only its proposal. */
+  suggestionAnchorTextById?: Map<string, string>;
   /** commentId → its review group (id + edit and note counts), for SUGGEST[g:id]
    *  edits (#21) and NOTE[g:id] notes (#77). Only real groups (≥2 members) appear. */
   groupOf: Map<string, ReviewGroupInfo>;
@@ -189,6 +193,7 @@ export default function CommentSidebar(props: CommentSidebarProps) {
     onLocate,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
+    suggestionAnchorTextById,
     onAcceptSuggestion,
     onRejectSuggestion,
     onFocusThread,
@@ -939,9 +944,15 @@ export default function CommentSidebar(props: CommentSidebarProps) {
                                 </svg>
                                 Suggested edit
                               </div>
-                              <p className={`whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed [overflow-wrap:anywhere] text-[var(--crit-ins)] ${isActive ? "" : "line-clamp-5"}`}>
-                                {repl.trim() ? repl : "(delete this span)"}
-                              </p>
+                              {suggestionAnchorTextById?.has(c.id) ? (
+                                <p className={`whitespace-pre-wrap text-[13px] leading-relaxed [overflow-wrap:anywhere] ${isActive ? "" : "line-clamp-6"}`}>
+                                  <SuggestionDiff before={suggestionAnchorTextById.get(c.id)!} after={repl} />
+                                </p>
+                              ) : (
+                                <p className={`whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-1.5 py-1 text-[13px] leading-relaxed [overflow-wrap:anywhere] text-[var(--crit-ins)] ${isActive ? "" : "line-clamp-5"}`}>
+                                  {repl.trim() ? repl : "(delete this span)"}
+                                </p>
+                              )}
                               {applicableSuggestionIds.has(c.id) ? (
                                 // Apply remains non-destructive; the combined action makes
                                 // closing the discussion an explicit, undoable choice.
@@ -1274,19 +1285,11 @@ export function GroupMembers({
               <span className="shrink-0 tabular-nums text-[var(--faint)]">{i + 1}</span>
               <span className="min-w-0 [overflow-wrap:anywhere]">
                 {row.edit ? (
-                  <>
-                    {row.edit.anchorText ? (
-                      <>
-                        <span className="text-[var(--crit-del)] line-through">{row.edit.anchorText}</span>
-                        <span className="px-1 text-[var(--faint)]">→</span>
-                      </>
-                    ) : null}
-                    {row.edit.isDelete ? (
-                      <span className="italic text-[var(--crit-del)]">(delete)</span>
-                    ) : (
-                      <span className="text-[var(--crit-ins)]">{row.edit.replacement}</span>
-                    )}
-                  </>
+                  <SuggestionDiff
+                    before={row.edit.anchorText}
+                    after={row.edit.isDelete ? "" : row.edit.replacement}
+                    summaryClassName={large ? "text-[11.5px]" : "text-[10.5px]"}
+                  />
                 ) : row.note ? (
                   <>
                     {row.note.anchorText ? (

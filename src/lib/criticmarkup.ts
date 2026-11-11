@@ -2548,6 +2548,24 @@ export function applicableSuggestionIds(content: string, tokens?: CritToken[]): 
   return new Set(suggestCards(content, tokens).map((s) => s.commentId));
 }
 
+/** Reads the text a SUGGEST card would replace: its highlight token's `.inner`, so
+ *  a stacked anchor reads its true span text. */
+function suggestionAnchorReader(content: string, tokens: CritToken[]): (s: SuggestCard) => string {
+  const hlByFrom = new Map(tokens.filter((t) => t.type === "highlight").map((t) => [t.from, t]));
+  return (s) => {
+    const hl = hlByFrom.get(s.hlFrom);
+    return hl && hl.type === "highlight" ? hl.inner : content.slice(s.hlFrom + 3, s.hlTo - 3);
+  };
+}
+
+/** SUGGEST comment id → the anchored text it would replace, for every applicable
+ *  SUGGEST card, so a card can show the edit as a word-level change (#32). */
+export function suggestionAnchorTexts(content: string, tokens?: CritToken[], cards?: SuggestCard[]): Map<string, string> {
+  const toks = tokens ?? scanTokens(content);
+  const anchorTextOf = suggestionAnchorReader(content, toks);
+  return new Map((cards ?? suggestCards(content, toks)).map((s) => [s.commentId, anchorTextOf(s)]));
+}
+
 /** One member of a suggestion group, flattened for a "review the whole set" view:
  *  the anchored span it edits (struck "old" half) and the proposed wording (green
  *  "new" half; "" → delete the span). */
@@ -2576,15 +2594,11 @@ export function suggestionGroupMembers(
   tokens?: CritToken[],
 ): SuggestionGroupMember[] {
   const toks = tokens ?? scanTokens(content);
-  const hlByFrom = new Map(
-    toks.filter((t) => t.type === "highlight").map((t) => [t.from, t]),
-  );
+  const anchorTextOf = suggestionAnchorReader(content, toks);
   return suggestCards(content, toks)
     .filter((s) => s.groupId === groupId)
     .map((s) => {
-      const hl = hlByFrom.get(s.hlFrom);
-      const anchorText =
-        hl && hl.type === "highlight" ? hl.inner : content.slice(s.hlFrom + 3, s.hlTo - 3);
+      const anchorText = anchorTextOf(s);
       return {
         commentId: s.commentId,
         from: s.commentFrom,

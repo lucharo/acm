@@ -298,6 +298,7 @@ function Workspace({
     cards,
     commentCards,
     applicableSuggestionIds,
+    suggestionAnchorTextById,
     healIssues,
     diagnostics,
     fixableCount,
@@ -1657,6 +1658,7 @@ function Workspace({
                     }
                     onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
                     applicableSuggestionIds={applicableSuggestionIds}
+                    suggestionAnchorTextById={suggestionAnchorTextById}
                     groupOf={groupOf}
                     groupMembersOf={groupMembersOf}
                     groupNotesOf={groupNotesOf}
@@ -1762,6 +1764,7 @@ function Workspace({
             }
             onRejectSuggestionEdit={(c) => runSuggestionEdit(c, "reject")}
             applicableSuggestionIds={applicableSuggestionIds}
+            suggestionAnchorTextById={suggestionAnchorTextById}
             onAcceptSuggestion={(c) => c.kind === "suggestion" && acceptToken(c.suggestion)}
             onRejectSuggestion={(c) => c.kind === "suggestion" && rejectToken(c.suggestion)}
           />

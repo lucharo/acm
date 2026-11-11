@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import type { SidebarCard, CommentToken, SuggestionToken } from "../lib/types";
 import { suggestionReplacement } from "../lib/criticmarkup";
 import { authorColor } from "./authorColor";
+import { SuggestionDiff } from "./SuggestionDiff";
 import { handleCommentKey } from "./commentKeys";
 import { standaloneAdditionTitle } from "./CommentSidebar";
 import ReviewTextEditor, { closeReviewEditorAfterSuccessfulSave } from "./ReviewTextEditor";
@@ -42,6 +43,8 @@ interface MobileCommentSheetProps {
   onApplyAndResolveSuggestion: (comment: CommentToken) => void;
   onRejectSuggestionEdit: (comment: CommentToken) => void;
   applicableSuggestionIds: Set<string>;
+  /** SUGGEST comment id → the anchored text it would replace (#32). */
+  suggestionAnchorTextById?: Map<string, string>;
   onAcceptSuggestion: (card: SidebarCard) => void;
   onRejectSuggestion: (card: SidebarCard) => void;
 }
@@ -82,6 +85,7 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
     onApplyAndResolveSuggestion,
     onRejectSuggestionEdit,
     applicableSuggestionIds,
+    suggestionAnchorTextById,
     onAcceptSuggestion,
     onRejectSuggestion,
   } = props;
@@ -235,6 +239,7 @@ export default function MobileCommentSheet(props: MobileCommentSheetProps) {
                 <CommentBody
                   comment={c}
                   applicable={applicableSuggestionIds.has(c.id)}
+                  anchorText={suggestionAnchorTextById?.get(c.id)}
                   onApply={() => onApplySuggestion(c)}
                   onApplyAndResolve={() => onApplyAndResolveSuggestion(c)}
                   onReject={() => onRejectSuggestionEdit(c)}
@@ -370,9 +375,11 @@ function CommentBody({
   onApply,
   onApplyAndResolve,
   onReject,
+  anchorText,
 }: {
   comment: CommentToken;
   applicable: boolean;
+  anchorText?: string;
   onApply: () => void;
   onApplyAndResolve: () => void;
   onReject: () => void;
@@ -384,9 +391,15 @@ function CommentBody({
   return (
     <div>
       <div className="mb-1 text-[10px] font-semibold text-[var(--crit-comment)]">Suggested edit</div>
-      <p className="whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-2 py-1.5 text-[15px] leading-relaxed text-[var(--crit-ins)]">
-        {repl.trim() ? repl : "(delete this span)"}
-      </p>
+      {anchorText !== undefined ? (
+        <p className="whitespace-pre-wrap text-[15px] leading-relaxed [overflow-wrap:anywhere]">
+          <SuggestionDiff before={anchorText} after={repl} summaryClassName="text-[13px]" />
+        </p>
+      ) : (
+        <p className="whitespace-pre-wrap rounded bg-[var(--crit-ins-bg)] px-2 py-1.5 text-[15px] leading-relaxed text-[var(--crit-ins)]">
+          {repl.trim() ? repl : "(delete this span)"}
+        </p>
+      )}
       {applicable ? (
         <div className="mt-2 grid gap-2">
           <div className="flex gap-2">
