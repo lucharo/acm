@@ -20,6 +20,8 @@ work="$(mktemp -d)"
 export XDG_CONFIG_HOME="$work/config"
 mkdir -p "$XDG_CONFIG_HOME" "$work/bin" "$work/docs"
 unset ACM_DOC ACM_AUTHOR ACM_PORT
+# No Tailscale discovery: the captures must not carry this machine's host name.
+export ACM_ALLOWED_HOSTS=""
 printf '#!/usr/bin/env bash\nexec bun "%s/cli.ts" "$@"\n' "$repo" > "$work/bin/acm"
 chmod +x "$work/bin/acm"
 export PATH="$work/bin:$PATH"
