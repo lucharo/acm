@@ -10,7 +10,8 @@ import { startServer } from "../../server";
 import type { AcmServer } from "../../server";
 import { recordHistory, listHistory, showVersion } from "../server/history";
 import { addSuggestion, addSuggestionsAt } from "../lib/agentEdits";
-import { suggestCards } from "../lib/criticmarkup";
+import { scanTokens, suggestCards } from "../lib/criticmarkup";
+import type { CommentToken } from "../lib/types";
 import { readDocumentProvenance } from "../server/provenance";
 
 /** Source and operation of the last provenance event recorded for `doc`. */
@@ -288,6 +289,52 @@ describe("#101 a live write whose response is cut off reports an unknown outcome
       expect(r.code).toBe(1);
       expect(r.out).not.toContain("Nothing written");
       expect(r.out).toContain("may still have applied it");
+    } finally {
+      editor.stop(true);
+      writeFileSync(registry, prev);
+    }
+  });
+});
+
+describe("#27 a write merged by the live editor is linted on the merged bytes", () => {
+  test("the warning names the merged line, and a problem the person typed meanwhile is not blamed on the write", async () => {
+    const docPath = join(mkdtempSync(join(tmpdir(), "acm-clifix-doc-")), "doc.md");
+    writeFileSync(docPath, "Intro.\n\n## {==Wrapping up==}{>>@luis: weak heading<<}\n\nBody.\n");
+    // The person typed two lines, one with an unclosed highlight, while the write
+    // was in flight: the editor's merge puts them above the agent's reply.
+    let merged = "";
+    const editor = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        if (new URL(req.url).pathname !== "/api/agent-write") return Response.json({});
+        const { content } = (await req.json()) as { content: string };
+        merged = `Human {==typing\n\n${content}`;
+        return Response.json({ version: 2, content: merged });
+      },
+    });
+    const cfg = join(xdg, "acm");
+    mkdirSync(cfg, { recursive: true });
+    const registry = join(cfg, "instances.json");
+    let prev = "{}";
+    try {
+      prev = readFileSync(registry, "utf8");
+    } catch {
+      /* no registry yet */
+    }
+    writeFileSync(registry, JSON.stringify({ [String(editor.port)]: { port: editor.port, doc: docPath, pid: process.pid, startedAt: "2026-11-11T00:00:00Z" } }));
+    try {
+      const r = await cli(["reply", "weak heading", "@claude: SUGGEST: Two threads", "--doc", docPath]);
+
+      const comments = scanTokens(merged).filter((t): t is CommentToken => t.type === "comment");
+      const reply = comments.find((c) => c.body.startsWith("@claude:"));
+      expect(reply).toBeDefined();
+      expect(r.code).toBe(0);
+      expect(r.out.split("\n").filter((l) => l.startsWith("  line ") || l.includes("warning:"))).toEqual([
+        "acm reply: warning: this write added 1 problem the editor will flag. It is written; fix it before the person reviews it:",
+        `  line 5, thread #${comments[0].id} on ⟦Wrapping up⟧, comment #${reply!.id} "@claude: SUGGEST: Two threads": ` +
+          'its text starts with "@claude:", which acm already writes as the author, so the SUGGEST: behind it is hidden and it shows as a plain note with no Apply — start the text with "SUGGEST:"',
+      ]);
+      expect(r.out).toContain("  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply\n");
     } finally {
       editor.stop(true);
       writeFileSync(registry, prev);
