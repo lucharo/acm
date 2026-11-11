@@ -164,6 +164,12 @@ describe("safe rich Markdown rendering", () => {
     );
   });
 
+  test("bold around one <u> survives a sibling <u> in the same paragraph (#38)", () => {
+    expect(renderBlocks("A **<u>key</u>** and <u>other</u>.")).toBe(
+      "<addition><p>A <strong><u>key</u></strong> and <u>other</u>.</p></addition>",
+    );
+  });
+
   test("a stray </u> and an unclosed <u> stay literal text", () => {
     expect(renderInline("A </u>stray and <u>open")).toBe("<cell>A &lt;/u&gt;stray and &lt;u&gt;open</cell>");
   });

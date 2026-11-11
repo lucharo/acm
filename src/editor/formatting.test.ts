@@ -177,6 +177,12 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("<u><u>one</u> and <u>two</u></u>");
   });
 
+  test("tag case does not hide two separate spans from the balance check", () => {
+    const doc = "<u>one</U> and <U>two</u>";
+    const r = apply(doc, 0, doc.length, U);
+    expect(r.out).toBe("<u><u>one</U> and <U>two</u></u>");
+  });
+
   test("multi-cursor wraps each range against the original doc", () => {
     const doc = "aa bb cc dd";
     const { edits, sel } = planMultiToggle(doc, [{ from: 3, to: 5 }, { from: 9, to: 11 }], U);

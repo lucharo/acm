@@ -425,7 +425,16 @@ export function appendRichInline(
     appendText(parent, source);
     return;
   }
-  if (options.html && blocks[0].getChildren("HTMLTag").length > 0) {
+  // Underline tags alone stay on the Markdown path, which pairs them itself, so
+  // bold or italic around one span survives (the HTML-fragment path would split
+  // a `**<u>key</u>**` beside a sibling <u> into raw stars).
+  const otherHtml = blocks[0]
+    .getChildren("HTMLTag")
+    .some((tag) => {
+      const text = source.slice(tag.from, tag.to);
+      return !UNDERLINE_OPEN.test(text) && !UNDERLINE_CLOSE.test(text);
+    });
+  if (options.html && otherHtml) {
     if (!appendSafeHtmlFragment(parent, source, true)) appendText(parent, source);
     return;
   }

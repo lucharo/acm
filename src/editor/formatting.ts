@@ -65,18 +65,12 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
  *  always count as balanced. */
 function isBalanced(s: string, open: string, close: string): boolean {
   if (open === close) return true;
+  // HTML tag names ignore case, as the preview's pairing does (`<U>` is `<u>`).
+  const escape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let depth = 0;
-  for (let i = 0; i < s.length; ) {
-    if (s.startsWith(open, i)) {
-      depth += 1;
-      i += open.length;
-    } else if (s.startsWith(close, i)) {
-      depth -= 1;
-      if (depth < 0) return false;
-      i += close.length;
-    } else {
-      i += 1;
-    }
+  for (const match of s.matchAll(new RegExp(`(${escape(open)})|${escape(close)}`, "gi"))) {
+    depth += match[1] ? 1 : -1;
+    if (depth < 0) return false;
   }
   return depth === 0;
 }
