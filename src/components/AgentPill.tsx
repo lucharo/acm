@@ -60,10 +60,14 @@ export function askFeedback(status: AgentStatus | null): { message: string; kind
  *  the comment it is about has saved (the server reads the file). */
 export type SaveStatus = "saved" | "pending" | "failed";
 
-export function saveStatusOf(saveState: string): SaveStatus {
+/** `unsavedContent`: the editor still holds bytes the server has not confirmed. The
+ *  audit-* badges can show while that is true (an outbox storage failure before the
+ *  save), so they count as saved only when nothing is held. */
+export function saveStatusOf(saveState: string, unsavedContent: boolean): SaveStatus {
   if (saveState === "unsaved" || saveState === "saving") return "pending";
   if (saveState === "offline" || saveState === "conflict") return "failed";
-  return "saved"; // "saved" and the audit-* states, which settle after the content saved
+  if (!unsavedContent) return "saved";
+  return saveState === "saved" ? "pending" : "failed";
 }
 
 /** What a Send click (or one waiting on a save) does now. */

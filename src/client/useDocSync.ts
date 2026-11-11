@@ -94,6 +94,8 @@ interface UseDocSyncResult {
   reportSelection: (from: number, to: number) => void;
   /** Is an agent listening, and what Send would hand it (#31); null until first read. */
   agentStatus: AgentStatus | null;
+  /** The buffer holds edits the server has not confirmed (read at call time). */
+  hasUnsavedContent: () => boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -1145,6 +1147,8 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
   }, []);
 
   // Flush immediately (Cmd/Ctrl+S, blur, page hide) — cancel the debounce first.
+  const hasUnsavedContent = useCallback(() => pendingContent.current !== null, []);
+
   const flushNow = useCallback(() => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
@@ -1204,5 +1208,6 @@ export function useDocSync(opts: UseDocSyncOptions): UseDocSyncResult {
     flushNow,
     reportSelection,
     agentStatus,
+    hasUnsavedContent,
   };
 }

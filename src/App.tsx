@@ -187,6 +187,7 @@ function DocumentApp({
       saveState={sync.saveState}
       lastSavedAt={sync.lastSavedAt}
       agentStatus={sync.agentStatus}
+      hasUnsavedContent={sync.hasUnsavedContent}
       remoteRef={remoteRef}
       pendingRemote={pendingRemote}
       settings={settings}
@@ -234,6 +235,7 @@ interface WorkspaceProps {
   saveState: SaveState;
   lastSavedAt: number | null;
   agentStatus: AgentStatus | null;
+  hasUnsavedContent: () => boolean;
   remoteRef: React.MutableRefObject<
     ((content: string, version: number) => void) | null
   >;
@@ -254,6 +256,7 @@ function Workspace({
   saveState,
   lastSavedAt,
   agentStatus,
+  hasUnsavedContent,
   remoteRef,
   pendingRemote,
   settings,
@@ -1573,7 +1576,7 @@ function Workspace({
             notifyEach={settings.notifyEachComment}
             onToggleNotifyEach={toggleNotifyEach}
             onFeedback={pushToast}
-            saveStatus={saveStatusOf(saveState)}
+            saveStatus={saveStatusOf(saveState, hasUnsavedContent())}
             flushSave={flushNow}
           />
         }

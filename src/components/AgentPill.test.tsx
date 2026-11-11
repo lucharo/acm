@@ -68,9 +68,17 @@ describe("Send and the pending save (roborev round 2)", () => {
   test("Send goes only once the edits are on disk, and is cancelled when the save fails", () => {
     expect(
       ["saved", "unsaved", "saving", "offline", "conflict", "audit-error", "audit-recovery"].map((s) =>
-        sendDecision(saveStatusOf(s)),
+        sendDecision(saveStatusOf(s, false)),
       ),
     ).toEqual(["send", "wait", "wait", "cancel", "cancel", "send", "send"]);
+  });
+
+  test("an audit state with edits still unsaved does not count as saved (roborev round 3)", () => {
+    expect(["audit-error", "audit-recovery", "saved"].map((s) => sendDecision(saveStatusOf(s, true)))).toEqual([
+      "cancel",
+      "cancel",
+      "wait",
+    ]);
   });
 });
 
