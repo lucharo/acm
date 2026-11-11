@@ -548,6 +548,47 @@ function inlineMarkClass(name: string): string | null {
   }
 }
 
+// ── Underline (<u>…</u>, #38) ────────────────────────────────────────────────
+// Markdown has no underline, so ACM stores it as inline HTML. Lezer parses each
+// tag as its own HTMLTag node; pair an exact `<u>` with the next `</u>` under the
+// same parent (a paragraph, heading or CriticMarkup span), so an unclosed or
+// cross-span tag stays raw text rather than underlining half a document.
+interface InlineTag {
+  from: number;
+  to: number;
+  text: string;
+  parent: string;
+}
+
+interface UnderlineSpan {
+  open: { from: number; to: number };
+  close: { from: number; to: number };
+}
+
+function inlineTag(
+  node: { from: number; to: number; node: { parent: { from: number; name: string } | null } },
+  text: string,
+): InlineTag {
+  const parent = node.node.parent;
+  return { from: node.from, to: node.to, text, parent: parent ? `${parent.name}@${parent.from}` : "" };
+}
+
+function pairUnderlineTags(tags: readonly InlineTag[]): UnderlineSpan[] {
+  const spans: UnderlineSpan[] = [];
+  const openByParent = new Map<string, InlineTag[]>();
+  for (const tag of [...tags].sort((a, b) => a.from - b.from)) {
+    const stack = openByParent.get(tag.parent) ?? [];
+    if (/^<u>$/i.test(tag.text)) {
+      stack.push(tag);
+      openByParent.set(tag.parent, stack);
+    } else if (/^<\/u\s*>$/i.test(tag.text)) {
+      const open = stack.pop();
+      if (open) spans.push({ open: { from: open.from, to: open.to }, close: { from: tag.from, to: tag.to } });
+    }
+  }
+  return spans;
+}
+
 /** True when the editor is focused AND a selection range touches the line
  *  containing [from,to). Gated on focus so an unfocused document renders fully
  *  (no stray markers revealed by the default cursor-at-0). */
@@ -579,6 +620,8 @@ export function previewStyleNeedsRebuild(change: {
   );
 }
 
+const underlineMark = Decoration.mark({ class: "cm-md-underline" });
+
 // ── STYLE plugin ──────────────────────────────────────────────────────────────
 export function buildStyle(view: EditorView): DecorationSet {
   // Collect ranges then sort by (from, startSide) so the builder never receives
@@ -586,6 +629,7 @@ export function buildStyle(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   const standaloneInsertions = standaloneInsertionTokens(view.state);
   const quoteLineClass = Decoration.line({ class: "cm-md-quote-line" });
+  const tags: InlineTag[] = [];
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
@@ -615,6 +659,10 @@ export function buildStyle(view: EditorView): DecorationSet {
           ranges.push(Decoration.mark({ class: hClass }).range(node.from, node.to));
           return;
         }
+        if (name === "HTMLTag") {
+          tags.push(inlineTag(node, view.state.doc.sliceString(node.from, node.to)));
+          return;
+        }
         const iClass = inlineMarkClass(name);
         if (iClass && node.to > node.from) {
           ranges.push(Decoration.mark({ class: iClass }).range(node.from, node.to));
@@ -631,6 +679,12 @@ export function buildStyle(view: EditorView): DecorationSet {
         }
       },
     });
+  }
+
+  for (const span of pairUnderlineTags(tags)) {
+    if (span.close.from > span.open.to) {
+      ranges.push(underlineMark.range(span.open.to, span.close.from));
+    }
   }
 
   ranges.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
@@ -665,9 +719,10 @@ const styleViewPlugin = ViewPlugin.fromClass(
 );
 
 // ── HIDE plugin ─────────────────────────────────────────────────────────────
-function buildHide(view: EditorView): DecorationSet {
+export function buildHide(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   const standaloneInsertions = standaloneInsertionTokens(view.state);
+  const tags: InlineTag[] = [];
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
@@ -731,6 +786,11 @@ function buildHide(view: EditorView): DecorationSet {
           return;
         }
 
+        if (name === "HTMLTag") {
+          tags.push(inlineTag(node, view.state.doc.sliceString(node.from, node.to)));
+          return;
+        }
+
         if (!HIDDEN_MARK_NODES.has(name)) return;
         if (node.from === node.to) return;
         // Only hide a URL when it's the target of an inline [text](url) link; a
@@ -764,6 +824,14 @@ function buildHide(view: EditorView): DecorationSet {
         ranges.push(hiddenMark.range(node.from, node.to));
       },
     });
+  }
+
+  // Underline tags hide like `**`: off the active line only, so the raw tags
+  // come back for editing when the cursor is on their line.
+  for (const span of pairUnderlineTags(tags)) {
+    if (selectionOnRange(view, span.open.from, span.close.to)) continue;
+    ranges.push(hiddenMark.range(span.open.from, span.open.to));
+    ranges.push(hiddenMark.range(span.close.from, span.close.to));
   }
 
   ranges.sort((a, b) => a.from - b.from);

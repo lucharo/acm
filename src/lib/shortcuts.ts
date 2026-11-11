@@ -43,6 +43,7 @@ export function shortcutGroups(): ShortcutGroup[] {
       items: [
         { keys: `${MOD}B`, label: "Bold" },
         { keys: `${MOD}I`, label: "Italic" },
+        { keys: `${MOD}U`, label: "Underline" },
         { keys: "/table ↵", label: "Insert table" },
       ],
     },

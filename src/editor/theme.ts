@@ -80,6 +80,7 @@ export const acmTheme: Extension = EditorView.theme(
     },
     ".cm-md-strong": { fontWeight: "700" },
     ".cm-md-em": { fontStyle: "italic" },
+    ".cm-md-underline": { textDecoration: "underline" },
     // Quiet inline code: a faint tint, no box edge, so it reads as part of
     // the sentence rather than a grey block (#79).
     ".cm-md-code": {

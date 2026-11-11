@@ -149,6 +149,11 @@ describe("safe rich Markdown rendering", () => {
     );
   });
 
+  test("renders <u> as an underline, in a cell and in a block (#38)", () => {
+    expect(renderInline("The <u>key</u> point", true)).toBe("<cell>The <u>key</u> point</cell>");
+    expect(renderBlocks("A <u>key</u> point.")).toBe("<addition><p>A <u>key</u> point.</p></addition>");
+  });
+
   test("drops executable HTML and unsafe attributes without enabling custom column tags", () => {
     const rendered = renderBlocks([
       '<div style="columns: 2" onclick="alert(1)">',

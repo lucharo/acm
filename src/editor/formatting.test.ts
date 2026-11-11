@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { planToggle, planMultiToggle } from "./formatting";
-import type { ToggleEdit } from "./formatting";
+import { EditorState } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+import { acmFormattingKeymap, planToggle, planMultiToggle } from "./formatting";
+import type { ToggleEdit, ToggleMarker } from "./formatting";
 
 /** Apply a flat list of edits (original coords, non-overlapping) right-to-left. */
 function applyEdits(doc: string, edits: ToggleEdit[]): string {
@@ -13,7 +15,7 @@ function applyEdits(doc: string, edits: ToggleEdit[]): string {
 
 /** Apply a plan's edits to `doc` (edits are non-overlapping, in original
  *  coordinates) and return the resulting string + selection slice. */
-function apply(doc: string, from: number, to: number, marker: string) {
+function apply(doc: string, from: number, to: number, marker: ToggleMarker) {
   const plan = planToggle(doc, from, to, marker);
   // Apply right-to-left so earlier offsets stay valid.
   const edits = [...plan.edits].sort((a, b) => b.from - a.from);
@@ -126,5 +128,83 @@ describe("planToggle — empty selection", () => {
     expect(r.out).toBe("a****b");
     expect(r.anchor).toBe(3);
     expect(r.head).toBe(3);
+  });
+});
+
+describe("planToggle — underline (<u>…</u>, #38)", () => {
+  const U = { open: "<u>", close: "</u>" };
+
+  test("wraps a plain selection in <u> tags, keeping surrounding spaces outside", () => {
+    const r = apply("a word b", 1, 7, U); // " word "
+    expect(r.out).toBe("a <u>word</u> b");
+    expect(r.selected).toBe("word");
+  });
+
+  test("unwraps when the tags are INSIDE the selection", () => {
+    const r = apply("the <u>word</u> here", 4, 15, U); // "<u>word</u>"
+    expect(r.out).toBe("the word here");
+    expect(r.selected).toBe("word");
+  });
+
+  test("unwraps when the tags sit JUST OUTSIDE the selection", () => {
+    const r = apply("the <u>word</u> here", 7, 11, U); // "word"
+    expect(r.out).toBe("the word here");
+    expect(r.selected).toBe("word");
+  });
+
+  test("an empty selection inserts an empty pair and parks the cursor between the tags", () => {
+    const r = apply("ab", 1, 1, U);
+    expect(r.out).toBe("a<u></u>b");
+    expect(r.anchor).toBe(4);
+    expect(r.head).toBe(4);
+  });
+
+  test("underlining bold text wraps outside the stars rather than touching them", () => {
+    const r = apply("the **word** here", 4, 12, U);
+    expect(r.out).toBe("the <u>**word**</u> here");
+    expect(r.selected).toBe("**word**");
+  });
+
+  test("multi-cursor wraps each range against the original doc", () => {
+    const doc = "aa bb cc dd";
+    const { edits, sel } = planMultiToggle(doc, [{ from: 3, to: 5 }, { from: 9, to: 11 }], U);
+    const out = applyEdits(doc, edits);
+    expect(out).toBe("aa <u>bb</u> cc <u>dd</u>");
+    expect(sel.map((s) => out.slice(s.anchor, s.head))).toEqual(["bb", "dd"]);
+  });
+});
+
+describe("acmFormattingKeymap", () => {
+  /** Run the keymap's command for `key` on a doc with `[from,to)` selected; return the new doc. */
+  function press(key: string, doc: string, from: number, to: number): string {
+    const binding = acmFormattingKeymap.find((b) => b.key === key);
+    if (!binding?.run) throw new Error(`no binding for ${key}`);
+    let state = EditorState.create({ doc, selection: { anchor: from, head: to } });
+    const view = {
+      get state() {
+        return state;
+      },
+      dispatch: (spec: Parameters<EditorState["update"]>[0]) => {
+        state = state.update(spec).state;
+      },
+    };
+    expect(binding.run(view as unknown as EditorView)).toBe(true);
+    return state.doc.toString();
+  }
+
+  test("binds exactly bold, italic and underline, each preventing the browser default", () => {
+    expect(acmFormattingKeymap.map((b) => [b.key, b.preventDefault])).toEqual([
+      ["Mod-b", true],
+      ["Mod-i", true],
+      ["Mod-u", true],
+    ]);
+  });
+
+  test("Mod-u underlines the selection (overriding CodeMirror's undoSelection)", () => {
+    expect(press("Mod-u", "the word here", 4, 8)).toBe("the <u>word</u> here");
+  });
+
+  test("Mod-b still bolds the selection", () => {
+    expect(press("Mod-b", "the word here", 4, 8)).toBe("the **word** here");
   });
 });

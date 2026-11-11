@@ -7,6 +7,7 @@ import { CriticMarkup } from "./criticMarkupParser";
 import { standaloneInsertionTokensField } from "./standaloneInsertion";
 
 import {
+  buildHide,
   buildStyle,
   renderedTableCellSelector,
   tableCellReviewState,
@@ -84,5 +85,81 @@ describe("inline styles inside CriticMarkup (#85)", () => {
 
   test("a comment body stays one opaque node, never styled", () => {
     expect(styledText("Text{>>@You: see `code` here<<}.", "cm-md-code")).toEqual([]);
+  });
+});
+
+describe("underline preview (<u>…</u>, #38)", () => {
+  function viewOf(doc: string, focus?: number) {
+    const state = EditorState.create({
+      doc,
+      selection: focus === undefined ? undefined : { anchor: focus },
+      extensions: [
+        markdown({ base: markdownLanguage, extensions: [CriticMarkup] }),
+        standaloneInsertionTokensField,
+      ],
+    });
+    return {
+      state,
+      visibleRanges: [{ from: 0, to: doc.length }],
+      hasFocus: focus !== undefined,
+    } as unknown as EditorView;
+  }
+
+  function underlined(doc: string): string[] {
+    const out: string[] = [];
+    buildStyle(viewOf(doc)).between(0, doc.length, (from, to, deco) => {
+      if (deco.spec.class === "cm-md-underline") out.push(doc.slice(from, to));
+    });
+    return out;
+  }
+
+  function hidden(doc: string, focus?: number): string[] {
+    const out: string[] = [];
+    buildHide(viewOf(doc, focus)).between(0, doc.length, (from, to) => {
+      out.push(doc.slice(from, to));
+    });
+    return out;
+  }
+
+  test("a <u> span is drawn underlined, tags excluded", () => {
+    expect(underlined("The plan is <u>really important</u> today.")).toEqual(["really important"]);
+  });
+
+  test("off the active line the tags are hidden", () => {
+    expect(hidden("The plan is <u>really important</u> today.")).toEqual(["<u>", "</u>"]);
+  });
+
+  test("on the active line the tags are revealed for editing", () => {
+    expect(hidden("The plan is <u>really important</u> today.", 0)).toEqual([]);
+  });
+
+  test("an unclosed <u> is neither underlined nor hidden", () => {
+    const doc = "An <u>unclosed tag stays raw.";
+    expect(underlined(doc)).toEqual([]);
+    expect(hidden(doc)).toEqual([]);
+  });
+
+  test("other inline HTML tags are left alone", () => {
+    const doc = "Some <b>bold</b> and <span>span</span>.";
+    expect(underlined(doc)).toEqual([]);
+    expect(hidden(doc)).toEqual([]);
+  });
+
+  test("an underline inside a CriticMarkup highlight is still drawn", () => {
+    expect(underlined("The {==<u>key</u> point==}{>>@You: why?<<} here.")).toEqual(["key"]);
+  });
+
+  test("a <u> inside a highlight never pairs with a </u> outside it", () => {
+    const doc = "A {==<u>key==}{>>@You: why?<<} point</u> here.";
+    expect(underlined(doc)).toEqual([]);
+    expect(hidden(doc).filter((t) => t.includes("u>"))).toEqual([]);
+  });
+
+  test("an underline wrapping bold text is drawn over the whole span", () => {
+    expect(underlined("A <u>**bold** word</u>.")).toEqual(["**bold** word"]);
+  });
+
+  test("each of two spans on one line pairs with its own close tag", () => {
+    expect(underlined("<u>one</u> and <u>two</u>")).toEqual(["one", "two"]);
   });
 });

@@ -51,6 +51,7 @@ const SAFE_HTML_TAGS = new Set([
   "th",
   "thead",
   "tr",
+  "u",
   "ul",
 ]);
 

@@ -1,5 +1,5 @@
 // The formatting toolbar in the title bar (#79, look C): undo/redo, paragraph
-// style, bold, italic, link, lists, and the review actions (comment, suggest).
+// style, bold, italic, underline, link, lists, and the review actions (comment, suggest).
 // Every button edits the Markdown buffer through the same commands as the keyboard.
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { EditorView } from "@codemirror/view";
@@ -13,9 +13,10 @@ import {
   MessageSquarePlus,
   PencilLine,
   Redo2,
+  Underline,
   Undo2,
 } from "lucide-react";
-import { toggleEmphasis, toggleStrong } from "../editor/formatting";
+import { toggleEmphasis, toggleStrong, toggleUnderline } from "../editor/formatting";
 import { MOD, ALT } from "../lib/platform";
 import { currentBlockStyle, insertLink, setBlockStyle, toggleList } from "../editor/blockFormat";
 import type { BlockStyle } from "../editor/blockFormat";
@@ -80,6 +81,9 @@ export default function FormatToolbar(props: FormatToolbarProps) {
       </button>
       <button type="button" className={button} onMouseDown={keep} onClick={run(toggleEmphasis)} title={`Italic (${MOD}I)`} aria-label="Italic">
         <Italic size={16} strokeWidth={1.8} />
+      </button>
+      <button type="button" className={button} onMouseDown={keep} onClick={run(toggleUnderline)} title={`Underline (${MOD}U)`} aria-label="Underline">
+        <Underline size={16} strokeWidth={1.8} />
       </button>
       <button type="button" className={button} onMouseDown={keep} onClick={run(insertLink)} title="Insert link" aria-label="Insert link">
         <Link size={16} strokeWidth={1.8} />
