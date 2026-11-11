@@ -1622,7 +1622,7 @@ function cachedLiteralRanges(content: string): SourceRange[] {
 
 /** Whether offset `i` sits in a Markdown literal (code, a URL…): CriticMarkup-
  *  shaped text there is an example, never markup to diagnose or heal. */
-function inLiteral(content: string, i: number): boolean {
+export function inLiteral(content: string, i: number): boolean {
   return positionInRanges(i, cachedLiteralRanges(content));
 }
 

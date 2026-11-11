@@ -24,6 +24,7 @@ import {
   applyRangedEdits,
   unsafeSuggestion,
   validateMarkup,
+  inLiteral,
 } from "./criticmarkup";
 import type { CommentToken, CommentThread, MarkupDiagnosticKind } from "./criticmarkup";
 import { threadEditRequested } from "./commentGroups";
@@ -370,7 +371,7 @@ export function writeProblems(before: string, after: string): WriteProblem[] {
   const tokens = scanTokens(after);
   const comments = commentsOf(tokens);
   const commentAt = new Map(comments.map((c) => [c.from, c]));
-  const threads = groupThreads(comments, after);
+  const threadOf = new Map(groupThreads(comments, after).flatMap((th) => th.comments.map((c) => [c, th] as const)));
   const lineAt = (at: number) => after.slice(0, at).split("\n").length;
 
   const found = new Map<CommentToken, { suggestion: boolean; reasons: string[] }>();
@@ -384,7 +385,7 @@ export function writeProblems(before: string, after: string): WriteProblem[] {
   // A doubled `@author:` prefix, on the comments this write added.
   const hidden = new Set<CommentToken>();
   for (const c of comments) {
-    if (take(oldRaws, c.raw)) continue;
+    if (take(oldRaws, c.raw) || inLiteral(after, c.from)) continue;
     const m = c.body.match(LEADING_AUTHOR);
     if (!m) continue;
     const own = m[1] === c.author;
@@ -403,7 +404,7 @@ export function writeProblems(before: string, after: string): WriteProblem[] {
     if (c) {
       if (take(oldInComment, `${d.kind}\u0000${c.raw}`)) continue;
       if (d.kind === "mixed-suggestion" && hidden.has(c)) continue; // the prefix reason says why
-      const thread = threads.find((th) => th.comments.includes(c));
+      const thread = threadOf.get(c);
       const reply = thread !== undefined && thread.comments[0] !== c;
       note(
         c,
@@ -432,7 +433,7 @@ export function writeProblems(before: string, after: string): WriteProblem[] {
   }
 
   const inComments: WriteProblem[] = [...found].map(([c, { suggestion, reasons }]) => {
-    const thread = threads.find((th) => th.comments.includes(c));
+    const thread = threadOf.get(c);
     const root = thread?.comments[0] ?? c;
     const hl = anchorHighlightFor(after, root, tokens);
     const reason = reasons.join("; ");

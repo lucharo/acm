@@ -1041,6 +1041,21 @@ describe("acm write lint (#27)", () => {
     expect(r.out.split("\n").at(-2)).toBe("  comments: 3 | applicable SUGGEST cards: 1");
   });
 
+  test("a doubled prefix inside a code span is an example, not a warning", () => {
+    writeFileSync(doc, HEADING_DOC);
+    writeFileSync(
+      edits,
+      JSON.stringify([{ id: "t1", match: "this heading is weak", insert: " Avoid `{>>@claude: @claude: hi<<}`." }]),
+    );
+
+    const r = run("reply", "--batch", edits);
+
+    expect(r.code).toBe(0);
+    expect(readFileSync(doc, "utf8")).toContain("Avoid `{>>@claude: @claude: hi<<}`.");
+    expect(r.err).toBe("");
+    expect(r.out.split("\n").at(-2)).toBe("  comments: 2 | applicable SUGGEST cards: 0");
+  });
+
   test("a rewrite that spans an old problem (wrap) does not report it as new", () => {
     const long = "word ".repeat(12).trim();
     writeFileSync(doc, `${long}\n\nMiddle {==left open here.\n\n${long}\n`);
