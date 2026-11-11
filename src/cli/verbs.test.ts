@@ -915,3 +915,143 @@ describe("acm import", () => {
     expect(p.stdout.toString()).toContain("markup diagnostics: 0 (clean)");
   });
 });
+
+// #27: a write that adds a SUGGEST the parser won't apply, or markup the heal check
+// flags, must say so — naming the thread and why — instead of only leaving the
+// "applicable SUGGEST cards" count unmoved. The write still lands (exit 0): it has
+// happened by the time the check runs, so a non-zero exit would invite a retry
+// that duplicates it.
+describe("acm write lint (#27)", () => {
+  const HEADING_DOC = "Intro.\n\n## {==Wrapping up==}{>>@luis: this heading is weak<<}\n\nBody text.\n";
+  const POINT_DOC = "Intro.\n\n## Wrapping up{>>@luis: this heading is weak<<}\n\nBody text.\n";
+  const WARNING_HEAD = "warning: this write added 1 problem the editor will flag. It is written; fix it before the person reviews it:\n";
+
+  /** The comment whose body starts with `start`, with the id of its thread. */
+  function commentIn(text: string, start: string): { id: string; threadId: string } {
+    const comments = scanTokens(text).filter((t): t is CommentToken => t.type === "comment");
+    const comment = comments.find((c) => c.body.startsWith(start));
+    if (!comment) throw new Error(`no comment starting ${JSON.stringify(start)} in ${JSON.stringify(text)}`);
+    const thread = groupThreads(comments, text).find((th) => th.comments.includes(comment));
+    if (!thread) throw new Error("comment has no thread");
+    return { id: comment.id, threadId: thread.id };
+  }
+
+  test("a reply whose text repeats the @author: prefix warns that it hides the SUGGEST", () => {
+    writeFileSync(doc, HEADING_DOC);
+
+    const r = run("reply", "this heading is weak", "@claude: SUGGEST: ## Two threads: what to keep");
+
+    const written = readFileSync(doc, "utf8");
+    const c = commentIn(written, "@claude: SUGGEST:");
+    expect(r.code).toBe(0);
+    expect(written).toContain("{>>@claude: @claude: SUGGEST: ## Two threads: what to keep<<}");
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        `  line 3, thread #${c.threadId} on ⟦Wrapping up⟧, comment #${c.id} "@claude: SUGGEST: ## Two threads: what to keep": ` +
+        'its text starts with "@claude:", which acm already writes as the author, so the SUGGEST: behind it is hidden and it shows as a plain note with no Apply — start the text with "SUGGEST:"\n',
+    );
+    expect(r.out.split("\n").at(-2)).toBe(
+      "  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply",
+    );
+  });
+
+  test("a SUGGEST reply on a point comment warns that there is no span to apply it to", () => {
+    writeFileSync(doc, POINT_DOC);
+
+    const r = run("reply", "this heading is weak", "SUGGEST: Two threads");
+
+    const c = commentIn(readFileSync(doc, "utf8"), "SUGGEST:");
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        `  line 3, thread #${c.threadId} (point comment, no span), comment #${c.id} "SUGGEST: Two threads": ` +
+        'the thread it joins has no {==span==}, so this SUGGEST has nothing to apply to — anchor it with `acm suggest "<span>" "<new wording>"` instead\n',
+    );
+    expect(r.out.split("\n").at(-2)).toBe(
+      "  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply",
+    );
+  });
+
+  test("a suggest whose replacement carries markup delimiters reports the validator's reason", () => {
+    writeFileSync(doc, "Intro.\n\nThe second paragraph says hello.\n");
+
+    const r = run("suggest", "says hello", "says {++hi");
+
+    const c = commentIn(readFileSync(doc, "utf8"), "SUGGEST:");
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm suggest: ${WARNING_HEAD}` +
+        `  line 3, thread #${c.threadId} on ⟦says hello⟧ "SUGGEST: says {++hi": ` +
+        "SUGGEST replacement contains CriticMarkup delimiters, so applying it would break the markup — rewrite it\n",
+    );
+    expect(r.out.split("\n").at(-2)).toBe(
+      "  comments: 1 | applicable SUGGEST cards: 0 | ⚠ 1 new SUGGEST won't apply",
+    );
+  });
+
+  test("a new comment that repeats its own author prefix warns as a markup problem, not a SUGGEST", () => {
+    writeFileSync(doc, HEADING_DOC);
+
+    const r = run("reply", "this heading is weak", "@claude: agreed, it undersells the section");
+
+    const c = commentIn(readFileSync(doc, "utf8"), "@claude: agreed");
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        `  line 3, thread #${c.threadId} on ⟦Wrapping up⟧, comment #${c.id} "@claude: agreed, it undersells the section": ` +
+        'its text starts with "@claude:", which acm already writes as the author, so it reads "@claude: @claude: …" — drop the prefix from the text\n',
+    );
+    expect(r.out.split("\n").at(-2)).toBe(
+      "  comments: 2 | applicable SUGGEST cards: 0 | ⚠ 1 new markup problem",
+    );
+  });
+
+  test("a batch insert that leaves a delimiter dangling is reported at its line", () => {
+    writeFileSync(doc, HEADING_DOC);
+    writeFileSync(
+      edits,
+      JSON.stringify([{ id: "t1", match: "this heading is weak", insert: " {==half an anchor" }]),
+    );
+
+    const r = run("reply", "--batch", edits);
+
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(
+      `acm reply: ${WARNING_HEAD}` +
+        '  line 3 "## {==Wrapping up==}{>>@luis: this heading is weak<<} {==half an anchor": ' +
+        "highlight doesn't close in this paragraph — its {== renders raw\n",
+    );
+    expect(r.out.split("\n").at(-2)).toBe(
+      "  comments: 1 | applicable SUGGEST cards: 0 | ⚠ 1 new markup problem",
+    );
+  });
+
+  test("problems already in the doc are not reported for a clean write", () => {
+    writeFileSync(
+      doc,
+      "Intro {==left open.\n\n" +
+        "## Wrapping up{>>@luis: SUGGEST: Closing<<}\n\n" +
+        "Body {==text==}{>>@luis: is this clear?<<}\n",
+    );
+
+    const r = run("reply", "is this clear?", "SUGGEST: words");
+
+    expect(r.code).toBe(0);
+    expect(r.err).toBe("");
+    expect(r.out.split("\n").at(-2)).toBe("  comments: 3 | applicable SUGGEST cards: 1");
+  });
+
+  test("a rewrite that spans an old problem (wrap) does not report it as new", () => {
+    const long = "word ".repeat(12).trim();
+    writeFileSync(doc, `${long}\n\nMiddle {==left open here.\n\n${long}\n`);
+
+    const r = run("wrap", "20");
+
+    const written = readFileSync(doc, "utf8");
+    expect(r.code).toBe(0);
+    expect(written.startsWith("word word word word\n")).toBe(true);
+    expect(written.endsWith("word word word word\nword word word word\n")).toBe(true);
+    expect(r.err).toBe("");
+    expect(r.out.split("\n").at(-2)).toBe("  comments: 0 | applicable SUGGEST cards: 0");
+  });
+});

@@ -28,6 +28,8 @@ import {
   findSuggestionComment,
   findThread,
   suggestionWhitespaceWarning,
+  writeProblems,
+  type WriteProblem,
 } from "../lib/agentEdits";
 import {
   applicableSuggestionIds,
@@ -927,7 +929,55 @@ async function commitWrite(
   if (snap) console.log(`  backup → ${snap}`);
   if (viaEditorPort !== null)
     console.log(`  written via the live editor on :${viaEditorPort} (merged with any concurrent human edits)`);
-  console.log(`  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}`);
+  // A restore puts back an earlier version as it was; every other write is new markup.
+  const problems = source === "agent" ? problemsThisWriteAdded(before, after, final) : [];
+  reportWriteProblems(cmd, problems);
+  console.log(
+    `  comments: ${comments} | applicable SUGGEST cards: ${applicableSuggestionIds(final, toks).size}` +
+      problemTally(problems),
+  );
+}
+
+/** What this write added (#27), placed in the bytes now on disk. Found by diffing
+ *  `before` against the verb's own result, so a merged human edit is never blamed
+ *  on the agent; then looked up again in the merged copy for its line. */
+function problemsThisWriteAdded(before: string, after: string, final: string): WriteProblem[] {
+  const added = writeProblems(before, after);
+  if (final === after || added.length === 0) return added;
+  const keys = new Set(added.map((p) => p.key));
+  const placed = writeProblems(before, final).filter((p) => keys.has(p.key));
+  const placedKeys = new Set(placed.map((p) => p.key));
+  return [...placed, ...added.filter((p) => !placedKeys.has(p.key))];
+}
+
+/** Warn on stderr, naming each problem's line, thread and reason. The write has
+ *  already landed, so this never exits non-zero: a failing exit would invite a
+ *  retry that writes the comment twice. */
+function reportWriteProblems(cmd: string, problems: WriteProblem[]): void {
+  if (problems.length === 0) return;
+  const n = problems.length;
+  console.error(
+    `acm ${cmd}: warning: this write added ${n} problem${n === 1 ? "" : "s"} the editor will flag. ` +
+      `It is written; fix ${n === 1 ? "it" : "them"} before the person reviews ${n === 1 ? "it" : "them"}:`,
+  );
+  for (const p of problems) {
+    let where = `line ${p.line}`;
+    if (p.threadId !== null) {
+      where += `, thread #${p.threadId}${p.anchor !== null ? ` on ⟦${p.anchor}⟧` : " (point comment, no span)"}`;
+      if (p.commentId !== p.threadId) where += `, comment #${p.commentId}`;
+    }
+    console.error(`  ${where} "${p.preview}": ${p.reason}`);
+  }
+}
+
+/** The summary line's count of what this write added that won't work. */
+function problemTally(problems: WriteProblem[]): string {
+  const suggest = problems.filter((p) => p.suggestion).length;
+  const other = problems.length - suggest;
+  let out = "";
+  if (suggest > 0) out += ` | ⚠ ${suggest} new SUGGEST won't apply`;
+  if (other > 0) out += ` | ⚠ ${other} new markup problem${other === 1 ? "" : "s"}`;
+  return out;
 }
 
 // ── acm spell [list|add|ignore|replace] — review & fix spelling from the shell ─

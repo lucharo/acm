@@ -23,8 +23,9 @@ import {
   suggestionGroupEdits,
   applyRangedEdits,
   unsafeSuggestion,
+  validateMarkup,
 } from "./criticmarkup";
-import type { CommentToken, CommentThread } from "./criticmarkup";
+import type { CommentToken, CommentThread, MarkupDiagnosticKind } from "./criticmarkup";
 import { threadEditRequested } from "./commentGroups";
 
 /** Raised when a phrase/span matches zero or more than one target — the caller
@@ -294,4 +295,157 @@ export function suggestionWhitespaceWarning(span: string, replacement: string): 
   if (/\s$/.test(replacement)) parts.push("the replacement ends with whitespace");
   if (parts.length === 0) return null;
   return `${parts.join(" and ")} — Apply replaces the span's whitespace with the replacement's, exactly as written; check the words on either side still read right`;
+}
+
+const SUGGEST_KINDS = new Set<MarkupDiagnosticKind>(["orphan-suggestion", "unsafe-suggestion", "mixed-suggestion"]);
+// A body that opens with its own `@name:` envelope: acm writes the author prefix,
+// so an agent that types it as well hides whatever follows behind a second one.
+const LEADING_AUTHOR = /^@([^\s:{}<>]+):[ \t]*/;
+
+/** One problem a write introduced (#27): markup the editor's "Review comments that
+ *  can't display or apply" panel flags, or a comment that repeats its author prefix. */
+export interface WriteProblem {
+  line: number; // 1-based
+  threadId: string | null; // the thread's id as `acm threads` prints it; null when not in a comment
+  commentId: string | null;
+  anchor: string | null; // the span the thread is anchored on; null for a point comment
+  preview: string; // the comment's text, or the line's, shortened
+  suggestion: boolean; // a SUGGEST that won't apply
+  reason: string;
+  key: string; // offset-free identity, to find the same problem in a merged copy
+}
+
+function shorten(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function bump(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+/** Take one `key` from a multiset; false when none is left. */
+function take(counts: Map<string, number>, key: string): boolean {
+  const n = counts.get(key) ?? 0;
+  if (n === 0) return false;
+  counts.set(key, n - 1);
+  return true;
+}
+
+/**
+ * The problems `after` has that `before` did not: what one write added, never what
+ * the document already carried (#27). A problem in a comment is matched by the
+ * comment's bytes, so a batch that touches several threads still recognises the
+ * old ones; any other problem is matched by position, mapped across the one span
+ * the write changed.
+ */
+export function writeProblems(before: string, after: string): WriteProblem[] {
+  const max = Math.min(before.length, after.length);
+  let prefix = 0;
+  while (prefix < max && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (suffix < max - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix += 1;
+  const shift = after.length - before.length;
+  const beforeOffset = (at: number): number | null =>
+    at < prefix ? at : at >= after.length - suffix ? at - shift : null;
+
+  const commentsOf = (tokens: ReturnType<typeof scanTokens>) =>
+    tokens.filter((t): t is CommentToken => t.type === "comment");
+  const oldComments = commentsOf(scanTokens(before));
+  const oldCommentAt = new Map(oldComments.map((c) => [c.from, c]));
+  const oldRaws = new Map<string, number>();
+  for (const c of oldComments) bump(oldRaws, c.raw);
+  const oldInComment = new Map<string, number>();
+  const oldElsewhere = new Set<string>();
+  // Old problems inside the changed span have no position to match; a rewrite that
+  // spans them (wrap, heal) keeps them, so they are matched by kind and count.
+  const oldInChange = new Map<string, number>();
+  for (const d of validateMarkup(before)) {
+    const c = oldCommentAt.get(d.from);
+    if (c) bump(oldInComment, `${d.kind}\u0000${c.raw}`);
+    else if (d.from >= prefix && d.from < before.length - suffix) bump(oldInChange, d.kind);
+    else oldElsewhere.add(`${d.kind}@${d.from}`);
+  }
+
+  const tokens = scanTokens(after);
+  const comments = commentsOf(tokens);
+  const commentAt = new Map(comments.map((c) => [c.from, c]));
+  const threads = groupThreads(comments, after);
+  const lineAt = (at: number) => after.slice(0, at).split("\n").length;
+
+  const found = new Map<CommentToken, { suggestion: boolean; reasons: string[] }>();
+  const note = (c: CommentToken, suggestion: boolean, reason: string) => {
+    const entry = found.get(c) ?? { suggestion: false, reasons: [] };
+    entry.suggestion ||= suggestion;
+    entry.reasons.push(reason);
+    found.set(c, entry);
+  };
+
+  // A doubled `@author:` prefix, on the comments this write added.
+  const hidden = new Set<CommentToken>();
+  for (const c of comments) {
+    if (take(oldRaws, c.raw)) continue;
+    const m = c.body.match(LEADING_AUTHOR);
+    if (!m) continue;
+    const own = m[1] === c.author;
+    const lead = `its text starts with "@${m[1]}:"${own ? ", which acm already writes as the author," : ","}`;
+    if (suggestionReplacement(c.body.slice(m[0].length)) !== null) {
+      hidden.add(c);
+      note(c, true, `${lead} so the SUGGEST: behind it is hidden and it shows as a plain note with no Apply — start the text with "SUGGEST:"`);
+    } else if (own) {
+      note(c, false, `${lead} so it reads "@${m[1]}: @${m[1]}: …" — drop the prefix from the text`);
+    }
+  }
+
+  const elsewhere: WriteProblem[] = [];
+  for (const d of validateMarkup(after)) {
+    const c = commentAt.get(d.from);
+    if (c) {
+      if (take(oldInComment, `${d.kind}\u0000${c.raw}`)) continue;
+      if (d.kind === "mixed-suggestion" && hidden.has(c)) continue; // the prefix reason says why
+      const thread = threads.find((th) => th.comments.includes(c));
+      const reply = thread !== undefined && thread.comments[0] !== c;
+      note(
+        c,
+        SUGGEST_KINDS.has(d.kind),
+        d.kind === "orphan-suggestion" && reply
+          ? 'the thread it joins has no {==span==}, so this SUGGEST has nothing to apply to — anchor it with `acm suggest "<span>" "<new wording>"` instead'
+          : d.message,
+      );
+      continue;
+    }
+    const was = beforeOffset(d.from);
+    if (was === null ? take(oldInChange, d.kind) : oldElsewhere.has(`${d.kind}@${was}`)) continue;
+    const lineStart = after.lastIndexOf("\n", d.from - 1) + 1;
+    const lineEnd = after.indexOf("\n", d.from);
+    const preview = shorten(after.slice(lineStart, lineEnd < 0 ? after.length : lineEnd), 80);
+    elsewhere.push({
+      line: lineAt(d.from),
+      threadId: null,
+      commentId: null,
+      anchor: null,
+      preview,
+      suggestion: false,
+      reason: d.message,
+      key: `${d.kind}\u0000${preview}`,
+    });
+  }
+
+  const inComments: WriteProblem[] = [...found].map(([c, { suggestion, reasons }]) => {
+    const thread = threads.find((th) => th.comments.includes(c));
+    const root = thread?.comments[0] ?? c;
+    const hl = anchorHighlightFor(after, root, tokens);
+    const reason = reasons.join("; ");
+    return {
+      line: lineAt(c.from),
+      threadId: thread?.id ?? c.id,
+      commentId: c.id,
+      anchor: hl?.type === "highlight" ? shorten(hl.inner, 40) : null,
+      preview: shorten(c.body, 80),
+      suggestion,
+      reason,
+      key: `${c.raw}\u0000${reason}`,
+    };
+  });
+  return [...inComments, ...elsewhere].sort((a, b) => a.line - b.line);
 }
