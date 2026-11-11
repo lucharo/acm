@@ -45,9 +45,11 @@ export function waitingCounts(summary: ThreadSummary[]): WaitingCounts {
   return { comments: waiting.length - editRequests, editRequests };
 }
 
-// The latest comment's id hashes its bytes, so a reply or an edit to it is a new
-// state, while an edit to an earlier comment (which renames the thread) is not.
-const stateKey = (t: ThreadSummary) => t.lastCommentId;
+// The thread (its opening comment's id) plus its latest comment's id, both hashes
+// of their bytes: a reply or an edit makes a new state, and the same words on two
+// threads ("please suggest an edit") stay two states. Editing the opening comment
+// also makes a new state, so it can report the thread again; a repeat beats a miss.
+const stateKey = (t: ThreadSummary) => `${t.id}/${t.lastCommentId}`;
 
 function threadEvent(event: "comment" | "ask" | "pending", t: ThreadSummary): WakeEvent {
   return { event, threadId: t.id, author: t.lastAuthor, anchor: t.anchor };

@@ -122,13 +122,18 @@ describe("roborev round 1 (#34)", () => {
     expect(wake.review(summary(two))).toEqual({ event: "review", comments: 0, editRequests: 0 });
   });
 
-  test("editing a thread's opening comment does not re-wake a reply already reported", () => {
-    const replied = BASE.replace("too vivid?<<}", "too vivid?<<}{>>@Luis: agreed<<}");
+  test("resolve and the same ask on another thread inside one look still wakes (roborev round 3)", () => {
+    const askA = BASE.replace("too vivid?<<}", "too vivid?<<}{>>@Luis: please suggest an edit<<}");
     const wake = new AgentWake(summary(BASE));
-    expect(wake.detect(summary(replied), true)).toHaveLength(1);
-    const reworded = replied.replace("too vivid?", "too vivid here?");
-    expect(wake.detect(summary(reworded), true)).toEqual([]);
-    expect(wake.pending(summary(reworded)).map((t) => t.anchor)).toEqual(["quick fox"]);
+    expect(wake.detect(summary(askA), false)).toHaveLength(1);
+    const swapped = BASE.replace("{==quick fox==}{>>@claude: too vivid?<<}", "quick fox").replace(
+      "{==lazy dog==}",
+      "{==lazy dog==}{>>@claude: cut?<<}{>>@Luis: please suggest an edit<<}",
+    );
+    const [thread] = summary(swapped).filter((t) => t.anchor === "lazy dog");
+    expect(wake.detect(summary(swapped), false)).toEqual([
+      { event: "ask", threadId: thread.id, author: "Luis", anchor: "lazy dog" },
+    ]);
   });
 
   test("the same edit request on another thread after a resolve still wakes (roborev round 2)", () => {
