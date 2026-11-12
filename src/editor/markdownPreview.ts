@@ -548,6 +548,86 @@ function inlineMarkClass(name: string): string | null {
   }
 }
 
+// ── Underline (<u>…</u>, #38) ────────────────────────────────────────────────
+// Markdown has no underline, so ACM stores it as inline HTML. Lezer parses each
+// tag as its own HTMLTag node; pair an exact `<u>` with the next `</u>` inside
+// the same inline container (paragraph, emphasis, link), so an unclosed tag or
+// one crossing an emphasis boundary stays raw rather than underlining half a
+// document. A comment highlight is transparent: `acm comment` may anchor across
+// one tag (`<u>very {==important</u> point==}`), and the pair still holds.
+const UNDERLINE_OPEN = /^<u>$/;
+const UNDERLINE_CLOSE = /^<\/u>$/;
+
+interface UnderlineTag {
+  from: number;
+  to: number;
+  open: boolean;
+  scope: string;
+}
+
+export interface UnderlineSpan {
+  open: { from: number; to: number };
+  close: { from: number; to: number };
+}
+
+/** The document range from the start of the top-level block holding `from` to
+ *  the end of the one holding `to`, so a pair is never split by the viewport. */
+function enclosingBlocks(state: EditorState, from: number, to: number): { from: number; to: number } {
+  const tree = syntaxTree(state);
+  const top = (pos: number, side: -1 | 1) => {
+    let node = tree.resolve(pos, side);
+    while (node.parent && node.parent.parent) node = node.parent;
+    return node.parent ? node : null;
+  };
+  return { from: top(from, 1)?.from ?? from, to: top(to, -1)?.to ?? to };
+}
+
+/** Matched `<u>`…`</u>` pairs in the blocks the viewport touches. Skips what the
+ *  preview never styles: tables, code and standalone insertions (a comment body
+ *  parses as one opaque node, so it holds no tags). */
+export function underlineSpans(view: EditorView): UnderlineSpan[] {
+  const { state } = view;
+  const standaloneInsertions = standaloneInsertionTokens(state);
+  const tags = new Map<number, UnderlineTag>();
+  for (const visible of view.visibleRanges) {
+    const range = enclosingBlocks(state, visible.from, visible.to);
+    syntaxTree(state).iterate({
+      from: range.from,
+      to: range.to,
+      enter: (node) => {
+        const name = node.name;
+        if (name === "Table" || name === "FencedCode" || name === "CodeBlock") return false;
+        if (standaloneInsertions.some((ins) => ins.from <= node.from && node.to <= ins.to)) return false;
+        if (name !== "HTMLTag") return;
+        const text = state.doc.sliceString(node.from, node.to);
+        const open = UNDERLINE_OPEN.test(text);
+        if (!open && !UNDERLINE_CLOSE.test(text)) return;
+        let scope = node.node.parent;
+        while (scope && scope.name === "CMHighlight") scope = scope.parent;
+        tags.set(node.from, {
+          from: node.from,
+          to: node.to,
+          open,
+          scope: scope ? `${scope.name}@${scope.from}` : "",
+        });
+      },
+    });
+  }
+  const spans: UnderlineSpan[] = [];
+  const openByScope = new Map<string, UnderlineTag[]>();
+  for (const tag of [...tags.values()].sort((a, b) => a.from - b.from)) {
+    const stack = openByScope.get(tag.scope) ?? [];
+    openByScope.set(tag.scope, stack);
+    if (tag.open) {
+      stack.push(tag);
+    } else {
+      const open = stack.pop();
+      if (open) spans.push({ open: { from: open.from, to: open.to }, close: { from: tag.from, to: tag.to } });
+    }
+  }
+  return spans;
+}
+
 /** True when the editor is focused AND a selection range touches the line
  *  containing [from,to). Gated on focus so an unfocused document renders fully
  *  (no stray markers revealed by the default cursor-at-0). */
@@ -578,6 +658,8 @@ export function previewStyleNeedsRebuild(change: {
     change.treeChanged
   );
 }
+
+const underlineMark = Decoration.mark({ class: "cm-md-underline" });
 
 // ── STYLE plugin ──────────────────────────────────────────────────────────────
 export function buildStyle(view: EditorView): DecorationSet {
@@ -633,6 +715,12 @@ export function buildStyle(view: EditorView): DecorationSet {
     });
   }
 
+  for (const span of underlineSpans(view)) {
+    if (span.close.from > span.open.to) {
+      ranges.push(underlineMark.range(span.open.to, span.close.from));
+    }
+  }
+
   ranges.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
   const builder = new RangeSetBuilder<Decoration>();
   for (const r of ranges) builder.add(r.from, r.to, r.value);
@@ -665,7 +753,7 @@ const styleViewPlugin = ViewPlugin.fromClass(
 );
 
 // ── HIDE plugin ─────────────────────────────────────────────────────────────
-function buildHide(view: EditorView): DecorationSet {
+export function buildHide(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
   const standaloneInsertions = standaloneInsertionTokens(view.state);
 
@@ -764,6 +852,14 @@ function buildHide(view: EditorView): DecorationSet {
         ranges.push(hiddenMark.range(node.from, node.to));
       },
     });
+  }
+
+  // Underline tags hide like `**`: off the active line only, so the raw tags
+  // come back for editing when the cursor is on their line.
+  for (const span of underlineSpans(view)) {
+    if (selectionOnRange(view, span.open.from, span.close.to)) continue;
+    ranges.push(hiddenMark.range(span.open.from, span.open.to));
+    ranges.push(hiddenMark.range(span.close.from, span.close.to));
   }
 
   ranges.sort((a, b) => a.from - b.from);

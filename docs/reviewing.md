@@ -72,7 +72,7 @@ The review keys work only when the focus is outside the text (click the card, or
 - **Tables**: click a cell (or focus it and press `Enter`) to edit it in place; `Tab` moves between cells. Type `/table` on an empty line to insert one.
 - **Lists**: deleting, moving or inserting an item renumbers the list.
 - **Images**: drag an image onto the page or paste a screenshot. ACM saves it in an `assets/` folder beside the document and inserts the reference. Relative image paths may point anywhere in the document's git repository (or, outside a repository, its folder); `acm edit --asset-root <dir>` names another folder.
-- **Toolbar**: the title bar holds undo, redo, the paragraph style (Normal text, Heading 1 to 3), bold, italic, link, bulleted and numbered lists, and Add comment / Suggest replacement. Each edits the Markdown, the same as the keyboard.
+- **Toolbar**: the title bar holds undo, redo, the paragraph style (Normal text, Heading 1 to 3), bold, italic, underline (⌘U, written to the file as `<u>…</u>`, since Markdown has no underline of its own), link, bulleted and numbered lists, and Add comment / Suggest replacement. Each edits the Markdown, the same as the keyboard.
 - **Page view** (on by default in Settings) shows the page's edges on a light grey background, marks where A4 page breaks fall and shows a page count.
 - **Unsaved changes**: refreshing or closing the tab before an edit is saved asks first.
 - **Raw Markdown**: the `</>` button in the header switches to the exact source with every marker visible.

@@ -838,6 +838,53 @@ describe("acm reply dispatch", () => {
   });
 });
 
+describe("acm verbs over an underlined <u> span (#38)", () => {
+  const U_DOC = "The plan is <u>really important</u> for the team.\n";
+
+  test("comment anchors on a span that includes both tags", () => {
+    writeFileSync(doc, U_DOC);
+    const r = run("comment", "<u>really important</u>", "why underline?");
+    expect([r.code, r.err]).toEqual([0, ""]);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "The plan is {==<u>really important</u>==}{>>@claude: why underline?<<} for the team.\n",
+    );
+  });
+
+  test("comment anchors on the text inside the tags, leaving them outside the highlight", () => {
+    writeFileSync(doc, U_DOC);
+    const r = run("comment", "really important", "inner");
+    expect([r.code, r.err]).toEqual([0, ""]);
+    expect(readFileSync(doc, "utf8")).toBe(
+      "The plan is <u>{==really important==}{>>@claude: inner<<}</u> for the team.\n",
+    );
+  });
+
+  test("a span that splits a tag is refused and writes nothing", () => {
+    writeFileSync(doc, U_DOC);
+    const r = run("comment", "u>really important", "split");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('"u>really important" occurs 0 times as a wrappable span');
+    expect(readFileSync(doc, "utf8")).toBe(U_DOC);
+  });
+
+  test("suggest over a span containing <u>, then accept, writes the replacement", () => {
+    writeFileSync(doc, U_DOC);
+    const s = run("suggest", "is <u>really important</u> for", "is <u>vital</u> for");
+    expect([s.code, s.err]).toEqual([0, ""]);
+    const a = run("accept", "vital");
+    expect([a.code, a.err]).toEqual([0, ""]);
+    expect(readFileSync(doc, "utf8")).toBe("The plan is <u>vital</u> for the team.\n");
+  });
+
+  test("heal finds nothing to repair in a doc with <u> spans", () => {
+    writeFileSync(doc, U_DOC);
+    const r = run("heal");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("healed 0 of 0 markup issues (0 remain)");
+    expect(readFileSync(doc, "utf8")).toBe(U_DOC);
+  });
+});
+
 describe("acm spell suggest (#29)", () => {
   test("writes one grouped SUGGEST card per flagged occurrence, top suggestion as the fix", () => {
     writeFileSync(doc, "We recieve it. Recieve `recieve` code.\n");
