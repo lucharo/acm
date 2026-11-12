@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DEFAULT_SETTINGS } from "../lib/viewSettings";
+import { version } from "../../package.json";
 import Header from "./Header";
 
 const noop = () => {};
@@ -50,6 +51,16 @@ describe("header information architecture", () => {
     expect(comments).toBeGreaterThan(brand);
     expect(settings).toBeGreaterThan(comments);
     expect(html).not.toContain("overview");
+  });
+
+  test("shows the installed version on an info button after the source toggle (#55)", () => {
+    const html = renderHeader();
+    const source = html.indexOf('aria-label="Show raw Markdown source"');
+    const info = html.indexOf(`aria-label="About ACM: version ${version}"`);
+
+    expect(info).toBeGreaterThan(source);
+    expect(html).toContain(`title="ACM ${version}"`);
+    expect(html).toContain("lucide-info");
   });
 
   test("uses the shared icon set for every header action", () => {

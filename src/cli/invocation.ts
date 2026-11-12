@@ -16,6 +16,7 @@ export interface EditInvocation {
 export type Invocation =
   | { kind: "overview" }
   | { kind: "help" }
+  | { kind: "version" }
   | { kind: "agent"; verb: string; args: string[] }
   | { kind: "verb-help"; text: string }
   | EditInvocation
@@ -32,7 +33,8 @@ Start editing:
 
 Review from the shell:
   acm threads              List open discussions and suggestions
-  acm --help               Show every command and option`;
+  acm --help               Show every command and option
+  acm --version            Print the installed version`;
 
 export const HELP_TEXT = `acm — Agent CriticMarkup editor
 
@@ -77,7 +79,8 @@ Edit options:
                      default: ACM_ALLOWED_HOSTS, else this Mac's Tailscale name if up)
   --asset-root <dir> Folder images may load from (default: the doc's git repo, else its folder)
   --no-open          Don't auto-open the browser (also ACM_NO_OPEN=1; a set $BROWSER is the opener)
-  -h, --help         Show this help`;
+  -h, --help         Show this help
+  -v, --version      Print the installed version`;
 
 const VERB_OPTIONS = `Options:
   --doc <file.md>    The document (else $ACM_DOC, else the doc open in the running ACM editor)
@@ -110,6 +113,7 @@ export function parseInvocation(
   const first = argv[0];
   if (first === undefined) return { kind: "overview" };
   if (first === "-h" || first === "--help") return { kind: "help" };
+  if (first === "-v" || first === "--version") return { kind: "version" };
   if (isAgentVerb(first)) {
     const args = argv.slice(1);
     const flags = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
@@ -134,6 +138,7 @@ export function parseInvocation(
   for (let index = 1; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "-h" || value === "--help") return { kind: "help" };
+    if (value === "-v" || value === "--version") return { kind: "version" };
     if (value === "--no-open") {
       edit.open = false;
       continue;

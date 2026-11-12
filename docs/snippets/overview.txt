@@ -11,3 +11,4 @@ Start editing:
 Review from the shell:
   acm threads              List open discussions and suggestions
   acm --help               Show every command and option
+  acm --version            Print the installed version

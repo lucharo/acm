@@ -9,6 +9,15 @@ describe("parseInvocation", () => {
     expect(parse([])).toEqual({ kind: "overview" });
   });
 
+  test("acm --version and -v print the version, with or without edit (#55)", () => {
+    expect([["--version"], ["-v"], ["edit", "--version"], ["edit", "essay.md", "-v"]].map(parse)).toEqual([
+      { kind: "version" },
+      { kind: "version" },
+      { kind: "version" },
+      { kind: "version" },
+    ]);
+  });
+
   test("acm edit opens the launcher", () => {
     expect(parse(["edit"])).toEqual({ kind: "edit", open: true });
   });

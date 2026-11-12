@@ -11,6 +11,7 @@ import { tailscaleDnsName } from "./src/server/tailscale";
 import { openBrowser } from "./src/server/browserOpen";
 import { HELP_TEXT, OVERVIEW_TEXT, parseInvocation } from "./src/cli/invocation";
 import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
+import { ACM_VERSION } from "./src/version";
 import { prepareDocumentTarget } from "./src/server/documentTarget";
 import { startLauncherServer } from "./src/server/launcher";
 import { recordRecentDocument } from "./src/server/recent";
@@ -56,6 +57,10 @@ if (invocation.kind === "overview") {
 }
 if (invocation.kind === "help") {
   console.log(HELP_TEXT);
+  process.exit(0);
+}
+if (invocation.kind === "version") {
+  console.log(`acm ${ACM_VERSION}`);
   process.exit(0);
 }
 if (invocation.kind === "verb-help") {

@@ -4,13 +4,14 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { CodeXml, Eye, FileText, ListTree, MessageSquare, PanelRight, Settings } from "lucide-react";
+import { CodeXml, Eye, FileText, Info, ListTree, MessageSquare, PanelRight, Settings } from "lucide-react";
 import { MOD } from "../lib/platform";
 import type { SaveState } from "../client/useDocSync";
 import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
 import type { Font, Theme, SpellVariant, PrintStyle, ViewSettings } from "../lib/viewSettings";
 import { documentFileName } from "../lib/documentTitle";
 import { canOpenReviewSkill, openReviewSkill, reviewSkillExists } from "../client/reviewSkill";
+import { ACM_VERSION } from "../version";
 
 export interface HeaderProps {
   /** Absolute path of the served document, shown as its file name (#33). */
@@ -153,6 +154,7 @@ export default function Header(props: HeaderProps) {
             <Eye size={17} strokeWidth={1.7} aria-hidden="true" />
           )}
         </button>
+        <VersionInfo />
       </div>
 
       <span className="hidden h-5 w-px bg-[var(--line-strong)] min-[360px]:block" aria-hidden="true" />
@@ -433,6 +435,38 @@ export default function Header(props: HeaderProps) {
         ) : null}
       </div>
     </header>
+  );
+}
+
+/** The installed version (#55): shown on hover, and on a click or tap for touch
+ *  screens, where there is no hover. */
+export function VersionInfo({ version = ACM_VERSION }: { version?: string }) {
+  const [open, setOpen] = useState(false);
+  const label = `ACM ${version}`;
+  return (
+    <span className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`${headerIconButtonClass} ${open ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
+        title={label}
+        aria-label={`About ACM: version ${version}`}
+        aria-expanded={open}
+      >
+        <Info size={17} strokeWidth={1.7} aria-hidden="true" />
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <span
+            role="status"
+            className="absolute left-0 top-full z-30 mt-1 whitespace-nowrap rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] shadow-lg"
+          >
+            {label}
+          </span>
+        </>
+      ) : null}
+    </span>
   );
 }
 

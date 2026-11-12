@@ -114,6 +114,13 @@ try {
     throw new Error("compiled CLI help is missing the importer or explicit edit command");
   }
 
+  // #55: the version comes from package.json, inlined at build time.
+  const { version } = JSON.parse(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8"));
+  const printed = Bun.spawnSync([binary, "--version"], { cwd: dir, env: isolatedEnv });
+  if (printed.exitCode !== 0 || printed.stdout.toString() !== `acm ${version}\n`) {
+    throw new Error(`compiled acm --version printed ${JSON.stringify(printed.stdout.toString())}, not acm ${version}`);
+  }
+
   const documentPath = join(dir, "explicit.md");
   const direct = Bun.spawn([binary, "edit", documentPath, "--no-open", "--port", "0"], {
     cwd: dir,
