@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
+import { CriticMarkup } from "./criticMarkupParser";
 import type { EditorView } from "@codemirror/view";
 import { acmFormattingKeymap, planToggle, planMultiToggle } from "./formatting";
 import type { ToggleEdit, ToggleMarker } from "./formatting";
@@ -201,19 +203,6 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("<u><u>see `</u>` here</u></u>");
   });
 
-  test("a closing tag quoted in code is never removed as the partner of a real opener", () => {
-    const doc = "<u>see `</u>` here</u>";
-    const r = apply(doc, 0, 12, U); // "<u>see `</u>": the selection ends on the quoted tag
-    // Wraps exactly the selection, as bold would; the quoted `</u>` survives untouched.
-    expect(r.out).toBe("<u><u>see `</u></u>` here</u>");
-  });
-
-  test("a quoted tag just outside the selection is not peeled either", () => {
-    const doc = "`<u>word</u>`";
-    const r = apply(doc, 4, 8, U); // "word", flanked by tags inside one code span
-    expect(r.out).toBe("`<u><u>word</u></u>`");
-  });
-
   test("two spans inside a tracked insertion are not unpaired", () => {
     const doc = "A {++<u>one</u> and <u>two</u>++}.";
     const from = doc.indexOf("<u>one");
@@ -233,10 +222,15 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
 
 describe("acmFormattingKeymap", () => {
   /** Run the keymap's command for `key` on a doc with `[from,to)` selected; return the new doc. */
-  function press(key: string, doc: string, from: number, to: number): string {
+  function press(key: string, doc: string, from: number, to: number, withLanguage = false): string {
     const binding = acmFormattingKeymap.find((b) => b.key === key);
     if (!binding?.run) throw new Error(`no binding for ${key}`);
-    let state = EditorState.create({ doc, selection: { anchor: from, head: to } });
+    let state = EditorState.create({
+      doc,
+      selection: { anchor: from, head: to },
+      // The editor's own language (useCodeMirror.ts), so the command reads the same tree.
+      extensions: withLanguage ? [markdown({ base: markdownLanguage, extensions: [CriticMarkup] })] : [],
+    });
     const view = {
       get state() {
         return state;
@@ -259,6 +253,27 @@ describe("acmFormattingKeymap", () => {
 
   test("Mod-u underlines the selection (overriding CodeMirror's undoSelection)", () => {
     expect(press("Mod-u", "the word here", 4, 8)).toBe("the <u>word</u> here");
+  });
+
+  test("Mod-u removes a real <u> pair (tags inside the selection)", () => {
+    expect(press("Mod-u", "the <u>word</u> here", 4, 15, true)).toBe("the word here");
+  });
+
+  test("Mod-u removes a real <u> pair (tags just outside the selection)", () => {
+    expect(press("Mod-u", "the <u>word</u> here", 7, 11, true)).toBe("the word here");
+  });
+
+  test("Mod-u never removes a closing tag quoted in code as a real opener's partner", () => {
+    // "<u>see `</u>" selected: wraps exactly the selection, as bold would.
+    expect(press("Mod-u", "<u>see `</u>` here</u>", 0, 12, true)).toBe("<u><u>see `</u></u>` here</u>");
+  });
+
+  test("Mod-u never peels tags that sit inside one code span", () => {
+    expect(press("Mod-u", "`<u>word</u>`", 4, 8, true)).toBe("`<u><u>word</u></u>`");
+  });
+
+  test("Mod-u never removes a closing tag inside a superscript span", () => {
+    expect(press("Mod-u", "<u>see ^</u>^ here</u>", 0, 12, true)).toBe("<u><u>see ^</u></u>^ here</u>");
   });
 
   test("Mod-b still bolds the selection", () => {

@@ -16,9 +16,9 @@
 // markers off the active line, and pairs `<u>`/`</u>` the same way, so a toggled
 // span reads as bold/italic/underlined the moment the cursor leaves its line.
 
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection } from "@codemirror/state";
-import { GFM, parser as baseMarkdownParser } from "@lezer/markdown";
-import { CriticMarkup } from "./criticMarkupParser";
+import type { EditorState } from "@codemirror/state";
 import type { Command, KeyBinding } from "@codemirror/view";
 
 /** A single ranged text edit (string-space, so the core stays unit-testable
@@ -67,22 +67,26 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
  *  them (a nested span, one quoted in code or inside a comment or tracked change)
  *  makes the toggle wrap instead, which can never leave a tag unmatched.
  *  Symmetric markers cannot be told apart this way and always count as clear. */
-// The editor's own grammar (GFM plus CriticMarkup), so a tag quoted in code or
-// sitting inside a comment body is not mistaken for markup.
-const markdownParser = baseMarkdownParser.configure([GFM, CriticMarkup]);
+/** Whether `[from, to)` is an HTML tag in the document's real parse. */
+export type TagCheck = (from: number, to: number) => boolean;
 
-/** True when `doc[from, to)` and `doc[from2, to2)` both parse as HTML tags in
- *  the full document, so the pair flanking a selection is real markup and not
- *  text quoted in a code span. Fails safe: a tag the parse cannot see (inside a
- *  tracked change, say) makes the toggle wrap instead of unwrap. */
-function areRealTags(doc: string, open: [number, number], close: [number, number]): boolean {
-  const found = new Set<string>();
-  markdownParser.parse(doc).iterate({
-    enter: (node) => {
-      if (node.name === "HTMLTag") found.add(`${node.from}:${node.to}`);
-    },
-  });
-  return found.has(`${open[0]}:${open[1]}`) && found.has(`${close[0]}:${close[1]}`);
+/** A TagCheck over the editor's own syntax tree, so the toggle sees exactly the
+ *  markup the preview sees: a tag quoted in code, inside a superscript or in a
+ *  comment body is not markup. A tag the tree has not reached reads as absent. */
+function editorTagCheck(state: EditorState): TagCheck {
+  const tree = ensureSyntaxTree(state, state.doc.length, 200) ?? syntaxTree(state);
+  return (from, to) => {
+    let found = false;
+    tree.iterate({
+      from,
+      to,
+      enter: (node) => {
+        if (node.name === "HTMLTag" && node.from === from && node.to === to) found = true;
+        return !found;
+      },
+    });
+    return found;
+  };
 }
 
 function noOtherTagBetween(doc: string, from: number, to: number, open: string, close: string): boolean {
@@ -105,6 +109,7 @@ export function planToggle(
   from: number,
   to: number,
   marker: ToggleMarker,
+  isTag?: TagCheck,
 ): TogglePlan {
   const { open, close } = markerPair(marker);
   const m = open.length;
@@ -122,7 +127,7 @@ export function planToggle(
   if (
     isWrappedExactly(sel, open, close) &&
     noOtherTagBetween(doc, from + m, to - c, open, close) &&
-    (open === close || areRealTags(doc, [from, from + m], [to - c, to]))
+    (open === close || !isTag || (isTag(from, from + m) && isTag(to - c, to)))
   ) {
     const inner = sel.slice(m, sel.length - c);
     return { edits: [{ from, to, insert: inner }], anchor: from, head: from + inner.length };
@@ -137,7 +142,7 @@ export function planToggle(
       before === open &&
       after === close &&
       noOtherTagBetween(doc, from, to, open, close) &&
-      (open === close || areRealTags(doc, [from - m, from], [to, to + c]));
+      (open === close || !isTag || (isTag(from - m, from) && isTag(to, to + c)));
     if (outerMatch && italic) {
       // Don't peel one star off a `**bold**` wrap.
       if ((from - m - 1 >= 0 && isStar(doc[from - m - 1])) || (to + c < doc.length && isStar(doc[to + c]))) {
@@ -183,12 +188,13 @@ export function planMultiToggle(
   doc: string,
   ranges: readonly { from: number; to: number }[],
   marker: ToggleMarker,
+  isTag?: TagCheck,
 ): { edits: ToggleEdit[]; sel: { anchor: number; head: number }[] } {
   const edits: ToggleEdit[] = [];
   const sel: { anchor: number; head: number }[] = [];
   let delta = 0; // net chars inserted by all earlier ranges
   for (const r of ranges) {
-    const plan = planToggle(doc, r.from, r.to, marker);
+    const plan = planToggle(doc, r.from, r.to, marker, isTag);
     edits.push(...plan.edits);
     sel.push({ anchor: plan.anchor + delta, head: plan.head + delta });
     for (const e of plan.edits) delta += e.insert.length - (e.to - e.from);
@@ -200,7 +206,7 @@ export function planMultiToggle(
 function toggleCommand(marker: ToggleMarker): Command {
   return (view) => {
     const { state } = view;
-    const { edits, sel } = planMultiToggle(state.doc.toString(), state.selection.ranges, marker);
+    const { edits, sel } = planMultiToggle(state.doc.toString(), state.selection.ranges, marker, editorTagCheck(state));
     view.dispatch({
       changes: edits,
       selection: EditorSelection.create(
