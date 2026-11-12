@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
     "test:bin": "bun run scripts/smoke-bin.ts",
+    "test:e2e": "bun run scripts/e2e-browser.ts",
     "test:setup": "bun test scripts/setup.test.ts",
     "test:install": "bun test scripts/install.test.ts",
     "check": "bun run scripts/check.ts"

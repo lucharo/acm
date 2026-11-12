@@ -12,7 +12,7 @@ How ACM is built, tested and shipped, and the rules a change must not break. Age
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun test src` | Unit tests |
 | `bun run build:bin` | Builds `dist/acm`, one executable with the editor and dictionaries embedded |
-| `bun run check` | The release gate: typecheck, tests, `build:bin`, a smoke test of `dist/acm` from outside `node_modules`, and the setup tests |
+| `bun run check` | The release gate: typecheck, tests, `build:bin`, a smoke test of `dist/acm` from outside `node_modules`, a browser smoke of the review loop (`bun run test:e2e`: headless Chrome drives `dist/acm` through comment, Post, Post & done, Cancel and the agent pill; it needs Chrome or Chromium, see the top of `scripts/e2e-browser.ts`), and the setup tests |
 | `just docs` / `just docs-build` | Serves this site locally / builds it with `--strict` |
 
 ACM has no separate lint command.

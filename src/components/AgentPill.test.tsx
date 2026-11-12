@@ -2,7 +2,15 @@
 // waiting on it, and what the person is told after Send.
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import AgentPill, { agentPillLabels, askFeedback, saveStatusOf, sendDecision, sendFeedback } from "./AgentPill";
+import AgentPill, {
+  AgentSettings,
+  agentPillLabels,
+  askFeedback,
+  notifyCommand,
+  saveStatusOf,
+  sendDecision,
+  sendFeedback,
+} from "./AgentPill";
 import type { AgentStatus } from "../lib/types";
 
 const status = (listening: number, comments: number, editRequests: number): AgentStatus => ({
@@ -134,5 +142,41 @@ describe("AgentPill markup", () => {
       />,
     );
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Nothing to send<\/button>/);
+  });
+});
+
+describe("the agent popover's notify setting", () => {
+  const settings = (listening: boolean, notifyEach: boolean, documentPath: string | null = "/notes/essay.md") =>
+    renderToStaticMarkup(
+      <AgentSettings
+        listening={listening}
+        documentPath={documentPath}
+        notifyEach={notifyEach}
+        onToggleNotifyEach={() => {}}
+      />,
+    );
+
+  test("no listener: leads with the command for this document and greys out the toggle, keeping its value", () => {
+    const html = settings(false, true);
+    const instruction = html.indexOf("No agent is listening. Ask your agent to run:");
+    expect(instruction).toBeGreaterThanOrEqual(0);
+    expect(html).toContain("<code");
+    expect(html).toContain(">acm edit /notes/essay.md --notify</code>");
+    expect(html.indexOf("Notify agent on each comment")).toBeGreaterThan(instruction);
+    expect(html).toMatch(/<input type="checkbox" disabled="" checked=""/);
+    expect(html).not.toContain("Off: comments wait until you press Send.");
+  });
+
+  test("an agent listening: the toggle is on offer and the short explanation shows", () => {
+    const html = settings(true, false);
+    expect(html).not.toContain("No agent is listening");
+    expect(html).toMatch(/<input type="checkbox"(?![^>]*disabled)[^>]*\/>/);
+    expect(html).toContain("Off: comments wait until you press Send.");
+  });
+
+  test("the command quotes a path the shell would split, and falls back to a placeholder", () => {
+    expect(notifyCommand("/My Notes/it's.md")).toBe("acm edit '/My Notes/it'\\''s.md' --notify");
+    expect(notifyCommand(null)).toBe("acm edit <file.md> --notify");
+    expect(settings(false, false, null)).toContain(">acm edit &lt;file.md&gt; --notify</code>");
   });
 });

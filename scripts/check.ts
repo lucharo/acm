@@ -13,6 +13,7 @@ run(["bun", "run", "typecheck"]);
 run(["bun", "run", "test"]);
 run(["bun", "run", "build:bin"]);
 run(["bun", "run", "test:bin"]);
+run(["bun", "run", "test:e2e"]);
 run(["bun", "run", "test:install"]);
 run(["bun", "run", "test:setup"], {
   ...process.env,
