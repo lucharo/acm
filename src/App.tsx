@@ -48,7 +48,7 @@ import {
 } from "./editor/spellcheck";
 import type { FlaggedWord } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
-import { useComposer } from "./hooks/useComposer";
+import { closesOnDocumentPointer, useComposer } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import ShortcutsOverlay from "./components/ShortcutsOverlay";
@@ -109,6 +109,7 @@ import type {
   SidebarCard,
 } from "./lib/types";
 import AgentPill, { agentAvailable, askFeedback, saveStatusOf } from "./components/AgentPill";
+import { composerKeyOutsideBox } from "./components/commentKeys";
 
 
 
@@ -544,6 +545,26 @@ function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [editor.viewRef, openComposer, openSuggestionComposer]);
+
+  // The composer's keys keep working once focus has gone back to the document (a
+  // click into the text while the box is open): without this, Mod-Shift-Enter and
+  // Mod-Enter reached CodeMirror and did nothing, and the box and its blue anchor
+  // stayed. Capture phase, so CodeMirror's own Mod-Enter never runs first.
+  useEffect(() => {
+    if (!composing) return;
+    const onKey = (event: KeyboardEvent) => {
+      const el = event.target as HTMLElement | null;
+      if (el !== document.body && !el?.closest?.(".cm-editor")) return;
+      const action = composerKeyOutsideBox(event);
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "cancel") cancelComposer();
+      else postComment(action === "post-done");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [composing, cancelComposer, postComment]);
 
   useEffect(() => {
     const current = view ?? editor.viewRef.current;
@@ -1475,6 +1496,19 @@ function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [flushNow]);
+
+  // A click back into the document while the composer is open closes an empty
+  // box, so its blue anchor mark does not stay painted over a selection that is
+  // gone; a box with text stays (closesOnDocumentPointer).
+  useEffect(() => {
+    const container = editor.containerRef.current;
+    if (!composing || !container) return;
+    const onPointerDown = () => {
+      if (closesOnDocumentPointer(draft)) cancelComposer();
+    };
+    container.addEventListener("pointerdown", onPointerDown);
+    return () => container.removeEventListener("pointerdown", onPointerDown);
+  }, [composing, draft, cancelComposer, editor.containerRef]);
 
   // ── Tell the editor which anchor highlights are active / seen ─────────────────
   // A highlight anchors a thread when its close abuts the thread's first comment.

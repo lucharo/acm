@@ -15,6 +15,14 @@ import type { SelectionAnnotationKind } from "../lib/criticmarkup";
 import { isComment } from "../lib/types";
 import type { ComposerAnchorRange } from "../editor/composerAnchor";
 
+/** A click back into the document while the composer is open: an empty box has
+ *  nothing to lose, so it closes and its blue anchor mark goes with it (the mark
+ *  otherwise stayed painted over a selection that was gone). A box with text stays
+ *  open, and the mark keeps showing the span the comment will attach to. */
+export function closesOnDocumentPointer(draft: string): boolean {
+  return draft.trim() === "";
+}
+
 export function useComposer(
   viewRef: React.MutableRefObject<EditorView | null>,
   author: string,
