@@ -17,6 +17,8 @@
 // span reads as bold/italic/underlined the moment the cursor leaves its line.
 
 import { EditorSelection } from "@codemirror/state";
+import { GFM, parser as baseMarkdownParser } from "@lezer/markdown";
+import { CriticMarkup } from "./criticMarkupParser";
 import type { Command, KeyBinding } from "@codemirror/view";
 
 /** A single ranged text edit (string-space, so the core stays unit-testable
@@ -65,6 +67,24 @@ function isWrappedExactly(s: string, open: string, close: string): boolean {
  *  them (a nested span, one quoted in code or inside a comment or tracked change)
  *  makes the toggle wrap instead, which can never leave a tag unmatched.
  *  Symmetric markers cannot be told apart this way and always count as clear. */
+// The editor's own grammar (GFM plus CriticMarkup), so a tag quoted in code or
+// sitting inside a comment body is not mistaken for markup.
+const markdownParser = baseMarkdownParser.configure([GFM, CriticMarkup]);
+
+/** True when `doc[from, to)` and `doc[from2, to2)` both parse as HTML tags in
+ *  the full document, so the pair flanking a selection is real markup and not
+ *  text quoted in a code span. Fails safe: a tag the parse cannot see (inside a
+ *  tracked change, say) makes the toggle wrap instead of unwrap. */
+function areRealTags(doc: string, open: [number, number], close: [number, number]): boolean {
+  const found = new Set<string>();
+  markdownParser.parse(doc).iterate({
+    enter: (node) => {
+      if (node.name === "HTMLTag") found.add(`${node.from}:${node.to}`);
+    },
+  });
+  return found.has(`${open[0]}:${open[1]}`) && found.has(`${close[0]}:${close[1]}`);
+}
+
 function noOtherTagBetween(doc: string, from: number, to: number, open: string, close: string): boolean {
   if (open === close) return true;
   const between = doc.slice(from, to);
@@ -99,7 +119,11 @@ export function planToggle(
   const sel = doc.slice(from, to);
 
   // 1) Markers are INSIDE the selection (`*word*` selected) → strip them.
-  if (isWrappedExactly(sel, open, close) && noOtherTagBetween(doc, from + m, to - c, open, close)) {
+  if (
+    isWrappedExactly(sel, open, close) &&
+    noOtherTagBetween(doc, from + m, to - c, open, close) &&
+    (open === close || areRealTags(doc, [from, from + m], [to - c, to]))
+  ) {
     const inner = sel.slice(m, sel.length - c);
     return { edits: [{ from, to, insert: inner }], anchor: from, head: from + inner.length };
   }
@@ -109,7 +133,11 @@ export function planToggle(
   if (from - m >= 0 && to + c <= doc.length) {
     const before = doc.slice(from - m, from);
     const after = doc.slice(to, to + c);
-    let outerMatch = before === open && after === close && noOtherTagBetween(doc, from, to, open, close);
+    let outerMatch =
+      before === open &&
+      after === close &&
+      noOtherTagBetween(doc, from, to, open, close) &&
+      (open === close || areRealTags(doc, [from - m, from], [to, to + c]));
     if (outerMatch && italic) {
       // Don't peel one star off a `**bold**` wrap.
       if ((from - m - 1 >= 0 && isStar(doc[from - m - 1])) || (to + c < doc.length && isStar(doc[to + c]))) {

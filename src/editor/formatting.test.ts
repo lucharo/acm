@@ -201,6 +201,19 @@ describe("planToggle — underline (<u>…</u>, #38)", () => {
     expect(r.out).toBe("<u><u>see `</u>` here</u></u>");
   });
 
+  test("a closing tag quoted in code is never removed as the partner of a real opener", () => {
+    const doc = "<u>see `</u>` here</u>";
+    const r = apply(doc, 0, 12, U); // "<u>see `</u>": the selection ends on the quoted tag
+    // Wraps exactly the selection, as bold would; the quoted `</u>` survives untouched.
+    expect(r.out).toBe("<u><u>see `</u></u>` here</u>");
+  });
+
+  test("a quoted tag just outside the selection is not peeled either", () => {
+    const doc = "`<u>word</u>`";
+    const r = apply(doc, 4, 8, U); // "word", flanked by tags inside one code span
+    expect(r.out).toBe("`<u><u>word</u></u>`");
+  });
+
   test("two spans inside a tracked insertion are not unpaired", () => {
     const doc = "A {++<u>one</u> and <u>two</u>++}.";
     const from = doc.indexOf("<u>one");
