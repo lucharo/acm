@@ -44,7 +44,7 @@ The history tests run real git. A document's history is a bare git repository at
 ## Shipping
 
 - Users install with `install.sh`, which downloads a GitHub release; updating is running it again ([Getting started](getting-started.md#update)). Contributors run `bun run setup` from a clone.
-- To release, bump `version` in `package.json`, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`. `.github/workflows/release.yml` builds and smoke-tests the macOS arm64, macOS x64 and Linux x64 binaries on their own runners, then publishes them with the skill archive and `SHA256SUMS`. A tag with a suffix (`v0.2.0-rc.1`) publishes a prerelease, which the installer ignores unless `ACM_VERSION` names it.
+- To release, bump `version` in `package.json`, then push a tag: `git tag v0.2.0 && git push origin v0.2.0`. `.github/workflows/release.yml` builds and smoke-tests the macOS arm64, macOS x64 and Linux x64 binaries on their own runners, then publishes them with the skill archive and `SHA256SUMS`, and commits `Formula/acm.rb` pointing at the new binaries to `main` (`scripts/update-formula.ts`) so `brew upgrade` picks them up. A tag with a suffix (`v0.2.0-rc.1`) publishes a prerelease, which the installer ignores unless `ACM_VERSION` names it.
 - CI (`.github/workflows/ci.yml`) runs `bun run check` on Node 22.20 and the pinned Bun for every pull request and push to `main`.
 - Bun is pinned exactly in `package.json` (`packageManager`), and setup refuses any other version.
 
