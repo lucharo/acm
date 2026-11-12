@@ -48,7 +48,7 @@ import {
 } from "./editor/spellcheck";
 import type { FlaggedWord } from "./editor/spellcheck";
 import { useDocDerived, useSeenDerived } from "./hooks/useDocDerived";
-import { useComposer } from "./hooks/useComposer";
+import { closesOnDocumentPointer, useComposer } from "./hooks/useComposer";
 import CommandPalette from "./components/CommandPalette";
 import type { PaletteAction } from "./components/CommandPalette";
 import ShortcutsOverlay from "./components/ShortcutsOverlay";
@@ -1496,6 +1496,19 @@ function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [flushNow]);
+
+  // A click back into the document while the composer is open closes an empty
+  // box, so its blue anchor mark does not stay painted over a selection that is
+  // gone; a box with text stays (closesOnDocumentPointer).
+  useEffect(() => {
+    const container = editor.containerRef.current;
+    if (!composing || !container) return;
+    const onPointerDown = () => {
+      if (closesOnDocumentPointer(draft)) cancelComposer();
+    };
+    container.addEventListener("pointerdown", onPointerDown);
+    return () => container.removeEventListener("pointerdown", onPointerDown);
+  }, [composing, draft, cancelComposer, editor.containerRef]);
 
   // ── Tell the editor which anchor highlights are active / seen ─────────────────
   // A highlight anchors a thread when its close abuts the thread's first comment.
