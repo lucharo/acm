@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -16,6 +16,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const INSTALLER = resolve(import.meta.dir, "..", "install.sh");
+// Each installer run may take up to INSTALLER_TIMEOUT_MS, and a test runs it up to
+// three times. Bun's 5 s default per test was below even one run's own limit, so
+// on a host that is slow to start shell scripts (endpoint scanning: 1.4 to 14 s a
+// test) every test failed on Bun's clock before the installer could answer.
+const INSTALLER_TIMEOUT_MS = 30_000;
+setDefaultTimeout(3 * INSTALLER_TIMEOUT_MS + 5_000);
 const SKILL_TEXT = "name: acm-review\nrelease copy\n";
 
 let root: string;
@@ -53,7 +59,7 @@ function runInstaller(env: Record<string, string> = {}) {
       ACM_RELEASE_URL: `file://${release}`,
       ...env,
     },
-    timeout: 30_000,
+    timeout: INSTALLER_TIMEOUT_MS,
   });
   return { exitCode: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
