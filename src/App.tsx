@@ -109,6 +109,7 @@ import type {
   SidebarCard,
 } from "./lib/types";
 import AgentPill, { agentAvailable, askFeedback, saveStatusOf } from "./components/AgentPill";
+import { composerKeyOutsideBox } from "./components/commentKeys";
 
 
 
@@ -544,6 +545,26 @@ function Workspace({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [editor.viewRef, openComposer, openSuggestionComposer]);
+
+  // The composer's keys keep working once focus has gone back to the document (a
+  // click into the text while the box is open): without this, Mod-Shift-Enter and
+  // Mod-Enter reached CodeMirror and did nothing, and the box and its blue anchor
+  // stayed. Capture phase, so CodeMirror's own Mod-Enter never runs first.
+  useEffect(() => {
+    if (!composing) return;
+    const onKey = (event: KeyboardEvent) => {
+      const el = event.target as HTMLElement | null;
+      if (el !== document.body && !el?.closest?.(".cm-editor")) return;
+      const action = composerKeyOutsideBox(event);
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "cancel") cancelComposer();
+      else postComment(action === "post-done");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [composing, cancelComposer, postComment]);
 
   useEffect(() => {
     const current = view ?? editor.viewRef.current;

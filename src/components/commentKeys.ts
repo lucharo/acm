@@ -26,3 +26,23 @@ export function handleCommentKey(
 export function mayDiscardDraft(draft: string, ask: (message: string) => boolean): boolean {
   return draft.trim() === "" || ask("Discard this reply?");
 }
+
+/** While the comment composer is open, its keys still work after focus has gone
+ *  back to the document (a click into the text to check something): Mod-Enter
+ *  posts, Mod-Shift-Enter posts and marks done, Escape cancels. Plain Enter and
+ *  Shift-Enter stay the document's, and a key typed in a text field (the composer
+ *  box itself, a reply box, a setting) is left to that field. */
+export function composerKeyOutsideBox(event: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  target: EventTarget | { tagName?: string } | null;
+}): "post" | "post-done" | "cancel" | null {
+  const tag = (event.target as { tagName?: string } | null)?.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return null;
+  if (event.key === "Escape") return event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ? null : "cancel";
+  if (event.key !== "Enter" || event.altKey || !(event.metaKey || event.ctrlKey)) return null;
+  return event.shiftKey ? "post-done" : "post";
+}
