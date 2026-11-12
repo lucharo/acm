@@ -94,6 +94,54 @@ export function sendDecision(saveStatus: SaveStatus): "send" | "wait" | "cancel"
 
 export const SEND_NOT_SAVED = "Not sent: your latest edits have not saved. Send again once the editor shows Saved.";
 
+/** The command that makes an agent listen to this document, quoted for a POSIX
+ *  shell when the path holds anything it would split or expand. */
+export function notifyCommand(documentPath: string | null): string {
+  if (!documentPath) return "acm edit <file.md> --notify";
+  const path = /^[\w@%+=:,./-]+$/.test(documentPath) ? documentPath : `'${documentPath.replaceAll("'", "'\\''")}'`;
+  return `acm edit ${path} --notify`;
+}
+
+/** The popover's body. With no agent listening the notify toggle can do nothing,
+ *  so it is greyed out (its saved value kept) and the popover leads with the
+ *  command that starts a listener on this document. */
+export function AgentSettings({
+  listening,
+  documentPath,
+  notifyEach,
+  onToggleNotifyEach,
+}: {
+  listening: boolean;
+  documentPath: string | null;
+  notifyEach: boolean;
+  onToggleNotifyEach: () => void;
+}) {
+  return (
+    <>
+      {listening ? null : (
+        <div className="mb-3">
+          <p className="text-[13px] font-medium text-[var(--ink)]">No agent is listening. Ask your agent to run:</p>
+          <code className="mt-1.5 block select-all break-all rounded border border-[var(--line)] bg-[var(--line)] px-2 py-1 text-[12px] text-[var(--ink)]">
+            {notifyCommand(documentPath)}
+          </code>
+        </div>
+      )}
+      <label
+        className={`flex items-center justify-between gap-3 text-[13px] ${listening ? "text-[var(--ink)]" : "text-[var(--faint)]"}`}
+        title={listening ? undefined : "No agent is listening, so there is no one to notify"}
+      >
+        Notify agent on each comment
+        <input type="checkbox" disabled={!listening} checked={notifyEach} onChange={onToggleNotifyEach} />
+      </label>
+      {listening ? (
+        <p className="mt-2 leading-snug text-[var(--muted)]">
+          Off: comments wait until you press Send. Ask agent to edit always notifies.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 interface AgentPillProps {
   status: AgentStatus | null;
   documentPath: string | null;
@@ -189,14 +237,12 @@ export default function AgentPill({
             aria-label="Agent"
             className="absolute right-0 top-9 z-30 w-72 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 text-[12px] shadow-lg"
           >
-            <label className="flex items-center justify-between gap-3 text-[13px] text-[var(--ink)]">
-              Notify agent on each comment
-              <input type="checkbox" checked={notifyEach} onChange={onToggleNotifyEach} />
-            </label>
-            <p className="mt-2 leading-snug text-[var(--muted)]">
-              Off: comments wait until you press Send. Ask agent to edit always notifies. An agent listens with{" "}
-              <code>acm edit &lt;file.md&gt; --notify</code>.
-            </p>
+            <AgentSettings
+              listening={labels.listening}
+              documentPath={documentPath}
+              notifyEach={notifyEach}
+              onToggleNotifyEach={onToggleNotifyEach}
+            />
           </div>
         </>
       ) : null}
