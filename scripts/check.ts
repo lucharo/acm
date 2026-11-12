@@ -14,6 +14,7 @@ run(["bun", "run", "test"]);
 run(["bun", "run", "build:bin"]);
 run(["bun", "run", "test:bin"]);
 run(["bun", "run", "test:install"]);
+run(["bun", "run", "test:formula"]);
 run(["bun", "run", "test:setup"], {
   ...process.env,
   ACM_PREBUILT_BIN: resolve(ROOT, "dist", process.platform === "win32" ? "acm.exe" : "acm"),

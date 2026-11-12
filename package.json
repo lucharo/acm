@@ -23,6 +23,7 @@
     "test:bin": "bun run scripts/smoke-bin.ts",
     "test:setup": "bun test scripts/setup.test.ts",
     "test:install": "bun test scripts/install.test.ts",
+    "test:formula": "bun test scripts/update-formula.test.ts",
     "check": "bun run scripts/check.ts"
   },
   "dependencies": {

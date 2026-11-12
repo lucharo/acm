@@ -23,6 +23,14 @@ acm edit notes.md
 
 The installer puts `acm` in `~/.local/bin` and the `acm-review` skill where Claude Code and Codex find it. Then ask your agent to review `notes.md`.
 
+Or install the binary with Homebrew, which also keeps it updated (add the skill with `npx skills add lucharo/acm --skill acm-review`):
+
+```bash
+brew trust --tap lucharo/acm
+brew tap lucharo/acm https://github.com/lucharo/acm.git
+brew install lucharo/acm/acm
+```
+
 ## Docs
 
 Full documentation: https://acm.luischav.es

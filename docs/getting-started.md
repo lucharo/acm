@@ -46,6 +46,18 @@ Set these before `sh` to change what it does:
 curl -fsSL https://raw.githubusercontent.com/lucharo/acm/main/install.sh | ACM_INSTALL_DIR="$HOME/bin" sh
 ```
 
+### With Homebrew
+
+On macOS or Linux x64 with Homebrew, the repository is its own tap. Homebrew 6 and later load a third-party tap only once you trust it:
+
+```bash
+brew trust --tap lucharo/acm
+brew tap lucharo/acm https://github.com/lucharo/acm.git
+brew install lucharo/acm/acm
+```
+
+This installs only the `acm` binary, into Homebrew's `bin`. Add the `acm-review` skill with `npx skills add lucharo/acm --skill acm-review`, or run the installer above once. `brew upgrade` then keeps `acm` current: each release updates the formula.
+
 ### From source
 
 To build ACM yourself or work on it, you need [Bun](https://bun.sh) 1.3.14 exactly (setup checks the version pinned in `package.json`; with any other, or none, run `npx --yes bun@1.3.14 run setup` instead) and Node 22.20 or newer for `npx skills add`. From a clone:
@@ -121,7 +133,7 @@ It replaces the installed binary and the skill in place. An editor that is alrea
 
 When the skill has changed, the previous copy moves to a timestamped folder under `~/.agents/skill-backups/`, so any edits you made by hand are kept.
 
-From a clone, run `git pull` and `bun run setup` instead. If you edited the installed skill, setup stops before changing anything; `bun run setup --force` backs it up the same way, then replaces it.
+With Homebrew, run `brew upgrade lucharo/acm/acm` instead. From a clone, run `git pull` and `bun run setup`. If you edited the installed skill, setup stops before changing anything; `bun run setup --force` backs it up the same way, then replaces it.
 
 ## Import a Google Doc
 
