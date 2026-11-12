@@ -130,7 +130,6 @@ const COMPOSER_ID = "__acm-comment-composer__";
 // Re-exported so existing `import { MOD } from "./CommentSidebar"` callers keep
 // working; the glyph itself now lives in lib/platform.
 export { MOD };
-export { handleCommentKey };
 
 interface CardLayout {
   anchorY: number; // document-space Y of the anchored line
