@@ -117,7 +117,7 @@ try {
   // #55: the version comes from package.json, inlined at build time.
   const { version } = JSON.parse(readFileSync(resolve(import.meta.dir, "../package.json"), "utf8"));
   const printed = Bun.spawnSync([binary, "--version"], { cwd: dir, env: isolatedEnv });
-  if (printed.exitCode !== 0 || printed.stdout.toString() !== `acm ${version}\n`) {
+  if (printed.exitCode !== 0 || !printed.stdout.toString().startsWith(`acm ${version} (`)) {
     throw new Error(`compiled acm --version printed ${JSON.stringify(printed.stdout.toString())}, not acm ${version}`);
   }
 

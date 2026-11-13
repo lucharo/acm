@@ -11,7 +11,9 @@ import { FONT_STACKS, FONT_LABELS } from "../lib/viewSettings";
 import type { Font, Theme, SpellVariant, PrintStyle, ViewSettings } from "../lib/viewSettings";
 import { documentFileName } from "../lib/documentTitle";
 import { canOpenReviewSkill, openReviewSkill, reviewSkillExists } from "../client/reviewSkill";
-import { ACM_VERSION } from "../version";
+import { ACM_BUILD, ACM_VERSION } from "../version";
+import { formatBuild } from "../buildInfo";
+import type { BuildInfo } from "../buildInfo";
 
 export interface HeaderProps {
   /** Absolute path of the served document, shown as its file name (#33). */
@@ -438,19 +440,26 @@ export default function Header(props: HeaderProps) {
   );
 }
 
-/** The installed version (#55): shown on hover, and on a click or tap for touch
- *  screens, where there is no hover. */
-export function VersionInfo({ version = ACM_VERSION }: { version?: string }) {
+/** The installed version and where the build came from (#55): shown on hover, and
+ *  on a click or tap for touch screens, where there is no hover. */
+export function VersionInfo({
+  version = ACM_VERSION,
+  build = ACM_BUILD,
+}: {
+  version?: string;
+  build?: BuildInfo | null;
+}) {
   const [open, setOpen] = useState(false);
   const label = `ACM ${version}`;
+  const source = formatBuild(build);
   return (
     <span className="relative">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         className={`${headerIconButtonClass} ${open ? "bg-[var(--line)] text-[var(--ink)]" : ""}`}
-        title={label}
-        aria-label={`About ACM: version ${version}`}
+        title={`${label} · ${source}`}
+        aria-label={`About ACM: version ${version}, ${source}`}
         aria-expanded={open}
       >
         <Info size={17} strokeWidth={1.7} aria-hidden="true" />
@@ -460,9 +469,10 @@ export function VersionInfo({ version = ACM_VERSION }: { version?: string }) {
           <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
           <span
             role="status"
-            className="absolute left-0 top-full z-30 mt-1 whitespace-nowrap rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] shadow-lg"
+            className="absolute left-0 top-full z-30 mt-1 flex flex-col whitespace-nowrap rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] shadow-lg"
           >
-            {label}
+            <span className="font-medium">{label}</span>
+            <span className="text-[11px] text-[var(--muted)]">{source}</span>
           </span>
         </>
       ) : null}

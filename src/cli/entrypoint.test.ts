@@ -61,15 +61,13 @@ async function runBriefly(
 }
 
 describe("acm --version (#55)", () => {
-  test("prints the package version and exits without starting anything", async () => {
+  test("prints the package version and where it came from, and starts nothing", async () => {
     const { version } = await Bun.file(resolve(import.meta.dir, "../../package.json")).json();
     const run = await runBriefly(["--version"]);
 
-    expect({ code: run.code, stdout: run.stdout, stderr: run.stderr }).toEqual({
-      code: 0,
-      stdout: `acm ${version}\n`,
-      stderr: "",
-    });
+    // From source the build is this checkout; the line names it after the version.
+    expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(run.stdout).toMatch(new RegExp(`^acm ${version.replaceAll(".", "\\.")} \\(local checkout[^\\n]*\\)\\n$`));
   });
 });
 
