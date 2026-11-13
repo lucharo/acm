@@ -467,12 +467,13 @@ export function VersionInfo({
       {open ? (
         <>
           <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          {/* Capped to the viewport and wrapping, so a long branch name stays on a phone screen. */}
           <span
             role="status"
-            className="absolute left-0 top-full z-30 mt-1 flex flex-col whitespace-nowrap rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] shadow-lg"
+            className="absolute left-0 top-full z-30 mt-1 flex w-max max-w-[min(26rem,calc(100vw-7rem))] flex-col rounded-md border border-[var(--line)] bg-[var(--panel)] px-2.5 py-1.5 text-[12px] text-[var(--ink)] shadow-lg"
           >
             <span className="font-medium">{label}</span>
-            <span className="text-[11px] text-[var(--muted)]">{source}</span>
+            <span className="text-[11px] text-[var(--muted)] [overflow-wrap:anywhere]">{source}</span>
           </span>
         </>
       ) : null}
