@@ -14,6 +14,9 @@ interface CommentComposerProps {
   mobile?: boolean;
 }
 
+/** The narrow box is a sheet at the bottom on a phone and in a narrow desktop window
+ *  or side pane alike. Its buttons print their shortcuts only on a fine pointer (a
+ *  mouse or trackpad, so a keyboard is likely); on touch they stay hidden. */
 export default function CommentComposer({
   kind = "comment",
   draft,
@@ -85,7 +88,7 @@ export default function CommentComposer({
             ? "min-h-11 rounded-lg border border-[var(--line-strong)] px-3 text-sm font-medium text-[var(--ink)] enabled:hover:bg-[var(--line)] disabled:cursor-not-allowed disabled:opacity-40"
             : "rounded-md border border-[var(--line-strong)] px-2 py-1 text-[11px] font-medium text-[var(--ink)] enabled:hover:bg-[var(--line)] disabled:cursor-not-allowed disabled:opacity-40"}
         >
-          Post &amp; done {mobile ? null : <span className="text-[10px] font-normal text-[var(--faint)]">{MOD}⇧↵</span>}
+          Post &amp; done <span className={`${mobile ? "hidden pointer-fine:inline text-xs" : "text-[10px]"} font-normal text-[var(--faint)]`}>{MOD}⇧↵</span>
         </button> : null}
         <button
           type="button"
@@ -95,7 +98,7 @@ export default function CommentComposer({
             ? "min-h-11 rounded-lg bg-[var(--accent)] px-3 text-sm font-medium text-[var(--panel)] disabled:cursor-not-allowed disabled:bg-transparent disabled:text-[var(--faint)] disabled:opacity-100 disabled:ring-1 disabled:ring-inset disabled:ring-[var(--line-strong)]"
             : "rounded-md bg-[var(--accent)] px-2.5 py-1 text-[11px] font-medium text-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-40"}
         >
-          {suggestion ? "Create suggestion" : "Post"} {mobile ? null : <span className="text-[10px] font-normal opacity-70">{MOD}↵</span>}
+          {suggestion ? "Create suggestion" : "Post"} <span className={`${mobile ? "hidden pointer-fine:inline text-xs" : "text-[10px]"} font-normal opacity-70`}>{MOD}↵</span>
         </button>
       </div>
     </section>
