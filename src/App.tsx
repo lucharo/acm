@@ -515,6 +515,7 @@ function Workspace({
   );
 
   // The comment composer (state + post/suggest-edit actions) — see hooks/useComposer.
+  const reportComposerError = useCallback((message: string) => pushToast(message, "error"), [pushToast]);
   const {
     composing,
     draft,
@@ -530,6 +531,7 @@ function Workspace({
     settings.author,
     setSeen,
     editor.setComposerAnchor,
+    reportComposerError,
   );
 
   useEffect(() => {
