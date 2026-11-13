@@ -43,3 +43,4 @@ Edit options:
   --asset-root <dir> Folder images may load from (default: the doc's git repo, else its folder)
   --no-open          Don't auto-open the browser (also ACM_NO_OPEN=1; a set $BROWSER is the opener)
   -h, --help         Show this help
+  -v, --version      Print the installed version

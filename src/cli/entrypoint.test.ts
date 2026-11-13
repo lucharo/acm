@@ -60,6 +60,17 @@ async function runBriefly(
   return { ...exit, cwd, stdout, stderr: await new Response(proc.stderr).text() };
 }
 
+describe("acm --version (#55)", () => {
+  test("prints the package version and where it came from, and starts nothing", async () => {
+    const { version } = await Bun.file(resolve(import.meta.dir, "../../package.json")).json();
+    const run = await runBriefly(["--version"]);
+
+    // From source the build is this checkout; the line names it after the version.
+    expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(run.stdout).toMatch(new RegExp(`^acm ${version.replaceAll(".", "\\.")} \\(local checkout[^\\n]*\\)\\n$`));
+  });
+});
+
 describe("explicit edit command", () => {
   test("options without `edit` do not create or launch an untitled document", async () => {
     const run = await runBriefly(["--no-open", "--port", "0"]);

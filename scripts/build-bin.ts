@@ -5,6 +5,7 @@
 
 import { readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { currentBuildInfo } from "./build-info";
 
 const ROOT = resolve(import.meta.dir, "..");
 const output = join(ROOT, "dist", process.platform === "win32" ? "acm.exe" : "acm");
@@ -20,7 +21,17 @@ rmSync(output, { force: true });
 cleanGeneratedArtifacts();
 
 const result = Bun.spawnSync(
-  ["bun", "build", "--compile", "--outfile", output, join(ROOT, "cli.ts")],
+  [
+    "bun",
+    "build",
+    "--compile",
+    // Where this build came from, for `acm --version` (#55).
+    "--define",
+    `__ACM_BUILD__=${JSON.stringify(currentBuildInfo(ROOT))}`,
+    "--outfile",
+    output,
+    join(ROOT, "cli.ts"),
+  ],
   { cwd: ROOT, stdout: "inherit", stderr: "inherit" },
 );
 

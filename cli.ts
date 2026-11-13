@@ -11,6 +11,9 @@ import { tailscaleDnsName } from "./src/server/tailscale";
 import { openBrowser } from "./src/server/browserOpen";
 import { HELP_TEXT, OVERVIEW_TEXT, parseInvocation } from "./src/cli/invocation";
 import { isAgentVerb, runAgentVerb } from "./src/cli/verbs";
+import { ACM_BUILD, ACM_VERSION } from "./src/version";
+import { formatBuild } from "./src/buildInfo";
+import { currentBuildInfo } from "./scripts/build-info";
 import { prepareDocumentTarget } from "./src/server/documentTarget";
 import { startLauncherServer } from "./src/server/launcher";
 import { recordRecentDocument } from "./src/server/recent";
@@ -56,6 +59,11 @@ if (invocation.kind === "overview") {
 }
 if (invocation.kind === "help") {
   console.log(HELP_TEXT);
+  process.exit(0);
+}
+if (invocation.kind === "version") {
+  // A compiled binary carries its build origin; a source run reads its checkout.
+  console.log(`acm ${ACM_VERSION} (${formatBuild(ACM_BUILD ?? currentBuildInfo(import.meta.dir))})`);
   process.exit(0);
 }
 if (invocation.kind === "verb-help") {

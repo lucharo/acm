@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { currentBuildInfo } from "./scripts/build-info";
 
 // Inline the bundled Hunspell dictionaries (the `dictionary-en` US + `dictionary-en-gb`
 // UK deps) at BUILD time as virtual modules, so the spellchecker can import the raw
@@ -58,6 +59,8 @@ const devPort = Number(process.env.ACM_DEV_PORT ?? 12173);
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), dictionaryRaw()],
+  // Where this build came from, shown beside the version in the editor (#55).
+  define: { __ACM_BUILD__: JSON.stringify(currentBuildInfo(process.cwd())) },
   server: {
     port: devPort,
     // Fail rather than drift to the next port: dev's supervisor (#34) retries this
